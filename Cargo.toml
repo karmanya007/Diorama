@@ -16,8 +16,8 @@ publish = false
 
 [workspace.dependencies]
 # internal
-lumen-core = { path = "crates/lumen-core" }
-lumen-we = { path = "crates/lumen-we" }
+lumen-core = { path = "crates/lumen-core", version = "0.0.1" }
+lumen-we = { path = "crates/lumen-we", version = "0.0.1" }
 
 # external
 anyhow = "1"
