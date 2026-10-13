@@ -15,7 +15,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use lumen_gpu::{Backend, Gpu, GpuOptions, OutputSurface};
 use lumen_media::{Nv12Frame, VideoPlayer};
-use lumen_platform::{OutputInfo, Platform, WallpaperWindow};
+use lumen_platform::{Coverage, DesktopEvent, OutputInfo, Platform, WallpaperWindow};
 use lumen_render::{FitMode, ImageBlit, Nv12Planes, Rect, VideoBlit, display_size};
 
 #[derive(Debug, Parser)]
@@ -43,7 +43,57 @@ struct Args {
     /// Print detected outputs and exit.
     #[arg(long)]
     list_outputs: bool,
+    /// When a fullscreen app covers a monitor (games, video players).
+    #[arg(long, value_enum, default_value = "pause")]
+    on_fullscreen: Action,
+    /// When a maximized window covers a monitor.
+    #[arg(long, value_enum, default_value = "pause")]
+    on_maximized: Action,
+    /// While running on battery.
+    #[arg(long, value_enum, default_value = "keep")]
+    on_battery: Action,
+    /// While the session is locked.
+    #[arg(long, value_enum, default_value = "pause")]
+    on_lock: Action,
 }
+
+/// What to do with a monitor's wallpaper in a given situation (P5/P17).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum Action {
+    Keep,
+    Pause,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Policy {
+    fullscreen: Action,
+    maximized: Action,
+    battery: Action,
+    locked: Action,
+}
+
+impl Policy {
+    fn pauses(self, coverage: Coverage, on_battery: bool, locked: bool) -> bool {
+        let pause = |a: Action| a == Action::Pause;
+        (locked && pause(self.locked))
+            || (on_battery && pause(self.battery))
+            || match coverage {
+                Coverage::Fullscreen => pause(self.fullscreen),
+                Coverage::Maximized => pause(self.maximized),
+                Coverage::Visible => false,
+            }
+    }
+}
+
+/// Inputs to the pause decision, refreshed from the platform.
+#[derive(Debug, Clone, Copy, Default)]
+struct Conditions {
+    on_battery: bool,
+    locked: bool,
+}
+
+const COVERAGE_INTERVAL: Duration = Duration::from_millis(500);
+const BATTERY_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum FitArg {
@@ -87,6 +137,9 @@ enum Renderer {
 /// One monitor's wallpaper. Field order matters: the surface must drop before its window.
 struct Output {
     info: OutputInfo,
+    /// Not receiving new frames (covered, locked, …); the last frame stays on screen.
+    paused: bool,
+    coverage: Coverage,
     surface: OutputSurface,
     _window: WallpaperWindow,
 }
@@ -162,21 +215,50 @@ fn main() -> Result<()> {
         .duration
         .map(|s| Instant::now() + Duration::from_secs(s));
 
+    let policy = Policy {
+        fullscreen: args.on_fullscreen,
+        maximized: args.on_maximized,
+        battery: args.on_battery,
+        locked: args.on_lock,
+    };
+    // Games and foreground apps win CPU and GPU scheduling (P5).
+    platform.lower_priority();
+
     let mut gpu = Gpu::new(gpu_options).context("GPU init")?;
     let mut session = Some(build(&platform, &gpu, &content, look)?);
     let mut clock = VideoClock::default();
+    let mut conditions = Conditions {
+        on_battery: platform.on_battery(),
+        locked: false,
+    };
+    let mut next_coverage = Instant::now();
+    let mut next_battery = Instant::now() + BATTERY_INTERVAL;
 
     while !stop.load(Ordering::SeqCst) && deadline.is_none_or(|d| Instant::now() < d) {
         // Static content: sleep until an event. Video: until the next frame is due.
-        let wait = match &content {
+        let content_wait = match &content {
             Content::Image(_) => Duration::from_secs(1),
+            Content::Video(_) if clock.is_paused() => COVERAGE_INTERVAL,
             Content::Video(player) => clock.time_until_next(player),
         };
+        let wait = content_wait.min(next_coverage.saturating_duration_since(Instant::now()));
         let events = platform.poll_events(wait);
         gpu.maintain();
 
+        for e in &events {
+            match e {
+                DesktopEvent::SessionLocked => conditions.locked = true,
+                DesktopEvent::SessionUnlocked => conditions.locked = false,
+                _ => {}
+            }
+        }
+        if Instant::now() >= next_battery {
+            conditions.on_battery = platform.on_battery();
+            next_battery = Instant::now() + BATTERY_INTERVAL;
+        }
+
         let device_lost = gpu.is_lost();
-        if !events.is_empty() || device_lost {
+        if events.iter().any(|e| e.needs_rebuild()) || device_lost {
             tracing::info!(?events, device_lost, "rebuilding wallpaper");
             // Surfaces/windows go first; they reference the old device and old Explorer windows.
             drop(session.take());
@@ -195,10 +277,25 @@ fn main() -> Result<()> {
                     show_video_frame(&gpu, s, frame, look)?;
                 }
             }
+            next_coverage = Instant::now();
             continue;
         }
 
-        if let (Content::Video(player), Some(s)) = (&content, session.as_mut())
+        let Some(s) = session.as_mut() else { continue };
+        if Instant::now() >= next_coverage || events.iter().any(|e| !e.needs_rebuild()) {
+            next_coverage = Instant::now() + COVERAGE_INTERVAL;
+            let resumed = update_pauses(&platform, s, policy, conditions);
+            if let Content::Video(_) = &content {
+                clock.set_paused(s.outputs.iter().all(|o| o.paused));
+                // Freshly resumed outputs still show an old frame: present the current one now.
+                if resumed {
+                    present_all(&gpu, s, look)?;
+                }
+            }
+        }
+
+        if let Content::Video(player) = &content
+            && !clock.is_paused()
             && let Some(frame) = clock.due_frame(player)
         {
             show_video_frame(&gpu, s, frame, look)?;
@@ -210,10 +307,40 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Maps frame timestamps onto wall-clock time.
+/// Re-evaluates which outputs are paused. Logs changes; returns true if any output resumed.
+fn update_pauses(
+    platform: &Platform,
+    session: &mut Session,
+    policy: Policy,
+    c: Conditions,
+) -> bool {
+    let infos: Vec<OutputInfo> = session.outputs.iter().map(|o| o.info.clone()).collect();
+    let coverage = platform.coverage(&infos);
+    let mut resumed = false;
+    for (out, cov) in session.outputs.iter_mut().zip(coverage) {
+        let paused = policy.pauses(cov, c.on_battery, c.locked);
+        if paused != out.paused || cov != out.coverage {
+            tracing::info!(
+                output = %out.info.device,
+                coverage = ?cov,
+                on_battery = c.on_battery,
+                locked = c.locked,
+                "{}",
+                if paused { "paused" } else { "playing" }
+            );
+        }
+        resumed |= out.paused && !paused;
+        out.paused = paused;
+        out.coverage = cov;
+    }
+    resumed
+}
+
+/// Maps frame timestamps onto wall-clock time; can be frozen while paused.
 #[derive(Default)]
 struct VideoClock {
     start: Option<Instant>,
+    paused_at: Option<Instant>,
     /// Decoded but not yet due.
     pending: Option<Nv12Frame>,
     /// Last frame shown (re-uploaded after a rebuild).
@@ -223,6 +350,24 @@ struct VideoClock {
 impl VideoClock {
     fn now_pts(&mut self) -> Duration {
         self.start.get_or_insert_with(Instant::now).elapsed()
+    }
+
+    fn is_paused(&self) -> bool {
+        self.paused_at.is_some()
+    }
+
+    /// Freezes/unfreezes playback time so a resumed video continues where it stopped.
+    fn set_paused(&mut self, paused: bool) {
+        match (paused, self.paused_at) {
+            (true, None) => self.paused_at = Some(Instant::now()),
+            (false, Some(at)) => {
+                if let Some(start) = self.start.as_mut() {
+                    *start += at.elapsed();
+                }
+                self.paused_at = None;
+            }
+            _ => {}
+        }
     }
 
     fn time_until_next(&mut self, player: &VideoPlayer) -> Duration {
@@ -277,6 +422,8 @@ fn build(platform: &Platform, gpu: &Gpu, content: &Content, look: Look) -> Resul
                 .with_context(|| format!("GPU surface for {}", info.device))?;
         outputs.push(Output {
             info,
+            paused: false,
+            coverage: Coverage::Visible,
             surface,
             _window: window,
         });
@@ -345,8 +492,9 @@ fn show_video_frame(gpu: &Gpu, session: &mut Session, frame: &Nv12Frame, look: L
     present_all(gpu, session, look)
 }
 
+/// Draws the current content on every output that is not paused.
 fn present_all(gpu: &Gpu, session: &mut Session, look: Look) -> Result<()> {
-    for out in &mut session.outputs {
+    for out in session.outputs.iter_mut().filter(|o| !o.paused) {
         let target = rect_of(&out.info);
         let canvas = match look.layout {
             LayoutArg::Span => session.canvas,

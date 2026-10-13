@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -152,9 +152,13 @@ impl VideoPlayer {
 impl Drop for VideoPlayer {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
-        // Unblock a sender waiting on a full queue.
-        while self.frames.try_recv().is_ok() {}
         if let Some(t) = self.thread.take() {
+            // The decode thread may be blocked sending into a full queue: keep draining
+            // until it notices `stop` and exits.
+            while !t.is_finished() {
+                while self.frames.try_recv().is_ok() {}
+                std::thread::sleep(Duration::from_millis(1));
+            }
             let _ = t.join();
         }
     }
@@ -176,20 +180,10 @@ fn decode_loop(mut decoder: Box<dyn VideoDecoder>, tx: &SyncSender<Nv12Frame>, s
             Ok(Some(mut frame)) => {
                 last_pts = frame.pts;
                 frame.pts += loop_offset;
-                let mut pending = frame;
-                // Bounded send that still notices `stop` while the queue is full.
-                loop {
-                    match tx.try_send(pending) {
-                        Ok(()) => break,
-                        Err(TrySendError::Full(f)) => {
-                            if stop.load(Ordering::SeqCst) {
-                                return;
-                            }
-                            pending = f;
-                            std::thread::sleep(Duration::from_millis(2));
-                        }
-                        Err(TrySendError::Disconnected(_)) => return,
-                    }
+                // Blocks while the queue is full (e.g. playback paused): no CPU spent.
+                // `VideoPlayer::drop` drains the queue so this returns on shutdown.
+                if tx.send(frame).is_err() {
+                    return;
                 }
             }
             Ok(None) => {

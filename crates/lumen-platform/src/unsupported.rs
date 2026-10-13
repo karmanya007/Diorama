@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use crate::{DesktopEvent, Error, OutputInfo, Result, SurfaceHandles};
+use crate::{Coverage, DesktopEvent, Error, OutputInfo, Result, SurfaceHandles};
 
 #[derive(Debug)]
 pub struct Platform;
@@ -24,6 +24,16 @@ impl Platform {
     pub fn poll_events(&self, _timeout: Duration) -> Vec<DesktopEvent> {
         Vec::new()
     }
+
+    pub fn coverage(&self, outputs: &[OutputInfo]) -> Vec<Coverage> {
+        vec![Coverage::Visible; outputs.len()]
+    }
+
+    pub fn on_battery(&self) -> bool {
+        false
+    }
+
+    pub fn lower_priority(&self) {}
 }
 
 /// Uninhabited: no wallpaper windows exist on unsupported platforms.

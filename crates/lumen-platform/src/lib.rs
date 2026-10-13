@@ -7,6 +7,10 @@
 
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 
+mod coverage;
+
+pub use coverage::{Coverage, WindowRect, classify};
+
 #[cfg(windows)]
 mod windows;
 
@@ -65,6 +69,16 @@ pub enum DesktopEvent {
     DesktopReset,
     /// Monitors were added/removed/moved/rotated or resolution changed.
     OutputsChanged,
+    /// The user session was locked (lock screen shown).
+    SessionLocked,
+    SessionUnlocked,
+}
+
+impl DesktopEvent {
+    /// Whether wallpaper windows/surfaces must be recreated.
+    pub fn needs_rebuild(self) -> bool {
+        matches!(self, Self::DesktopReset | Self::OutputsChanged)
+    }
 }
 
 /// Raw handles for creating a GPU surface on a wallpaper window.

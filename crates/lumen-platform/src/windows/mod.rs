@@ -2,6 +2,7 @@
 
 mod desktop;
 mod outputs;
+mod windows_list;
 
 use std::cell::{Cell, RefCell};
 use std::mem::size_of;
@@ -14,6 +15,13 @@ use raw_window_handle::{
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::Graphics::Gdi::MapWindowPoints;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
+use windows::Win32::System::RemoteDesktop::{
+    NOTIFY_FOR_THIS_SESSION, WTSRegisterSessionNotification, WTSUnRegisterSessionNotification,
+};
+use windows::Win32::System::Threading::{
+    BELOW_NORMAL_PRIORITY_CLASS, GetCurrentProcess, SetPriorityClass,
+};
 use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
 };
@@ -22,12 +30,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GWLP_USERDATA, GetWindowLongPtrW, HWND_TOP, MA_NOACTIVATE, MSG, MsgWaitForMultipleObjects,
     PM_REMOVE, PeekMessageW, QS_ALLINPUT, RegisterClassExW, RegisterWindowMessageW, SWP_NOACTIVATE,
     SWP_SHOWWINDOW, SetWindowLongPtrW, SetWindowPos, TranslateMessage, WM_DESTROY,
-    WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_MOUSEACTIVATE, WNDCLASSEXW, WS_CHILD, WS_CLIPSIBLINGS,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE,
+    WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_MOUSEACTIVATE, WM_WTSSESSION_CHANGE, WNDCLASSEXW, WS_CHILD,
+    WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE, WTS_SESSION_LOCK,
+    WTS_SESSION_UNLOCK,
 };
 use windows::core::{PCWSTR, w};
 
-use crate::{DesktopEvent, Error, OutputInfo, Result, SurfaceHandles};
+use crate::{Coverage, DesktopEvent, Error, OutputInfo, Result, SurfaceHandles, classify};
 
 const CONTROL_CLASS: PCWSTR = w!("LumenControl");
 const WALLPAPER_CLASS: PCWSTR = w!("LumenWallpaper");
@@ -95,6 +104,10 @@ impl Platform {
                 None,
             )
             .map_err(|e| os_err("CreateWindowExW(control)", &e))?;
+            // Lock/unlock notifications (pause while the lock screen is up).
+            if let Err(e) = WTSRegisterSessionNotification(control, NOTIFY_FOR_THIS_SESSION) {
+                tracing::warn!("session notifications unavailable: {}", e.message());
+            }
 
             Ok(Self { hinstance, control })
         }
@@ -102,6 +115,30 @@ impl Platform {
 
     pub fn outputs(&self) -> Result<Vec<OutputInfo>> {
         outputs::enumerate()
+    }
+
+    /// How much other applications hide each output (P5/P6). Cheap enough to
+    /// call a few times per second.
+    pub fn coverage(&self, outputs: &[OutputInfo]) -> Vec<Coverage> {
+        classify(outputs, &windows_list::app_windows())
+    }
+
+    /// True when running on battery power.
+    pub fn on_battery(&self) -> bool {
+        let mut status = SYSTEM_POWER_STATUS::default();
+        // SAFETY: out-param is a valid local.
+        unsafe { GetSystemPowerStatus(&mut status) }.is_ok() && status.ACLineStatus == 0
+    }
+
+    /// Below-normal CPU priority; WDDM also schedules GPU work from lower-priority
+    /// processes behind foreground games (P5).
+    pub fn lower_priority(&self) {
+        // SAFETY: changes only this process's priority class.
+        if let Err(e) =
+            unsafe { SetPriorityClass(GetCurrentProcess(), BELOW_NORMAL_PRIORITY_CLASS) }
+        {
+            tracing::warn!("could not lower process priority: {}", e.message());
+        }
     }
 
     /// Creates a window covering `output`, parented behind the desktop icons.
@@ -174,6 +211,7 @@ impl Drop for Platform {
     fn drop(&mut self) {
         // SAFETY: control window was created by us on this thread.
         unsafe {
+            let _ = WTSUnRegisterSessionNotification(self.control);
             let _ = DestroyWindow(self.control);
         }
     }
@@ -250,6 +288,13 @@ unsafe extern "system" fn control_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
     }
     if msg == WM_DISPLAYCHANGE {
         push_event(DesktopEvent::OutputsChanged);
+    }
+    if msg == WM_WTSSESSION_CHANGE {
+        match wp.0 as u32 {
+            WTS_SESSION_LOCK => push_event(DesktopEvent::SessionLocked),
+            WTS_SESSION_UNLOCK => push_event(DesktopEvent::SessionUnlocked),
+            _ => {}
+        }
     }
     // SAFETY: default handling for our own window.
     unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
