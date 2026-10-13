@@ -1,0 +1,17 @@
+[package]
+name = "lumen-gpu"
+description = "wgpu device and per-output surface management."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+pollster.workspace = true
+raw-window-handle.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+wgpu.workspace = true
+
+[lints]
+workspace = true

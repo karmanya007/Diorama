@@ -1,0 +1,18 @@
+[package]
+name = "lumen-platform"
+description = "OS integration: outputs (monitors), wallpaper surfaces behind desktop icons, desktop events."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+raw-window-handle.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
+
+[lints]
+workspace = true
