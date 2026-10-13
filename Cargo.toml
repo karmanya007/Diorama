@@ -4,6 +4,7 @@ members = [
     "apps/lumend",
     "crates/lumen-core",
     "crates/lumen-gpu",
+    "crates/lumen-media",
     "crates/lumen-platform",
     "crates/lumen-render",
     "crates/lumen-we",
@@ -23,6 +24,7 @@ publish = false
 lumen-core = { path = "crates/lumen-core", version = "0.0.1" }
 lumen-we = { path = "crates/lumen-we", version = "0.0.1" }
 lumen-gpu = { path = "crates/lumen-gpu", version = "0.0.1" }
+lumen-media = { path = "crates/lumen-media", version = "0.0.1" }
 lumen-platform = { path = "crates/lumen-platform", version = "0.0.1" }
 lumen-render = { path = "crates/lumen-render", version = "0.0.1" }
 
@@ -36,7 +38,12 @@ wgpu = "30.0.1"
 windows = { version = "0.62.2", features = [
     "Win32_Devices_Display",
     "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
     "Win32_Graphics_Gdi",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
     "Win32_System_LibraryLoader",
     "Win32_UI_HiDpi",
     "Win32_UI_WindowsAndMessaging",

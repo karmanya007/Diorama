@@ -1,9 +1,10 @@
-//! `lumend` — Lumen wallpaper daemon (Phase 1 walking skeleton).
+//! `lumend` — Lumen wallpaper daemon (Phase 1).
 //!
-//! Shows a static image on every monitor behind the desktop icons. Renders only
-//! when something changes (static content → ~0% GPU when idle, P2) and rebuilds
-//! its windows/surfaces when Explorer restarts (P9), monitors change (P8), or
-//! the GPU device is lost (P11).
+//! Shows an image or a looping video on every monitor behind the desktop
+//! icons. Static images render once (≈0% GPU when idle, P2); video frames are
+//! presented on their timestamps. Windows and surfaces are rebuilt when
+//! Explorer restarts (P9), monitors change (P8) or the GPU device is lost (P11).
+//! Video never opens an audio device (P10).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -13,18 +14,22 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use lumen_gpu::{Backend, Gpu, GpuOptions, OutputSurface};
+use lumen_media::{Nv12Frame, VideoPlayer};
 use lumen_platform::{OutputInfo, Platform, WallpaperWindow};
-use lumen_render::{FitMode, ImageBlit, Rect, display_size};
+use lumen_render::{FitMode, ImageBlit, Nv12Planes, Rect, VideoBlit, display_size};
 
 #[derive(Debug, Parser)]
 #[command(version, about)]
 struct Args {
     /// Image to show (PNG, JPEG, …).
-    #[arg(long, required_unless_present = "list_outputs")]
+    #[arg(long, conflicts_with = "video", required_unless_present_any = ["video", "list_outputs"])]
     image: Option<PathBuf>,
+    /// Video to loop (MP4, …). Muted.
+    #[arg(long)]
+    video: Option<PathBuf>,
     #[arg(long, value_enum, default_value = "fill")]
     fit: FitArg,
-    /// `per-output`: the whole image on every monitor. `span`: one image across all monitors.
+    /// `per-output`: the whole picture on every monitor. `span`: one picture across all monitors.
     #[arg(long, value_enum, default_value = "per-output")]
     layout: LayoutArg,
     #[arg(long, value_enum, default_value = "auto")]
@@ -53,18 +58,30 @@ enum LayoutArg {
     Span,
 }
 
-/// How the image is placed: fit mode plus per-output vs span layout.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum BackendArg {
+    Auto,
+    Dx12,
+    Vulkan,
+}
+
+/// How the picture is placed: fit mode plus per-output vs span layout.
 #[derive(Debug, Clone, Copy)]
 struct Look {
     fit: FitMode,
     layout: LayoutArg,
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum BackendArg {
-    Auto,
-    Dx12,
-    Vulkan,
+/// What is being shown. Lives across desktop rebuilds.
+enum Content {
+    Image(image::RgbaImage),
+    Video(VideoPlayer),
+}
+
+/// GPU-side renderer for the content; recreated on every rebuild.
+enum Renderer {
+    Image(ImageBlit),
+    Video(VideoBlit),
 }
 
 /// One monitor's wallpaper. Field order matters: the surface must drop before its window.
@@ -74,10 +91,11 @@ struct Output {
     _window: WallpaperWindow,
 }
 
-/// Keeps windows, surfaces and GPU resources alive while the wallpaper is shown.
+/// Windows, surfaces and GPU resources for the current desktop.
 struct Session {
-    _outputs: Vec<Output>,
-    _blit: ImageBlit,
+    outputs: Vec<Output>,
+    canvas: Rect,
+    renderer: Renderer,
 }
 
 fn main() -> Result<()> {
@@ -109,10 +127,17 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let image_path = args.image.context("--image is required")?;
-    let image = image::open(&image_path)
-        .with_context(|| format!("loading {}", image_path.display()))?
-        .into_rgba8();
+    let content = match (&args.image, &args.video) {
+        (Some(path), _) => Content::Image(
+            image::open(path)
+                .with_context(|| format!("loading {}", path.display()))?
+                .into_rgba8(),
+        ),
+        (None, Some(path)) => Content::Video(
+            VideoPlayer::spawn(path).with_context(|| format!("opening {}", path.display()))?,
+        ),
+        (None, None) => anyhow::bail!("--image or --video is required"),
+    };
     let look = Look {
         fit: match args.fit {
             FitArg::Fill => FitMode::Fill,
@@ -138,26 +163,46 @@ fn main() -> Result<()> {
         .map(|s| Instant::now() + Duration::from_secs(s));
 
     let mut gpu = Gpu::new(gpu_options).context("GPU init")?;
-    let mut session = Some(build(&platform, &gpu, &image, look)?);
+    let mut session = Some(build(&platform, &gpu, &content, look)?);
+    let mut clock = VideoClock::default();
 
     while !stop.load(Ordering::SeqCst) && deadline.is_none_or(|d| Instant::now() < d) {
-        let events = platform.poll_events(Duration::from_millis(250));
+        // Static content: sleep until an event. Video: until the next frame is due.
+        let wait = match &content {
+            Content::Image(_) => Duration::from_secs(1),
+            Content::Video(player) => clock.time_until_next(player),
+        };
+        let events = platform.poll_events(wait);
+        gpu.maintain();
+
         let device_lost = gpu.is_lost();
-        if events.is_empty() && !device_lost {
+        if !events.is_empty() || device_lost {
+            tracing::info!(?events, device_lost, "rebuilding wallpaper");
+            // Surfaces/windows go first; they reference the old device and old Explorer windows.
+            drop(session.take());
+            if device_lost {
+                gpu = Gpu::new(gpu_options).context("GPU re-init after device loss")?;
+            }
+            // Explorer may still be starting after a restart; retry briefly.
+            session = Some(retry(
+                || build(&platform, &gpu, &content, look),
+                10,
+                Duration::from_millis(500),
+            )?);
+            if let (Content::Video(_), Some(s)) = (&content, session.as_mut()) {
+                // New textures are empty: show the most recent frame again.
+                if let Some(frame) = clock.current.as_ref() {
+                    show_video_frame(&gpu, s, frame, look)?;
+                }
+            }
             continue;
         }
-        tracing::info!(?events, device_lost, "rebuilding wallpaper");
-        // Surfaces/windows go first; they reference the old device and old Explorer windows.
-        drop(session.take());
-        if device_lost {
-            gpu = Gpu::new(gpu_options).context("GPU re-init after device loss")?;
+
+        if let (Content::Video(player), Some(s)) = (&content, session.as_mut())
+            && let Some(frame) = clock.due_frame(player)
+        {
+            show_video_frame(&gpu, s, frame, look)?;
         }
-        // Explorer may still be starting after a restart; retry briefly.
-        session = Some(retry(
-            || build(&platform, &gpu, &image, look),
-            10,
-            Duration::from_millis(500),
-        )?);
     }
 
     drop(session);
@@ -165,21 +210,60 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn build(platform: &Platform, gpu: &Gpu, image: &image::RgbaImage, look: Look) -> Result<Session> {
+/// Maps frame timestamps onto wall-clock time.
+#[derive(Default)]
+struct VideoClock {
+    start: Option<Instant>,
+    /// Decoded but not yet due.
+    pending: Option<Nv12Frame>,
+    /// Last frame shown (re-uploaded after a rebuild).
+    current: Option<Nv12Frame>,
+}
+
+impl VideoClock {
+    fn now_pts(&mut self) -> Duration {
+        self.start.get_or_insert_with(Instant::now).elapsed()
+    }
+
+    fn time_until_next(&mut self, player: &VideoPlayer) -> Duration {
+        if self.pending.is_none() {
+            self.pending = player.try_next();
+        }
+        let now = self.now_pts();
+        match &self.pending {
+            Some(f) => f.pts.saturating_sub(now),
+            // Decoder is behind; check again shortly.
+            None => Duration::from_millis(5),
+        }
+    }
+
+    /// The newest frame whose time has come, dropping late ones.
+    fn due_frame(&mut self, player: &VideoPlayer) -> Option<&Nv12Frame> {
+        let now = self.now_pts();
+        let mut due = None;
+        loop {
+            if self.pending.is_none() {
+                self.pending = player.try_next();
+            }
+            match self.pending.take() {
+                Some(f) if f.pts <= now => due = Some(f),
+                other => {
+                    self.pending = other;
+                    break;
+                }
+            }
+        }
+        if let Some(f) = due {
+            self.current = Some(f);
+            return self.current.as_ref();
+        }
+        None
+    }
+}
+
+fn build(platform: &Platform, gpu: &Gpu, content: &Content, look: Look) -> Result<Session> {
     let infos = platform.outputs().context("enumerating outputs")?;
     let canvas = Rect::bounding(infos.iter().map(rect_of)).context("no outputs found")?;
-
-    // Downscale once to the largest size the image is ever displayed at (sharp, less VRAM).
-    let sizes: Vec<(u32, u32)> = match look.layout {
-        LayoutArg::Span => vec![canvas.size()],
-        LayoutArg::PerOutput => infos.iter().map(|o| (o.width, o.height)).collect(),
-    };
-    let (w, h) = display_size(look.fit, image.dimensions(), &sizes);
-    let pixels = if (w, h) == image.dimensions() {
-        image.clone()
-    } else {
-        image::imageops::resize(image, w, h, image::imageops::FilterType::Lanczos3)
-    };
 
     let mut outputs = Vec::new();
     for info in infos {
@@ -197,28 +281,92 @@ fn build(platform: &Platform, gpu: &Gpu, image: &image::RgbaImage, look: Look) -
             _window: window,
         });
     }
-
     let format = outputs[0].surface.format();
-    let blit = ImageBlit::new(gpu, format, pixels.as_raw(), w, h);
-    for out in &mut outputs {
-        let target = rect_of(&out.info);
-        let canvas = match look.layout {
-            LayoutArg::Span => canvas,
-            LayoutArg::PerOutput => target,
-        };
-        render(gpu, &blit, out, canvas, target, look.fit)?;
+
+    let renderer = match content {
+        Content::Image(image) => {
+            // Downscale once to the largest size the image is ever displayed at (sharp, less VRAM).
+            let sizes: Vec<(u32, u32)> = match look.layout {
+                LayoutArg::Span => vec![canvas.size()],
+                LayoutArg::PerOutput => outputs
+                    .iter()
+                    .map(|o| (o.info.width, o.info.height))
+                    .collect(),
+            };
+            let (w, h) = display_size(look.fit, image.dimensions(), &sizes);
+            let pixels = if (w, h) == image.dimensions() {
+                image.clone()
+            } else {
+                image::imageops::resize(image, w, h, image::imageops::FilterType::Lanczos3)
+            };
+            Renderer::Image(ImageBlit::new(gpu, format, pixels.as_raw(), w, h))
+        }
+        Content::Video(player) => {
+            let info = player.info();
+            Renderer::Video(VideoBlit::new(gpu, format, info.width, info.height))
+        }
+    };
+
+    let mut session = Session {
+        outputs,
+        canvas,
+        renderer,
+    };
+    if matches!(session.renderer, Renderer::Image(_)) {
+        present_all(gpu, &mut session, look)?;
     }
     tracing::info!(
-        outputs = outputs.len(),
-        image = ?(w, h),
+        outputs = session.outputs.len(),
         layout = ?look.layout,
         "wallpaper shown on {}",
-        outputs.iter().map(|o| o.info.device.as_str()).collect::<Vec<_>>().join(", ")
+        session
+            .outputs
+            .iter()
+            .map(|o| o.info.device.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
     );
-    Ok(Session {
-        _outputs: outputs,
-        _blit: blit,
-    })
+    Ok(session)
+}
+
+fn show_video_frame(gpu: &Gpu, session: &mut Session, frame: &Nv12Frame, look: Look) -> Result<()> {
+    if let Renderer::Video(blit) = &session.renderer {
+        blit.upload(
+            gpu,
+            Nv12Planes {
+                width: frame.width,
+                height: frame.height,
+                stride: frame.stride,
+                luma: frame.luma(),
+                chroma: frame.chroma(),
+            },
+        );
+    }
+    present_all(gpu, session, look)
+}
+
+fn present_all(gpu: &Gpu, session: &mut Session, look: Look) -> Result<()> {
+    for out in &mut session.outputs {
+        let target = rect_of(&out.info);
+        let canvas = match look.layout {
+            LayoutArg::Span => session.canvas,
+            LayoutArg::PerOutput => target,
+        };
+        let Some(frame) = out.surface.acquire(gpu)? else {
+            tracing::debug!(output = %out.info.device, "frame skipped (occluded)");
+            continue;
+        };
+        let view = frame
+            .texture
+            .create_view(&lumen_gpu::wgpu::TextureViewDescriptor::default());
+        let clear = [0.0, 0.0, 0.0, 1.0];
+        match &session.renderer {
+            Renderer::Image(blit) => blit.draw(gpu, &view, canvas, target, look.fit, clear),
+            Renderer::Video(blit) => blit.draw(gpu, &view, canvas, target, look.fit, clear),
+        }
+        gpu.queue.present(frame);
+    }
+    Ok(())
 }
 
 fn rect_of(o: &OutputInfo) -> Rect {
@@ -228,26 +376,6 @@ fn rect_of(o: &OutputInfo) -> Rect {
         width: o.width,
         height: o.height,
     }
-}
-
-fn render(
-    gpu: &Gpu,
-    blit: &ImageBlit,
-    out: &mut Output,
-    canvas: Rect,
-    target: Rect,
-    fit: FitMode,
-) -> Result<()> {
-    let Some(frame) = out.surface.acquire(gpu)? else {
-        tracing::debug!(output = %out.info.device, "frame skipped (occluded)");
-        return Ok(());
-    };
-    let view = frame
-        .texture
-        .create_view(&lumen_gpu::wgpu::TextureViewDescriptor::default());
-    blit.draw(gpu, &view, canvas, target, fit, [0.0, 0.0, 0.0, 1.0]);
-    gpu.queue.present(frame);
-    Ok(())
 }
 
 fn retry<T>(mut f: impl FnMut() -> Result<T>, attempts: u32, delay: Duration) -> Result<T> {

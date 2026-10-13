@@ -644,6 +644,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-media"
+version = "0.0.1"
+dependencies = [
+ "serde_json",
+ "thiserror",
+ "tracing",
+ "windows",
+]
+
+[[package]]
 name = "lumen-platform"
 version = "0.0.1"
 dependencies = [
@@ -682,6 +692,7 @@ dependencies = [
  "ctrlc",
  "image",
  "lumen-gpu",
+ "lumen-media",
  "lumen-platform",
  "lumen-render",
  "tracing",

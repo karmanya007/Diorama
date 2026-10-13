@@ -115,9 +115,17 @@ impl Gpu {
     }
 
     /// True once the device is lost; the caller must drop and rebuild the `Gpu`
-    /// and everything created from it.
+    /// and everything created from it. Call [`Gpu::maintain`] periodically when
+    /// idle: wgpu only notices loss while polling or submitting.
     pub fn is_lost(&self) -> bool {
         self.lost.load(Ordering::SeqCst)
+    }
+
+    /// Non-blocking device poll: runs completion callbacks and surfaces device loss.
+    pub fn maintain(&self) {
+        if let Err(e) = self.device.poll(wgpu::PollType::Poll) {
+            tracing::warn!("device poll failed: {e}");
+        }
     }
 
     pub fn adapter_info(&self) -> wgpu::AdapterInfo {

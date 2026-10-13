@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Enforces the architecture rules from docs/PLAN.md and ADR-002:
 #   1. Lower layers never depend on higher ones; renderer/runtime never see WE formats.
-#   2. OS-specific code (cfg(windows) etc.) lives only in lumen-platform.
+#   2. OS-specific code (cfg(windows) etc.) lives only in lumen-platform and lumen-media.
 # Crates that do not exist yet are skipped, so the rules can be written ahead of time.
 set -euo pipefail
 
@@ -14,7 +14,8 @@ rules=(
   "lumen-we:lumen-gpu lumen-runtime lumen-render lumen-platform"
   "lumen-gpu:lumen-we lumen-runtime lumen-render lumen-platform"
   "lumen-runtime:lumen-we lumen-platform"
-  "lumen-render:lumen-we lumen-runtime lumen-platform"
+  "lumen-render:lumen-we lumen-runtime lumen-platform lumen-media"
+  "lumen-media:lumen-we lumen-gpu lumen-runtime lumen-render lumen-platform"
   "lumen-platform:lumen-scene lumen-we lumen-gpu lumen-runtime lumen-render"
 )
 
@@ -34,10 +35,10 @@ for rule in "${rules[@]}"; do
   done
 done
 
-# OS-specific cfgs outside the platform crate (tools/ may hard-code paths but not cfg).
-violations=$(grep -rnE 'cfg\((.*[^_])?(windows|unix|target_os)' crates --include='*.rs' | grep -v '^crates/lumen-platform/' || true)
+# OS-specific cfgs outside the OS-facing crates (tools/ may hard-code paths but not cfg).
+violations=$(grep -rnE 'cfg\((.*[^_])?(windows|unix|target_os)' crates --include='*.rs' | grep -vE '^crates/lumen-(platform|media)/' || true)
 if [[ -n "$violations" ]]; then
-  echo "OS-specific cfg outside lumen-platform:"
+  echo "OS-specific cfg outside lumen-platform/lumen-media:"
   echo "$violations"
   fail=1
 fi
