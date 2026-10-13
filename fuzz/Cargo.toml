@@ -1,0 +1,30 @@
+[package]
+name = "lumen-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+lumen-core = { path = "../crates/lumen-core" }
+lumen-we = { path = "../crates/lumen-we" }
+
+# Kept out of the main workspace: needs nightly + libFuzzer.
+[workspace]
+
+[[bin]]
+name = "pkg"
+path = "fuzz_targets/pkg.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tex"
+path = "fuzz_targets/tex.rs"
+test = false
+doc = false
+bench = false

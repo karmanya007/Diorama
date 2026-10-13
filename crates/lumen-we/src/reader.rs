@@ -40,6 +40,31 @@ impl<'a> ByteReader<'a> {
         Ok(u32::from_le_bytes(raw))
     }
 
+    pub(crate) fn i32(&mut self) -> Result<i32> {
+        Ok(self.u32()?.cast_signed())
+    }
+
+    pub(crate) fn f32(&mut self) -> Result<f32> {
+        Ok(f32::from_bits(self.u32()?))
+    }
+
+    /// NUL-terminated ASCII tag such as `"TEXV0005\0"`, at most `max_len` bytes before the NUL.
+    pub(crate) fn cstr(&mut self, max_len: usize, what: &'static str) -> Result<&'a str> {
+        let start = self.pos;
+        let window = self.buf.get(start..).unwrap_or_default();
+        let len = window
+            .iter()
+            .take(max_len + 1)
+            .position(|&b| b == 0)
+            .ok_or(Error::Truncated {
+                offset: start,
+                needed: max_len + 1,
+            })?;
+        let raw = self.bytes(len)?;
+        self.bytes(1)?;
+        std::str::from_utf8(raw).map_err(|_| Error::InvalidUtf8 { what })
+    }
+
     /// `u32` byte length followed by that many UTF-8 bytes.
     pub(crate) fn string_u32(&mut self, max_len: u32, what: &'static str) -> Result<&'a str> {
         let len = self.u32()?;
@@ -66,6 +91,15 @@ mod tests {
         assert_eq!(r.string_u32(16, "test").unwrap(), "hi");
         assert_eq!(r.u32().unwrap(), 7);
         assert_eq!(r.pos(), data.len());
+    }
+
+    #[test]
+    fn reads_nul_terminated_tag() {
+        let mut r = ByteReader::new(b"TEXV0005\0rest");
+        assert_eq!(r.cstr(16, "tag").unwrap(), "TEXV0005");
+        assert_eq!(r.pos(), 9);
+        let mut r = ByteReader::new(b"NOTERMINATOR");
+        assert!(r.cstr(4, "tag").is_err());
     }
 
     #[test]

@@ -21,6 +21,8 @@ confidence-threshold = 0.9
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Internal path dependencies have no version; allowed because every crate is publish = false.
+allow-wildcard-paths = true
 
 [sources]
 unknown-registry = "deny"

@@ -9,8 +9,10 @@ publish.workspace = true
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+image.workspace = true
 lumen-core.workspace = true
 lumen-we.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

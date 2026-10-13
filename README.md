@@ -23,9 +23,14 @@ Planned crates (added when their phase starts): `lumen-scene`, `lumen-assets`, `
 cargo run -p wpdump -- list   "<workshop item>/scene.pkg"
 cargo run -p wpdump -- cat    "<workshop item>/scene.pkg" scene.json
 cargo run -p wpdump -- unpack "<workshop item>/scene.pkg" extracted/<id>
+cargo run -p wpdump -- tex-info "<file>.tex"                       # or: <scene.pkg> --entry materials/x.tex
+cargo run -p wpdump -- tex2png  "<file>.tex" out.png --crop
+cargo run -p wpdump -- survey --out docs/re-notes/corpus-survey.md   # aggregate feature usage
 ```
 
-Tests: `cargo test --workspace`. The corpus test reads your local Workshop folder (`LUMEN_WE_CORPUS` or the default Steam path) and skips when it is missing.
+Tests: `cargo test --workspace`. Corpus tests read your local Workshop folder (`LUMEN_WE_CORPUS`) and WE install (`LUMEN_WE_INSTALL`), defaulting to the Steam paths, and skip when missing.
+
+Fuzzing (Linux, nightly): `cargo +nightly fuzz run pkg` / `cargo +nightly fuzz run tex` from the repo root.
 
 ## License
 

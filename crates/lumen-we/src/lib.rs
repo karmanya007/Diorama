@@ -6,6 +6,10 @@
 pub mod error;
 pub mod pkg;
 mod reader;
+pub mod tex;
+pub mod tex_decode;
 
 pub use error::{Error, Result};
 pub use pkg::{Pkg, PkgEntry};
+pub use tex::{Tex, TexFlags, TexFormat};
+pub use tex_decode::{Rgba8Image, mip_to_rgba8};
