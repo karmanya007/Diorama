@@ -1,0 +1,16 @@
+[package]
+name = "wpdump"
+description = "Inspect and unpack Wallpaper Engine content for reverse-engineering and testing."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+lumen-core.workspace = true
+lumen-we.workspace = true
+
+[lints]
+workspace = true

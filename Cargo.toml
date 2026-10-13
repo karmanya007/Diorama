@@ -1,0 +1,44 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/lumen-core",
+    "crates/lumen-we",
+    "tools/wpdump",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/karmanya007/Lumen"
+publish = false
+
+[workspace.dependencies]
+# internal
+lumen-core = { path = "crates/lumen-core" }
+lumen-we = { path = "crates/lumen-we" }
+
+# external
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+lz4_flex = { version = "0.11", default-features = false, features = ["safe-decode", "std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+dbg_macro = "warn"
+todo = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

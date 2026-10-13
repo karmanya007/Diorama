@@ -1,0 +1,14 @@
+/target
+**/*.rs.bk
+
+# Local RE artifacts — never commit Wallpaper Engine or Workshop content
+/scratch/
+/extracted/
+*.rdc
+*.pkg
+*.tex
+*.gzf
+
+# Ghidra project files
+*.gpr
+*.rep/
