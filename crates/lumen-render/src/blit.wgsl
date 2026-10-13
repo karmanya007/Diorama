@@ -1,9 +1,9 @@
-// Draws one image over the whole target. `scale` maps target UVs to image UVs
-// around the centre; UVs outside [0, 1] show the clear colour (letterboxing).
+// Draws (part of) one image over the whole target: image_uv = uv * scale + offset.
+// UVs outside [0, 1] show the clear colour (letterboxing, gaps in span layouts).
 
 struct Params {
     scale: vec2<f32>,
-    _pad: vec2<f32>,
+    offset: vec2<f32>,
     clear: vec4<f32>,
 };
 
@@ -28,7 +28,7 @@ fn vs_main(@builtin(vertex_index) i: u32) -> VsOut {
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    let uv = (in.uv - 0.5) * params.scale + 0.5;
+    let uv = in.uv * params.scale + params.offset;
     let color = textureSample(image, image_sampler, uv);
     let inside = all(uv >= vec2<f32>(0.0)) && all(uv <= vec2<f32>(1.0));
     return select(params.clear, vec4<f32>(color.rgb, 1.0), inside);

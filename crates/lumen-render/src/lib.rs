@@ -28,6 +28,65 @@ pub fn uv_scale(mode: FitMode, image: (u32, u32), target: (u32, u32)) -> [f32; 2
     }
 }
 
+/// Rectangle in virtual-desktop pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rect {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl Rect {
+    pub fn size(self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
+    /// Smallest rectangle containing all `rects` (the span canvas), or `None` if empty.
+    pub fn bounding(rects: impl IntoIterator<Item = Rect>) -> Option<Rect> {
+        let mut it = rects.into_iter();
+        let first = it.next()?;
+        let (mut x0, mut y0) = (i64::from(first.x), i64::from(first.y));
+        let (mut x1, mut y1) = (x0 + i64::from(first.width), y0 + i64::from(first.height));
+        for r in it {
+            x0 = x0.min(i64::from(r.x));
+            y0 = y0.min(i64::from(r.y));
+            x1 = x1.max(i64::from(r.x) + i64::from(r.width));
+            y1 = y1.max(i64::from(r.y) + i64::from(r.height));
+        }
+        Some(Rect {
+            x: x0 as i32,
+            y: y0 as i32,
+            width: (x1 - x0) as u32,
+            height: (y1 - y0) as u32,
+        })
+    }
+}
+
+/// Maps a target's UVs to image UVs (`image_uv = uv * scale + offset`) when
+/// the image is fitted to `canvas` with `mode` and `target` shows part of it.
+/// Per-output wallpapers use `canvas == target`; span mode uses the bounding
+/// box of all outputs as the canvas so one image continues across monitors.
+pub fn uv_transform(
+    mode: FitMode,
+    image: (u32, u32),
+    canvas: Rect,
+    target: Rect,
+) -> ([f32; 2], [f32; 2]) {
+    let s = uv_scale(mode, image, canvas.size());
+    let cw = canvas.width.max(1) as f32;
+    let ch = canvas.height.max(1) as f32;
+    let rel = [
+        (target.x - canvas.x) as f32 / cw,
+        (target.y - canvas.y) as f32 / ch,
+    ];
+    let frac = [target.width as f32 / cw, target.height as f32 / ch];
+    (
+        [s[0] * frac[0], s[1] * frac[1]],
+        [(rel[0] - 0.5) * s[0] + 0.5, (rel[1] - 0.5) * s[1] + 0.5],
+    )
+}
+
 /// Largest on-screen size the image is ever drawn at across `targets` under
 /// `mode`, so it can be downscaled once on the CPU before upload (sharp
 /// sampling without mipmaps, and less VRAM — P12).
@@ -58,7 +117,7 @@ pub fn display_size(mode: FitMode, image: (u32, u32), targets: &[(u32, u32)]) ->
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Params {
     scale: [f32; 2],
-    _pad: [f32; 2],
+    offset: [f32; 2],
     clear: [f32; 4],
 }
 
@@ -222,18 +281,21 @@ impl ImageBlit {
         }
     }
 
-    /// Draws the image onto `target` (sized `target_size`) and submits.
+    /// Draws the image onto `target`, which shows the `target_rect` part of
+    /// `canvas` (see [`uv_transform`]), and submits.
     pub fn draw(
         &self,
         gpu: &Gpu,
         target: &wgpu::TextureView,
-        target_size: (u32, u32),
+        canvas: Rect,
+        target_rect: Rect,
         mode: FitMode,
         clear: [f32; 4],
     ) {
+        let (scale, offset) = uv_transform(mode, self.image_size, canvas, target_rect);
         let params = Params {
-            scale: uv_scale(mode, self.image_size, target_size),
-            _pad: [0.0; 2],
+            scale,
+            offset,
             clear,
         };
         gpu.queue
@@ -292,6 +354,60 @@ mod tests {
         let s = uv_scale(FitMode::Fit, (1000, 1000), (2000, 1000));
         assert_eq!(s, [2.0, 1.0]);
         assert_eq!(uv_scale(FitMode::Stretch, (1, 9), (9, 1)), [1.0, 1.0]);
+    }
+
+    const MAIN: Rect = Rect {
+        x: 0,
+        y: 0,
+        width: 1920,
+        height: 1080,
+    };
+    const PORTRAIT: Rect = Rect {
+        x: -1080,
+        y: -546,
+        width: 1080,
+        height: 1920,
+    };
+
+    #[test]
+    fn bounding_box_of_real_layout() {
+        let canvas = Rect::bounding([MAIN, PORTRAIT]).unwrap();
+        assert_eq!(
+            canvas,
+            Rect {
+                x: -1080,
+                y: -546,
+                width: 3000,
+                height: 1920
+            }
+        );
+        assert_eq!(Rect::bounding([]), None);
+    }
+
+    #[test]
+    fn per_output_transform_equals_centered_scale() {
+        let (scale, offset) = uv_transform(FitMode::Fill, (3840, 2160), MAIN, MAIN);
+        let s = uv_scale(FitMode::Fill, (3840, 2160), MAIN.size());
+        assert_eq!(scale, s);
+        assert_eq!(offset, [0.5 - 0.5 * s[0], 0.5 - 0.5 * s[1]]);
+    }
+
+    #[test]
+    fn span_slices_are_continuous() {
+        let image = (3840, 2160);
+        let canvas = Rect::bounding([MAIN, PORTRAIT]).unwrap();
+        let (sp, op) = uv_transform(FitMode::Fill, image, canvas, PORTRAIT);
+        let (sm, om) = uv_transform(FitMode::Fill, image, canvas, MAIN);
+        // Right edge of the portrait monitor meets the left edge of the main one (x = 0).
+        let portrait_right = 1.0 * sp[0] + op[0];
+        let main_left = om[0];
+        assert!((portrait_right - main_left).abs() < 1e-6);
+        // Same image pixels per screen pixel on both monitors.
+        assert!((sp[0] / 1080.0 - sm[0] / 1920.0).abs() < 1e-9);
+        // Cover fit over 3000×1920 crops width only: the whole canvas spans 3375/3840 of the image.
+        let canvas_left = op[0];
+        let canvas_right = om[0] + sm[0];
+        assert!(((canvas_right - canvas_left) - 3375.0 / 3840.0).abs() < 1e-4);
     }
 
     #[test]

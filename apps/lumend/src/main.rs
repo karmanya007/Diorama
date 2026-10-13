@@ -14,7 +14,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use lumen_gpu::{Backend, Gpu, GpuOptions, OutputSurface};
 use lumen_platform::{OutputInfo, Platform, WallpaperWindow};
-use lumen_render::{FitMode, ImageBlit, display_size};
+use lumen_render::{FitMode, ImageBlit, Rect, display_size};
 
 #[derive(Debug, Parser)]
 #[command(version, about)]
@@ -24,6 +24,9 @@ struct Args {
     image: Option<PathBuf>,
     #[arg(long, value_enum, default_value = "fill")]
     fit: FitArg,
+    /// `per-output`: the whole image on every monitor. `span`: one image across all monitors.
+    #[arg(long, value_enum, default_value = "per-output")]
+    layout: LayoutArg,
     #[arg(long, value_enum, default_value = "auto")]
     backend: BackendArg,
     /// Prefer an integrated GPU.
@@ -42,6 +45,19 @@ enum FitArg {
     Fill,
     Fit,
     Stretch,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum LayoutArg {
+    PerOutput,
+    Span,
+}
+
+/// How the image is placed: fit mode plus per-output vs span layout.
+#[derive(Debug, Clone, Copy)]
+struct Look {
+    fit: FitMode,
+    layout: LayoutArg,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -97,10 +113,13 @@ fn main() -> Result<()> {
     let image = image::open(&image_path)
         .with_context(|| format!("loading {}", image_path.display()))?
         .into_rgba8();
-    let fit = match args.fit {
-        FitArg::Fill => FitMode::Fill,
-        FitArg::Fit => FitMode::Fit,
-        FitArg::Stretch => FitMode::Stretch,
+    let look = Look {
+        fit: match args.fit {
+            FitArg::Fill => FitMode::Fill,
+            FitArg::Fit => FitMode::Fit,
+            FitArg::Stretch => FitMode::Stretch,
+        },
+        layout: args.layout,
     };
     let gpu_options = GpuOptions {
         backend: match args.backend {
@@ -119,7 +138,7 @@ fn main() -> Result<()> {
         .map(|s| Instant::now() + Duration::from_secs(s));
 
     let mut gpu = Gpu::new(gpu_options).context("GPU init")?;
-    let mut session = Some(build(&platform, &gpu, &image, fit)?);
+    let mut session = Some(build(&platform, &gpu, &image, look)?);
 
     while !stop.load(Ordering::SeqCst) && deadline.is_none_or(|d| Instant::now() < d) {
         let events = platform.poll_events(Duration::from_millis(250));
@@ -135,7 +154,7 @@ fn main() -> Result<()> {
         }
         // Explorer may still be starting after a restart; retry briefly.
         session = Some(retry(
-            || build(&platform, &gpu, &image, fit),
+            || build(&platform, &gpu, &image, look),
             10,
             Duration::from_millis(500),
         )?);
@@ -146,18 +165,16 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn build(
-    platform: &Platform,
-    gpu: &Gpu,
-    image: &image::RgbaImage,
-    fit: FitMode,
-) -> Result<Session> {
+fn build(platform: &Platform, gpu: &Gpu, image: &image::RgbaImage, look: Look) -> Result<Session> {
     let infos = platform.outputs().context("enumerating outputs")?;
-    anyhow::ensure!(!infos.is_empty(), "no outputs found");
+    let canvas = Rect::bounding(infos.iter().map(rect_of)).context("no outputs found")?;
 
-    // Downscale once to the largest size any output displays (sharp, less VRAM).
-    let sizes: Vec<(u32, u32)> = infos.iter().map(|o| (o.width, o.height)).collect();
-    let (w, h) = display_size(fit, image.dimensions(), &sizes);
+    // Downscale once to the largest size the image is ever displayed at (sharp, less VRAM).
+    let sizes: Vec<(u32, u32)> = match look.layout {
+        LayoutArg::Span => vec![canvas.size()],
+        LayoutArg::PerOutput => infos.iter().map(|o| (o.width, o.height)).collect(),
+    };
+    let (w, h) = display_size(look.fit, image.dimensions(), &sizes);
     let pixels = if (w, h) == image.dimensions() {
         image.clone()
     } else {
@@ -184,11 +201,17 @@ fn build(
     let format = outputs[0].surface.format();
     let blit = ImageBlit::new(gpu, format, pixels.as_raw(), w, h);
     for out in &mut outputs {
-        render(gpu, &blit, out, fit)?;
+        let target = rect_of(&out.info);
+        let canvas = match look.layout {
+            LayoutArg::Span => canvas,
+            LayoutArg::PerOutput => target,
+        };
+        render(gpu, &blit, out, canvas, target, look.fit)?;
     }
     tracing::info!(
         outputs = outputs.len(),
         image = ?(w, h),
+        layout = ?look.layout,
         "wallpaper shown on {}",
         outputs.iter().map(|o| o.info.device.as_str()).collect::<Vec<_>>().join(", ")
     );
@@ -198,7 +221,23 @@ fn build(
     })
 }
 
-fn render(gpu: &Gpu, blit: &ImageBlit, out: &mut Output, fit: FitMode) -> Result<()> {
+fn rect_of(o: &OutputInfo) -> Rect {
+    Rect {
+        x: o.x,
+        y: o.y,
+        width: o.width,
+        height: o.height,
+    }
+}
+
+fn render(
+    gpu: &Gpu,
+    blit: &ImageBlit,
+    out: &mut Output,
+    canvas: Rect,
+    target: Rect,
+    fit: FitMode,
+) -> Result<()> {
     let Some(frame) = out.surface.acquire(gpu)? else {
         tracing::debug!(output = %out.info.device, "frame skipped (occluded)");
         return Ok(());
@@ -206,7 +245,7 @@ fn render(gpu: &Gpu, blit: &ImageBlit, out: &mut Output, fit: FitMode) -> Result
     let view = frame
         .texture
         .create_view(&lumen_gpu::wgpu::TextureViewDescriptor::default());
-    blit.draw(gpu, &view, out.surface.size(), fit, [0.0, 0.0, 0.0, 1.0]);
+    blit.draw(gpu, &view, canvas, target, fit, [0.0, 0.0, 0.0, 1.0]);
     gpu.queue.present(frame);
     Ok(())
 }
