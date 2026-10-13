@@ -136,7 +136,7 @@ fn mutated_shaders_never_panic() {
     seeds.push(synthetic);
 
     let resolve = |name: &str| (name == "common.h").then(|| "#define X 1\n".to_owned());
-    let mut rng = Rng(0x05ad_e5);
+    let mut rng = Rng(0x0005_ade5);
     for seed in &seeds {
         for _ in 0..MUTATIONS_PER_SEED {
             let text = String::from_utf8_lossy(&mutate(seed, &mut rng)).into_owned();
