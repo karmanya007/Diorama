@@ -43,6 +43,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --workspace
 
+  layers:
+    # Architecture rules (ADR-002): layer dependencies and OS code confined to lumen-platform.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: bash scripts/check-layers.sh
+
   fuzz:
     # Short smoke run per target on every push; longer runs can be scheduled later.
     runs-on: ubuntu-latest
