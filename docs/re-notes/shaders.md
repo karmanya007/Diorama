@@ -48,7 +48,13 @@ Not used: `texture(`, `texelFetch`, `tex2D`, `fmod`, `transpose`, `gl_FragCoord`
 - Uniform annotations: trailing `// {"material":"key","label":…,"default":…,"range":[…]}` bind material/scene values to uniforms; `{"hidden":true}` for engine-fed samplers; `"combo":"MASK"` on samplers enables a combo when a texture is bound.
 - Combo declarations: `// [COMBO] {"material":…,"combo":"NAME","type":"options","default":0}`.
 
-## Open questions → shader spike (ADR-003)
-- Path A: rewrite to GLSL 450 + HLSL→GLSL macro prelude → naga. Risk: HLSL permissiveness, `sampler2D` function parameters, combined samplers.
-- Path B: mirror WE (GLSL→HLSL prelude + rewrite) → DXC → SPIR-V → wgpu. Highest compatibility; adds native DXC dependency (WE itself ships `dxcompiler.dll`).
-- Measure both on all built-in + 258 corpus custom shaders before deciding.
+## WE's own rewrite (from binary strings)
+`struct VS_INPUT` / `VS_OUTPUT main(VS_INPUT IN)` / `PS_OUTPUT main(VS_OUTPUT IN)` with `float4 gl_FragColor : SV_TARGET`; attributes and varyings become `IN.x` / `OUT.x` member accesses; `gl_Position` → `SV_POSITION`; `gl_ViewportIndex` → `SV_ViewportArrayIndex`; geometry-shader variants `void main(triangle VS_OUTPUT IN[3], inout TriangleStream<PS_INPUT> OUT)` and `point VS_OUTPUT IN[1]`. Samplers: `SamplerState …:register(s…)`.
+
+Engine-provided pieces our translator must supply itself:
+- `#require LightingV1` → lighting library with `PerformLighting_V1(...)`.
+- `BLENDROWCOUNT` define (puppet warp blend map rows).
+- `in uint gl_InstanceID;` builtin input (instanced fur / shadow casters).
+
+## Shader spike result → ADR-003
+Decided: **HLSL → DXC → SPIR-V → naga** (98.2% of 336 distinct pairs vs 89.0% for GLSL → naga). See `docs/adr/0003-shader-toolchain.md` and the `shader-check-*.md` reports in this folder.

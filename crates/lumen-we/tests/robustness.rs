@@ -12,7 +12,10 @@
 
 use std::path::PathBuf;
 
+use std::collections::BTreeMap;
+
 use lumen_core::Limits;
+use lumen_we::shader;
 use lumen_we::{Pkg, Tex, mip_to_rgba8};
 
 const DEFAULT_INSTALL: &str = r"C:\Program Files (x86)\Steam\steamapps\common\wallpaper_engine";
@@ -119,6 +122,37 @@ fn mutated_tex_files_never_panic() {
         "{} tex seeds × {MUTATIONS_PER_SEED} mutations, {parsed_ok} still parsed",
         seeds.len()
     );
+}
+
+#[test]
+fn mutated_shaders_never_panic() {
+    let synthetic = "// [COMBO] {\"combo\":\"MASK\",\"default\":1}\n#include \"common.h\"\n\
+        uniform sampler2D g_Texture0; // {\"hidden\":true}\nvarying vec2 v_TexCoord[2];\n\
+        #if MASK == 1 && defined(HLSL)\nvoid main() { gl_FragColor = texSample2D(g_Texture0, v_TexCoord[0]); }\n#endif\n"
+        .as_bytes()
+        .to_vec();
+    let mut seeds = small_seed_files("frag", 16 * 1024, 15);
+    seeds.extend(small_seed_files("vert", 16 * 1024, 15));
+    seeds.push(synthetic);
+
+    let resolve = |name: &str| (name == "common.h").then(|| "#define X 1\n".to_owned());
+    let mut rng = Rng(0x05ad_e5);
+    for seed in &seeds {
+        for _ in 0..MUTATIONS_PER_SEED {
+            let text = String::from_utf8_lossy(&mutate(seed, &mut rng)).into_owned();
+            let Ok(prepared) = shader::prepare_pair(
+                &text,
+                &text,
+                &resolve,
+                &shader::engine_defines(),
+                &BTreeMap::new(),
+            ) else {
+                continue;
+            };
+            let _ = prepared.glsl();
+            let _ = prepared.hlsl();
+        }
+    }
 }
 
 #[test]

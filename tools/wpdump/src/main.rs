@@ -14,6 +14,7 @@ use lumen_core::Limits;
 use lumen_we::tex_decode::freeimage_format_name;
 use lumen_we::{Pkg, Tex, TexFlags, mip_to_rgba8};
 
+mod shader_check;
 mod survey;
 
 #[derive(Debug, Parser)]
@@ -54,6 +55,26 @@ enum Command {
         #[arg(long, default_value = DEFAULT_INSTALL)]
         install: PathBuf,
         /// Write the report here instead of stdout.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// Translate every shader pair to GLSL 450 and validate with naga (ADR-003 spike).
+    ShaderCheck {
+        #[arg(long, default_value = DEFAULT_CORPUS)]
+        corpus: PathBuf,
+        #[arg(long, default_value = DEFAULT_INSTALL)]
+        install: PathBuf,
+        /// Write translated sources of failing pairs here.
+        #[arg(long)]
+        dump: Option<PathBuf>,
+        /// Set every declared combo to 1 instead of its default.
+        #[arg(long)]
+        all_combos_on: bool,
+        #[arg(long, value_enum, default_value = "glsl")]
+        backend: shader_check::Backend,
+        /// Path to dxc.exe (required for --backend hlsl).
+        #[arg(long)]
+        dxc: Option<PathBuf>,
         #[arg(long)]
         out: Option<PathBuf>,
     },
@@ -127,6 +148,29 @@ fn run(cli: Cli) -> Result<()> {
             out: report_path,
         } => {
             let report = survey::run(&corpus, &install)?;
+            match report_path {
+                Some(path) => fs::write(&path, report)
+                    .with_context(|| format!("writing {}", path.display()))?,
+                None => out.write_all(report.as_bytes())?,
+            }
+        }
+        Command::ShaderCheck {
+            corpus,
+            install,
+            dump,
+            all_combos_on,
+            backend,
+            dxc,
+            out: report_path,
+        } => {
+            let report = shader_check::run(&shader_check::Options {
+                corpus: &corpus,
+                install: &install,
+                dump: dump.as_deref(),
+                all_combos_on,
+                backend,
+                dxc: dxc.as_deref(),
+            })?;
             match report_path {
                 Some(path) => fs::write(&path, report)
                     .with_context(|| format!("writing {}", path.display()))?,

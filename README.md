@@ -26,7 +26,10 @@ cargo run -p wpdump -- unpack "<workshop item>/scene.pkg" extracted/<id>
 cargo run -p wpdump -- tex-info "<file>.tex"                       # or: <scene.pkg> --entry materials/x.tex
 cargo run -p wpdump -- tex2png  "<file>.tex" out.png --crop
 cargo run -p wpdump -- survey --out docs/re-notes/corpus-survey.md   # aggregate feature usage
+cargo run -p wpdump -- shader-check --backend hlsl --dxc <path>/dxc.exe   # shader translation pass rate
 ```
+
+`shader-check --backend hlsl` needs DXC from the [DirectXShaderCompiler releases](https://github.com/microsoft/DirectXShaderCompiler/releases); see [ADR-003](docs/adr/0003-shader-toolchain.md).
 
 Tests: `cargo test --workspace`. Corpus tests read your local Workshop folder (`LUMEN_WE_CORPUS`) and WE install (`LUMEN_WE_INSTALL`), defaulting to the Steam paths, and skip when missing.
 

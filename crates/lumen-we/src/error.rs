@@ -40,6 +40,9 @@ pub enum Error {
         actual: u64,
     },
 
+    #[error("shader: {0}")]
+    Shader(String),
+
     #[error("image decode failed: {0}")]
     Image(String),
 
