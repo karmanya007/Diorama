@@ -26,6 +26,8 @@ pub struct Scene {
     pub width: u32,
     pub height: u32,
     pub clear_color: [f32; 4],
+    /// Render in floating point (WE's HDR bloom path: values above 1 bloom).
+    pub hdr: bool,
     /// `g_LightAmbientColor` / `g_LightSkylightColor` for lit materials.
     pub ambient_color: [f32; 3],
     pub skylight_color: [f32; 3],

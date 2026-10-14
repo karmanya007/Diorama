@@ -20,8 +20,10 @@ use lumen_gpu::{Gpu, wgpu};
 use lumen_scene::{self as ir, Blend, LayerKind, TextureBinding};
 use wgpu::util::DeviceExt as _;
 
-/// Every scene target uses WE's gamma-space RGBA8 (no sRGB conversion).
+/// Scene targets use WE's gamma-space RGBA8 (no sRGB conversion)...
 pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+/// ...or half floats for HDR scenes, where values above 1 feed the bloom.
+pub const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SceneError {
@@ -94,6 +96,9 @@ struct GpuPass {
     vs_data: Vec<u8>,
     fs_data: Vec<u8>,
     target: usize,
+    /// Draw onto the target's current contents instead of clearing it
+    /// (blended passes into effect FBOs, e.g. additive bloom upsampling).
+    load: bool,
     /// Scene placement of a pass drawn straight into the scene (moved by
     /// parallax each frame); `None` for passes into layer targets.
     placement: Option<[f32; 6]>,
@@ -122,6 +127,7 @@ const FRAMEBUFFER: usize = 1;
 
 pub struct SceneRenderer {
     size: [u32; 2],
+    format: wgpu::TextureFormat,
     parallax: Option<ir::Parallax>,
     /// Smoothed cursor used for parallax, and the time it was last updated.
     parallax_pointer: [f32; 2],
@@ -234,7 +240,12 @@ fn blend_state(blend: Blend) -> Option<wgpu::BlendState> {
     }
 }
 
-fn create_target(device: &wgpu::Device, label: &str, size: [u32; 2]) -> Target {
+fn create_target(
+    device: &wgpu::Device,
+    label: &str,
+    size: [u32; 2],
+    format: wgpu::TextureFormat,
+) -> Target {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
         size: wgpu::Extent3d {
@@ -245,7 +256,7 @@ fn create_target(device: &wgpu::Device, label: &str, size: [u32; 2]) -> Target {
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: FORMAT,
+        format,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT
             | wgpu::TextureUsages::TEXTURE_BINDING
             | wgpu::TextureUsages::COPY_SRC
@@ -278,6 +289,7 @@ impl SceneRenderer {
             return Err(SceneError::Empty);
         }
         let device = &gpu.device;
+        let format = if scene.hdr { HDR_FORMAT } else { FORMAT };
         let samplers: Vec<wgpu::Sampler> = SAMPLERS
             .iter()
             .map(|(address, filter)| {
@@ -323,7 +335,7 @@ impl SceneRenderer {
 
         let mut programs = Vec::with_capacity(scene.programs.len());
         for p in &scene.programs {
-            match build_program(gpu, compiler, p, &uniforms_layout) {
+            match build_program(gpu, compiler, p, &uniforms_layout, format) {
                 Ok(program) => programs.push(Some(program)),
                 Err(e) => {
                     tracing::warn!(program = %p.name, "shader skipped: {e}");
@@ -332,9 +344,10 @@ impl SceneRenderer {
             }
         }
 
-        let composite = CompositeShared::new(device);
+        let composite = CompositeShared::new(device, format);
         let mut renderer = Self {
             size: [scene.width, scene.height],
+            format,
             parallax: scene.parallax,
             parallax_pointer: [0.5, 0.5],
             last_time: None,
@@ -346,8 +359,8 @@ impl SceneRenderer {
                 a: f64::from(scene.clear_color[3]),
             },
             targets: vec![
-                create_target(device, "scene", [scene.width, scene.height]),
-                create_target(device, "framebuffer", [scene.width, scene.height]),
+                create_target(device, "scene", [scene.width, scene.height], format),
+                create_target(device, "framebuffer", [scene.width, scene.height], format),
             ],
             programs,
             layers: Vec::new(),
@@ -431,6 +444,7 @@ impl SceneRenderer {
                 device,
                 &format!("{} {suffix}", layer.name),
                 layer.size,
+                self.format,
             ));
         }
         let mut current = ping;
@@ -469,6 +483,7 @@ impl SceneRenderer {
                     device,
                     &format!("{} {}", layer.name, fbo.name),
                     size,
+                    self.format,
                 ));
             }
             for pass in &effect.passes {
@@ -784,6 +799,7 @@ impl SceneRenderer {
             vs_data,
             fs_data,
             target: plan.target,
+            load: plan.blend != Blend::Opaque && plan.pass.target.is_some(),
             placement: match plan.geometry {
                 Geometry::Direct { transform, .. } if plan.target == SCENE => Some(transform),
                 _ => None,
@@ -815,7 +831,12 @@ impl SceneRenderer {
 fn read_target(gpu: &Gpu, target: &Target) -> Option<Vec<u8>> {
     {
         let [w, h] = target.size;
-        let row = 4 * w;
+        let texel_bytes = if target.texture.format() == HDR_FORMAT {
+            8
+        } else {
+            4
+        };
+        let row = texel_bytes * w;
         let padded =
             row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
         let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
@@ -850,7 +871,16 @@ fn read_target(gpu: &Gpu, target: &Target) -> Option<Vec<u8>> {
         let mapped = slice.get_mapped_range().ok()?;
         let mut out = Vec::with_capacity((row * h) as usize);
         for r in mapped.chunks_exact(padded as usize) {
-            out.extend_from_slice(&r[..row as usize]);
+            let r = &r[..row as usize];
+            if texel_bytes == 8 {
+                // Half-float channels → clamped 8-bit.
+                out.extend(r.as_chunks::<2>().0.iter().map(|h| {
+                    let v = f16_to_f32(u16::from_le_bytes(*h));
+                    (v.clamp(0.0, 1.0) * 255.0).round() as u8
+                }));
+            } else {
+                out.extend_from_slice(r);
+            }
         }
         Some(out)
     }
@@ -921,6 +951,8 @@ impl SceneRenderer {
                 }
                 let load = if pass.target == SCENE {
                     std::mem::replace(&mut scene_load, wgpu::LoadOp::Load)
+                } else if pass.load {
+                    wgpu::LoadOp::Load
                 } else {
                     wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
                 };
@@ -978,6 +1010,19 @@ impl SceneRenderer {
             k * self.size[0] as f32 * (0.5 - px),
             k * self.size[1] as f32 * (py - 0.5),
         ]
+    }
+}
+
+/// IEEE half → single precision (no `half` dependency for one readback).
+fn f16_to_f32(h: u16) -> f32 {
+    let sign = if h & 0x8000 != 0 { -1.0 } else { 1.0 };
+    let exp = i32::from((h >> 10) & 0x1f);
+    let frac = f32::from(h & 0x3ff);
+    match exp {
+        0 => sign * frac * (2.0f32).powi(-24),
+        31 if frac == 0.0 => sign * f32::INFINITY,
+        31 => f32::NAN,
+        e => sign * (1.0 + frac / 1024.0) * (2.0f32).powi(e - 15),
     }
 }
 
@@ -1148,6 +1193,7 @@ fn build_program(
     compiler: &ShaderCompiler,
     p: &ir::ShaderProgram,
     uniforms_layout: &wgpu::BindGroupLayout,
+    format: wgpu::TextureFormat,
 ) -> Result<Program, String> {
     let vs = compiler
         .compile(&p.vertex_hlsl, &p.vertex_entry, Stage::Vertex)
@@ -1233,7 +1279,7 @@ fn build_program(
         pipelines: HashMap::new(),
     };
     for blend in [Blend::Opaque, Blend::Translucent, Blend::Additive] {
-        let pipeline = create_pipeline(device, &program, blend);
+        let pipeline = create_pipeline(device, &program, blend, format);
         program.pipelines.insert(blend, pipeline);
     }
     if let Some(e) = pollster::block_on(scope.pop()) {
@@ -1242,7 +1288,12 @@ fn build_program(
     Ok(program)
 }
 
-fn create_pipeline(device: &wgpu::Device, p: &Program, blend: Blend) -> wgpu::RenderPipeline {
+fn create_pipeline(
+    device: &wgpu::Device,
+    p: &Program,
+    blend: Blend,
+    format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
     let mut offset = 0;
     let attributes: Vec<wgpu::VertexAttribute> = p
         .attributes
@@ -1282,7 +1333,7 @@ fn create_pipeline(device: &wgpu::Device, p: &Program, blend: Blend) -> wgpu::Re
             entry_point: Some(&p.fs_entry),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             targets: &[Some(wgpu::ColorTargetState {
-                format: FORMAT,
+                format,
                 blend: blend_state(blend),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
@@ -1304,7 +1355,7 @@ struct CompositeShared {
 }
 
 impl CompositeShared {
-    fn new(device: &wgpu::Device) -> Self {
+    fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("composite"),
             entries: &[
@@ -1356,7 +1407,7 @@ impl CompositeShared {
                     entry_point: Some("fs_main"),
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                     targets: &[Some(wgpu::ColorTargetState {
-                        format: FORMAT,
+                        format,
                         blend: blend_state(blend),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
@@ -1379,6 +1430,14 @@ impl CompositeShared {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn half_floats_decode() {
+        assert_eq!(f16_to_f32(0x3c00), 1.0);
+        assert_eq!(f16_to_f32(0xc000), -2.0);
+        assert_eq!(f16_to_f32(0x3800), 0.5);
+        assert_eq!(f16_to_f32(0), 0.0);
+    }
 
     #[test]
     fn matrices_upload_as_columns() {

@@ -141,6 +141,28 @@ struct Importer<'a> {
     engine: shader::EngineContext,
 }
 
+/// A synthetic pass of an engine post-processing chain (bloom).
+struct PostStep<'a> {
+    shader: &'a str,
+    blend: Blend,
+    combos: &'a [(&'a str, i64)],
+    /// Texture slots in order: `previous` or an FBO name.
+    inputs: &'a [&'a str],
+    /// FBO to write, or `None` for the layer's next ping-pong target.
+    target: Option<&'a str>,
+    /// Material constants, looked up by annotation key.
+    constants: &'a serde_json::Map<String, Value>,
+    /// Engine uniforms set directly by name.
+    engine: Vec<(&'a str, Vec<f32>)>,
+}
+
+fn fbo(name: &str, scale_div: u32) -> Fbo {
+    Fbo {
+        name: name.to_owned(),
+        scale_div,
+    }
+}
+
 /// One material pass after applying scene-level overrides.
 struct PassSpec<'v> {
     shader: String,
@@ -191,18 +213,24 @@ impl Importer<'_> {
         }
     }
 
-    /// `general.bloom`: WE's LDR bloom after all layers (capture 285):
-    /// frame → ¼ thresholded downsample → ⅛ vertical blur → ⅛ horizontal
-    /// blur → combine (frame + bloom). Built as a fullscreen layer whose
-    /// effect passes run WE's own `assets/shaders` programs.
+    /// `general.bloom`: WE's bloom after all layers, built as a fullscreen
+    /// layer whose effect passes run WE's own `assets/shaders` programs.
     fn bloom(&mut self, general: &Value) -> Result<()> {
         if !boolean(general.get("bloom"), false) {
             return Ok(());
         }
-        if boolean(general.get("hdr"), false) {
-            self.skip("HDR bloom".into());
-            return Ok(());
-        }
+        let (fbos, passes) = if boolean(general.get("hdr"), false) {
+            self.scene.hdr = true;
+            self.hdr_bloom_passes(general)?
+        } else {
+            self.ldr_bloom_passes(general)?
+        };
+        self.push_post_layer("bloom", fbos, passes)
+    }
+
+    /// LDR bloom (captures 285/597): frame → ¼ thresholded downsample → ⅛
+    /// vertical blur → ⅛ horizontal blur → combine (frame + bloom).
+    fn ldr_bloom_passes(&mut self, general: &Value) -> Result<(Vec<Fbo>, Vec<Pass>)> {
         let mut constants = serde_json::Map::new();
         for key in ["bloomstrength", "bloomthreshold", "bloomtint"] {
             if let Some(v) = general.get(key).filter(|v| !v.is_null()) {
@@ -210,23 +238,11 @@ impl Importer<'_> {
             }
         }
         // Every pass samples with frame-buffer texel offsets.
-        let texel = serde_json::json!([
-            1.0 / self.scene.width as f64,
-            1.0 / self.scene.height as f64
-        ]);
+        let texel = self.texel();
         let fbos = vec![
-            Fbo {
-                name: "_rt_Bloom4".into(),
-                scale_div: 4,
-            },
-            Fbo {
-                name: "_rt_Bloom8a".into(),
-                scale_div: 8,
-            },
-            Fbo {
-                name: "_rt_Bloom8b".into(),
-                scale_div: 8,
-            },
+            fbo("_rt_Bloom4", 4),
+            fbo("_rt_Bloom8a", 8),
+            fbo("_rt_Bloom8b", 8),
         ];
         let steps: [(&str, &[&str], Option<&str>); 4] = [
             (
@@ -244,30 +260,157 @@ impl Importer<'_> {
         ];
         let mut passes = Vec::new();
         for (shader, inputs, target) in steps {
-            let spec = PassSpec {
-                shader: shader.to_owned(),
+            let step = PostStep {
+                shader,
                 blend: Blend::Opaque,
-                combos: BTreeMap::new(),
-                textures: BTreeMap::new(),
-                constants: vec![&constants],
+                combos: &[],
+                inputs,
+                target,
+                constants: &constants,
+                engine: vec![("g_TexelSize", texel.to_vec())],
             };
-            let mut pass = self.pass(&spec, Some(&fbos))?;
-            for (slot, input) in (0u32..).zip(inputs.iter()) {
-                pass.textures.insert(slot, self.rt_binding(input, &fbos));
-            }
-            if let Some(t) = texel.as_array() {
-                pass.constants.insert(
-                    "g_TexelSize".into(),
-                    t.iter()
-                        .filter_map(|v| v.as_f64())
-                        .map(|v| v as f32)
-                        .collect(),
-                );
-            }
-            pass.target = target.map(str::to_owned);
-            passes.push(pass);
+            passes.push(self.post_pass(&step, &fbos)?);
+        }
+        Ok((fbos, passes))
+    }
+
+    /// HDR bloom (capture of 2468489223, all targets RGBA16F): soft-knee
+    /// threshold into ½ size, `bloomhdriterations` halvings, additive
+    /// upsampling scaled by `bloomhdrscatter`, then `combine_hdr`.
+    fn hdr_bloom_passes(&mut self, general: &Value) -> Result<(Vec<Fbo>, Vec<Pass>)> {
+        let num = |k: &str, d: f32| {
+            general
+                .get(k)
+                .and_then(floats)
+                .and_then(|v| v.first().copied())
+                .unwrap_or(d)
+        };
+        let levels = (num("bloomhdriterations", 8.0).round() as u32).clamp(1, 8);
+        let threshold = num("bloomhdrthreshold", 1.0);
+        let knee = threshold * num("bloomhdrfeather", 0.1);
+        // Measured: strength 1 / scatter φ / 8 iterations → 0.052608 in the
+        // shader. The engine's normalisation is not known; keep the ratio.
+        const STRENGTH_SCALE: f32 = 0.052_608;
+        let mut constants = serde_json::Map::new();
+        constants.insert(
+            "bloomstrength".into(),
+            serde_json::json!(num("bloomhdrstrength", 2.0) * STRENGTH_SCALE),
+        );
+        constants.insert(
+            "blend".into(),
+            serde_json::json!([
+                threshold,
+                threshold - knee,
+                2.0 * knee,
+                0.25 / (knee + 0.00001)
+            ]),
+        );
+        constants.insert(
+            "scatter".into(),
+            serde_json::json!(num("bloomhdrscatter", 1.0)),
+        );
+        if let Some(v) = general.get("bloomtint").filter(|v| !v.is_null()) {
+            constants.insert("bloomtint".into(), unwrap_value(v).clone());
         }
 
+        let names: Vec<String> = (1..=levels).map(|k| format!("_rt_Bloom{k}")).collect();
+        let fbos: Vec<Fbo> = (1..=levels)
+            .map(|k| fbo(&names[k as usize - 1], 1 << k))
+            .collect();
+        // g_RenderVar0 = ±texel of the level a pass reads (down) or writes (up).
+        let texel = self.texel();
+        let render_var = |level: u32| {
+            let s = (1u32 << level) as f32;
+            vec![texel[0] * s, texel[1] * s, -texel[0] * s, -texel[1] * s]
+        };
+        let mut passes = Vec::new();
+        for k in 1..=levels {
+            let input = if k == 1 {
+                "previous"
+            } else {
+                names[k as usize - 2].as_str()
+            };
+            let bloom: &[(&str, i64)] = if k == 1 { &[("BLOOM", 1)] } else { &[] };
+            passes.push(self.post_pass(
+                &PostStep {
+                    shader: "hdr_downsample",
+                    blend: Blend::Opaque,
+                    combos: bloom,
+                    inputs: &[input],
+                    target: Some(&names[k as usize - 1]),
+                    constants: &constants,
+                    engine: vec![("g_RenderVar0", render_var(k - 1))],
+                },
+                &fbos,
+            )?);
+        }
+        for k in (1..levels).rev() {
+            passes.push(self.post_pass(
+                &PostStep {
+                    shader: "hdr_downsample",
+                    blend: Blend::Additive,
+                    combos: &[("UPSAMPLE", 1)],
+                    inputs: &[&names[k as usize]],
+                    target: Some(&names[k as usize - 1]),
+                    constants: &constants,
+                    engine: vec![("g_RenderVar0", render_var(k))],
+                },
+                &fbos,
+            )?);
+        }
+        // LINEAR keeps the result in gamma space: Lumen presents gamma-encoded
+        // RGBA8 rather than WE's linear FP16 HDR swapchain.
+        passes.push(self.post_pass(
+            &PostStep {
+                shader: "combine_hdr",
+                blend: Blend::Opaque,
+                combos: &[("LINEAR", 1)],
+                inputs: &["previous", &names[0]],
+                target: None,
+                constants: &constants,
+                engine: vec![
+                    ("g_TexelSize", texel.to_vec()),
+                    ("g_RenderVar0", vec![1.0, 1.0, 0.0, 0.0]),
+                ],
+            },
+            &fbos,
+        )?);
+        Ok((fbos, passes))
+    }
+
+    fn texel(&self) -> [f32; 2] {
+        [
+            1.0 / self.scene.width.max(1) as f32,
+            1.0 / self.scene.height.max(1) as f32,
+        ]
+    }
+
+    /// One synthetic pass of a post-processing chain.
+    fn post_pass(&mut self, step: &PostStep<'_>, fbos: &[Fbo]) -> Result<Pass> {
+        let spec = PassSpec {
+            shader: step.shader.to_owned(),
+            blend: step.blend,
+            combos: step
+                .combos
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), *v))
+                .collect(),
+            textures: BTreeMap::new(),
+            constants: vec![step.constants],
+        };
+        let mut pass = self.pass(&spec, Some(fbos))?;
+        for (slot, input) in (0u32..).zip(step.inputs.iter()) {
+            pass.textures.insert(slot, self.rt_binding(input, fbos));
+        }
+        for (name, value) in &step.engine {
+            pass.constants.insert((*name).to_owned(), value.clone());
+        }
+        pass.target = step.target.map(str::to_owned);
+        Ok(pass)
+    }
+
+    /// Appends a fullscreen layer that copies the frame and runs `passes`.
+    fn push_post_layer(&mut self, name: &str, fbos: Vec<Fbo>, passes: Vec<Pass>) -> Result<()> {
         let passthrough = PassSpec {
             shader: "passthrough".into(),
             blend: Blend::Opaque,
@@ -281,7 +424,7 @@ impl Importer<'_> {
             self.scene.height as f32 / 2.0,
         ];
         self.scene.layers.push(ImageLayer {
-            name: "bloom".into(),
+            name: name.into(),
             size: [self.scene.width, self.scene.height],
             transform: lumen_scene::affine(centre, 0.0, [1.0, 1.0]),
             visible: true,
@@ -292,7 +435,7 @@ impl Importer<'_> {
             albedo,
             composite: None,
             effects: vec![Effect {
-                name: "bloom".into(),
+                name: name.into(),
                 fbos,
                 passes,
             }],
@@ -503,7 +646,7 @@ impl Importer<'_> {
                     scale_div: integer(f.get("scale"))
                         .and_then(|s| u32::try_from(s).ok())
                         .unwrap_or(1)
-                        .clamp(1, 64),
+                        .clamp(1, 256),
                 })
             })
             .collect();
