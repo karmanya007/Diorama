@@ -1,6 +1,7 @@
 //! Reads the user's own Wallpaper Engine settings (`<install>/config.json`)
 //! so Lumen can start from the choices they already made in WE.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde_json::Value;
@@ -37,7 +38,50 @@ fn normalise(p: &str) -> String {
     p.replace('\\', "/").trim_end_matches('/').to_lowercase()
 }
 
+/// The user's per-wallpaper choices made in WE's UI (property overrides and
+/// options such as `cameraparallax`), without the display-alignment keys.
+pub fn user_properties_from_file(
+    config: &Path,
+    wallpaper: &Path,
+    monitor: usize,
+) -> BTreeMap<String, Value> {
+    let Some(config) = std::fs::read_to_string(config)
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+    else {
+        return BTreeMap::new();
+    };
+    monitor_entry(&config, wallpaper, monitor)
+        .and_then(Value::as_object)
+        .map(|m| {
+            m.iter()
+                .filter(|(k, _)| !k.starts_with("alignment"))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn alignment_in(config: &Value, wallpaper: &Path, monitor: usize) -> Option<Alignment> {
+    let monitor = monitor_entry(config, wallpaper, monitor)?;
+    let pct = |k: &str| monitor.get(k).and_then(Value::as_f64).unwrap_or(50.0) as f32;
+    Some(match monitor.get("alignment").and_then(Value::as_i64) {
+        None => Alignment::Cover,
+        Some(2) => Alignment::Stretch,
+        Some(4) => Alignment::Custom {
+            x: pct("alignmentx"),
+            y: pct("alignmenty"),
+            zoom: monitor
+                .get("alignmentz")
+                .and_then(Value::as_f64)
+                .unwrap_or(100.0) as f32,
+        },
+        Some(other) => Alignment::Other(other),
+    })
+}
+
+/// `<user>.wproperties[<wallpaper file>].Monitor<n>` for `wallpaper`.
+fn monitor_entry<'c>(config: &'c Value, wallpaper: &Path, monitor: usize) -> Option<&'c Value> {
     let wanted = normalise(&wallpaper.to_string_lossy());
     // A scene folder is stored as its scene.pkg / scene.json.
     let candidates = [
@@ -54,21 +98,7 @@ fn alignment_in(config: &Value, wallpaper: &Path, monitor: usize) -> Option<Alig
             if !candidates.contains(&normalise(path)) {
                 continue;
             }
-            let monitor = entry.get(format!("Monitor{monitor}"))?;
-            let pct = |k: &str| monitor.get(k).and_then(Value::as_f64).unwrap_or(50.0) as f32;
-            return Some(match monitor.get("alignment").and_then(Value::as_i64) {
-                None => Alignment::Cover,
-                Some(2) => Alignment::Stretch,
-                Some(4) => Alignment::Custom {
-                    x: pct("alignmentx"),
-                    y: pct("alignmenty"),
-                    zoom: monitor
-                        .get("alignmentz")
-                        .and_then(Value::as_f64)
-                        .unwrap_or(100.0) as f32,
-                },
-                Some(other) => Alignment::Other(other),
-            });
+            return entry.get(format!("Monitor{monitor}"));
         }
     }
     None
@@ -104,5 +134,22 @@ mod tests {
         );
         assert_eq!(alignment_in(&config, Path::new("C:/W/431960/1"), 1), None);
         assert_eq!(alignment_in(&config, Path::new("C:/W/431960/9"), 0), None);
+    }
+
+    #[test]
+    fn user_properties_skip_alignment_keys() {
+        let dir = std::env::temp_dir().join(format!("lumen-cfg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.json");
+        std::fs::write(
+            &path,
+            r#"{"Bob": {"wproperties": {"C:/W/1/scene.pkg": {"Monitor0": {"alignment": 4, "alignmentz": 99, "clock": "1", "cameraparallax": false}}}}}"#,
+        )
+        .unwrap();
+        let props = user_properties_from_file(&path, Path::new("C:/W/1"), 0);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(props.len(), 2);
+        assert_eq!(props["clock"], "1");
+        assert_eq!(props["cameraparallax"], false);
     }
 }

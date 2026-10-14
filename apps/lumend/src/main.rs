@@ -216,7 +216,14 @@ fn main() -> Result<()> {
                 (size, fit_mode(fit))
             }),
         };
-        return headless::render_to_png(scene, assets, gpu_options(&args), &request);
+        let we_config = we_config_path(&args);
+        return headless::render_to_png(
+            scene,
+            assets,
+            we_config.as_deref(),
+            gpu_options(&args),
+            &request,
+        );
     }
 
     if args.list_outputs {
@@ -348,7 +355,13 @@ fn main() -> Result<()> {
     };
     match initial {
         Some((path, kind, look)) => {
-            match Wallpaper::load(&path, kind, look, daemon.we_assets.as_deref()) {
+            match Wallpaper::load(
+                &path,
+                kind,
+                look,
+                daemon.we_assets.as_deref(),
+                daemon.we_config.as_deref(),
+            ) {
                 Ok(w) => {
                     if let Err(e) = daemon.set_wallpaper(w) {
                         tracing::warn!("{e:#}");
@@ -714,8 +727,14 @@ impl Daemon<'_> {
                         .unwrap_or(Layout::PerOutput),
                 };
                 ok_or_error(
-                    Wallpaper::load(&path, kind, look, self.we_assets.as_deref())
-                        .and_then(|w| self.set_wallpaper(w)),
+                    Wallpaper::load(
+                        &path,
+                        kind,
+                        look,
+                        self.we_assets.as_deref(),
+                        self.we_config.as_deref(),
+                    )
+                    .and_then(|w| self.set_wallpaper(w)),
                 )
             }
             Request::Volume { percent } => {

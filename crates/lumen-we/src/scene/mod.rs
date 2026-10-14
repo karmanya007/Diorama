@@ -30,8 +30,24 @@ pub use vfs::Vfs;
 /// Imports `<project_dir>/scene.json` (from `scene.pkg` or loose files).
 /// `assets_dir` is `<WE install>/assets`, needed for built-in shaders/effects.
 pub fn import(project_dir: &Path, assets_dir: Option<&Path>, limits: &Limits) -> Result<Scene> {
+    import_with_choices(project_dir, assets_dir, limits, &BTreeMap::new())
+}
+
+/// [`import`] with the user's own choices (e.g. from WE's config,
+/// [`crate::config::user_properties_from_file`]) over the project defaults.
+pub fn import_with_choices(
+    project_dir: &Path,
+    assets_dir: Option<&Path>,
+    limits: &Limits,
+    choices: &BTreeMap<String, Value>,
+) -> Result<Scene> {
     let vfs = Vfs::open(project_dir, assets_dir, limits)?;
-    import_from(&vfs, limits)
+    let properties = vfs
+        .read_json("project.json")
+        .map(|p| Properties::from_project(&p))
+        .unwrap_or_default()
+        .with_overrides(choices);
+    import_with(&vfs, limits, &properties)
 }
 
 pub fn import_from(vfs: &Vfs, limits: &Limits) -> Result<Scene> {
@@ -46,6 +62,12 @@ pub fn import_from(vfs: &Vfs, limits: &Limits) -> Result<Scene> {
 pub fn import_with(vfs: &Vfs, limits: &Limits, properties: &Properties) -> Result<Scene> {
     let mut json = vfs.read_json("scene.json")?;
     properties.resolve(&mut json);
+    // WE's per-wallpaper parallax switch overrides the scene's own setting.
+    if let Some(on) = properties.0.get("cameraparallax").and_then(Value::as_bool)
+        && let Some(general) = json.get_mut("general").and_then(Value::as_object_mut)
+    {
+        general.insert("cameraparallax".into(), Value::Bool(on));
+    }
     let mut importer = Importer {
         vfs,
         limits,

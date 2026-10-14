@@ -35,3 +35,10 @@ Keep path A's translator (`shader::glsl`) for now: cheap to maintain, useful as 
 - **Matrix convention:** source uses row-vector `mul(v, M)`; `-fvk-use-gl-layout` + our upload layout must be verified against RenderDoc cbuffer dumps in Phase 2.
 - **Perf:** spike compiled 672 stages in ~3.4 s on 16 threads; with the cache this is a one-time cost per permutation.
 - Optional later: wgpu SPIR-V passthrough on Vulkan to skip naga for shaders naga mis-handles.
+
+## Phase 2 follow-up (2026-10-15)
+- **Integration decided: external `dxc.exe` process for now.** `lumen_gpu::shader::ShaderCompiler` writes the HLSL to a temp file, runs DXC with the flags above and loads the SPIR-V. Cold compiles cost ≈50 ms per program (0.5–0.6 s extra for a 8–12-program scene, measured on scenes 1132505365 and 3414847823); warm starts hit the cache and never run DXC. In-process COM via `hassle-rs` would remove the temp files but adds an `unsafe` FFI surface for little gain. Revisit if first-run latency matters (programs can also be compiled in parallel). Packaging (Phase 6) places `dxc.exe` + `dxcompiler.dll` beside `lumend.exe`; `ShaderCompiler::locate` already looks there, then `LUMEN_DXC`, then `PATH`. Development and CI use `scripts/fetch-dxc.ps1` (pinned v1.9.2607, SHA-256 checked).
+- **Cache key** = FNV-1a over (`dxc --version`, flags, profile, entry, source); entries live in `%LOCALAPPDATA%\Lumen\cache\shaders`.
+- **Matrix convention verified** (`crates/lumen-gpu/tests/matrix_convention.rs`): after HLSL → DXC → naga, `mul(v, M)` reads naga column *j* as HLSL column *j*, so WE's row-major matrices (translation in row 3) upload transposed. naga `spv-in` must run with `adjust_coordinate_space: false`; DXC keeps HLSL's y-up clip space.
+- **HLSL globals:** every non-`static` global (even `const`) is a uniform in HLSL and lands in DXC's `$Globals` at `b0`; the translator now emits WE top-level variables as `static`, and the renderer rejects programs with any other uniform buffer.
+- **`#require LightingV1`** is spliced in by the importer as a generated `PerformLighting_V1` with one block per scene point light (WE generates it per scene too).

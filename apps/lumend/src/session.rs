@@ -40,6 +40,7 @@ pub enum Content {
 pub struct SceneSource {
     dir: PathBuf,
     we_assets: Option<PathBuf>,
+    we_config: Option<PathBuf>,
     imported: std::cell::RefCell<Option<Box<lumen_scene::Scene>>>,
 }
 
@@ -51,6 +52,7 @@ impl SceneSource {
             None => Ok(Box::new(crate::headless::load_scene(
                 &self.dir,
                 self.we_assets.as_deref(),
+                self.we_config.as_deref(),
             )?)),
         }
     }
@@ -80,6 +82,7 @@ impl Wallpaper {
         kind: Option<MediaKind>,
         look: Look,
         we_assets: Option<&Path>,
+        we_config: Option<&Path>,
     ) -> Result<Self> {
         let kind = kind
             .or_else(|| MediaKind::from_path(path))
@@ -101,8 +104,9 @@ impl Wallpaper {
             MediaKind::Scene => Content::Scene(SceneSource {
                 dir: path.to_path_buf(),
                 we_assets: we_assets.map(Path::to_path_buf),
+                we_config: we_config.map(Path::to_path_buf),
                 imported: std::cell::RefCell::new(Some(Box::new(crate::headless::load_scene(
-                    path, we_assets,
+                    path, we_assets, we_config,
                 )?))),
             }),
         };

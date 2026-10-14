@@ -21,9 +21,23 @@ pub fn shader_compiler() -> Result<ShaderCompiler> {
     ShaderCompiler::locate(cache).context("locating the HLSL compiler")
 }
 
-pub fn load_scene(dir: &Path, assets: Option<&Path>) -> Result<lumen_scene::Scene> {
+/// Imports a WE scene with the user's own WE choices (`we_config`) applied.
+pub fn load_scene(
+    dir: &Path,
+    assets: Option<&Path>,
+    we_config: Option<&Path>,
+) -> Result<lumen_scene::Scene> {
     let started = Instant::now();
-    let scene = lumen_we::scene::import(dir, assets, &Limits::default())
+    let choices = we_config
+        .map(|c| lumen_we::config::user_properties_from_file(c, dir, 0))
+        .unwrap_or_default();
+    if !choices.is_empty() {
+        tracing::info!(
+            count = choices.len(),
+            "applying the wallpaper's WE property choices"
+        );
+    }
+    let scene = lumen_we::scene::import_with_choices(dir, assets, &Limits::default(), &choices)
         .with_context(|| format!("importing {}", dir.display()))?;
     tracing::info!(
         layers = scene.layers.len(),
@@ -63,6 +77,7 @@ pub struct FrameRequest<'a> {
 pub fn render_to_png(
     scene_dir: &Path,
     assets: Option<&Path>,
+    we_config: Option<&Path>,
     gpu_options: GpuOptions,
     request: &FrameRequest<'_>,
 ) -> Result<()> {
@@ -73,7 +88,7 @@ pub fn render_to_png(
         dump_targets,
         present,
     } = *request;
-    let scene = load_scene(scene_dir, assets)?;
+    let scene = load_scene(scene_dir, assets, we_config)?;
     let gpu = Gpu::new(gpu_options)?;
     let compiler = shader_compiler()?;
     let started = Instant::now();
