@@ -53,11 +53,24 @@ pub enum Layout {
 pub enum MediaKind {
     Image,
     Video,
+    /// A Wallpaper Engine scene project folder.
+    Scene,
 }
 
 impl MediaKind {
-    /// Guess from the file extension.
+    /// Guess from the file extension; scene project folders (or their
+    /// `project.json` / `scene.json` / `scene.pkg`) are scenes.
     pub fn from_path(path: &std::path::Path) -> Option<Self> {
+        if path.is_dir() {
+            return ["scene.pkg", "scene.json"]
+                .iter()
+                .any(|f| path.join(f).is_file())
+                .then_some(Self::Scene);
+        }
+        let name = path.file_name()?.to_str()?.to_ascii_lowercase();
+        if matches!(name.as_str(), "scene.pkg" | "scene.json" | "project.json") {
+            return Some(Self::Scene);
+        }
         let ext = path.extension()?.to_str()?.to_ascii_lowercase();
         match ext.as_str() {
             "png" | "jpg" | "jpeg" | "bmp" | "gif" | "tga" | "webp" => Some(Self::Image),
@@ -299,6 +312,14 @@ mod tests {
             Some(MediaKind::Image)
         );
         assert_eq!(MediaKind::from_path("a/b.pkg".as_ref()), None);
+        assert_eq!(
+            MediaKind::from_path("a/scene.pkg".as_ref()),
+            Some(MediaKind::Scene)
+        );
+        assert_eq!(
+            MediaKind::from_path("a/project.json".as_ref()),
+            Some(MediaKind::Scene)
+        );
     }
 
     #[test]

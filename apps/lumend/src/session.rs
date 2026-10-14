@@ -7,6 +7,7 @@ use lumen_gpu::{Gpu, OutputSurface};
 use lumen_ipc::{Fit, Layout, MediaKind};
 use lumen_media::{Nv12Frame, VideoPlayer};
 use lumen_platform::{Coverage, OutputInfo, Platform, WallpaperWindow};
+use lumen_render::scene::{FrameInputs, SceneRenderer};
 use lumen_render::{FitMode, ImageBlit, Nv12Planes, Rect, VideoBlit, display_size};
 
 /// How the picture is placed.
@@ -30,6 +31,8 @@ impl Look {
 pub enum Content {
     Image(image::RgbaImage),
     Video(VideoPlayer),
+    /// Imported scene; GPU resources are rebuilt from it with every session.
+    Scene(Box<lumen_scene::Scene>),
 }
 
 /// The wallpaper the user asked for.
@@ -40,11 +43,30 @@ pub struct Wallpaper {
     pub content: Content,
 }
 
+/// A scene project folder from the folder itself or one of its files.
+fn scene_dir(path: &Path) -> PathBuf {
+    if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent()
+            .map_or_else(|| path.to_path_buf(), Path::to_path_buf)
+    }
+}
+
 impl Wallpaper {
-    pub fn load(path: &Path, kind: Option<MediaKind>, look: Look) -> Result<Self> {
+    pub fn load(
+        path: &Path,
+        kind: Option<MediaKind>,
+        look: Look,
+        we_assets: Option<&Path>,
+    ) -> Result<Self> {
         let kind = kind
             .or_else(|| MediaKind::from_path(path))
             .with_context(|| format!("unknown media type for {}", path.display()))?;
+        let path = &match kind {
+            MediaKind::Scene => scene_dir(path),
+            _ => path.to_path_buf(),
+        };
         let content = match kind {
             MediaKind::Image => Content::Image(
                 image::open(path)
@@ -54,6 +76,9 @@ impl Wallpaper {
             MediaKind::Video => Content::Video(
                 VideoPlayer::spawn(path).with_context(|| format!("opening {}", path.display()))?,
             ),
+            MediaKind::Scene => {
+                Content::Scene(Box::new(crate::headless::load_scene(path, we_assets)?))
+            }
         };
         Ok(Self {
             path: path.to_path_buf(),
@@ -67,6 +92,10 @@ impl Wallpaper {
 enum Renderer {
     Image(ImageBlit),
     Video(VideoBlit),
+    Scene {
+        scene: SceneRenderer,
+        blit: ImageBlit,
+    },
 }
 
 /// One monitor's wallpaper. Field order matters: the surface must drop before its window.
@@ -144,6 +173,16 @@ impl Session {
                 let info = player.info();
                 Renderer::Video(VideoBlit::new(gpu, format, info.width, info.height))
             }
+            Content::Scene(scene) => {
+                let compiler = crate::headless::shader_compiler()?;
+                let renderer = SceneRenderer::new(gpu, scene, &compiler)?;
+                let [w, h] = renderer.size();
+                let blit = ImageBlit::from_view(gpu, format, renderer.output(), w, h);
+                Renderer::Scene {
+                    scene: renderer,
+                    blit,
+                }
+            }
         };
 
         let mut session = Self {
@@ -180,6 +219,30 @@ impl Session {
         self.present_all(gpu)
     }
 
+    /// Renders the scene at `time` and presents it (no-op for other content).
+    pub fn show_scene_frame(&mut self, gpu: &Gpu, time: f32) -> Result<()> {
+        if let Renderer::Scene { scene, .. } = &mut self.renderer {
+            scene.render(
+                gpu,
+                &FrameInputs {
+                    time,
+                    ..FrameInputs::default()
+                },
+            );
+            self.present_all(gpu)?;
+        }
+        Ok(())
+    }
+
+    /// The last rendered scene frame, for the OS fallback wallpaper.
+    pub fn scene_snapshot(&self, gpu: &Gpu) -> Option<image::RgbaImage> {
+        let Renderer::Scene { scene, .. } = &self.renderer else {
+            return None;
+        };
+        let [w, h] = scene.size();
+        image::RgbaImage::from_raw(w, h, scene.read_output(gpu)?)
+    }
+
     /// Draws the current content on every output that is not paused.
     pub fn present_all(&mut self, gpu: &Gpu) -> Result<()> {
         let fit = self.look.fit_mode();
@@ -200,6 +263,7 @@ impl Session {
             match &self.renderer {
                 Renderer::Image(blit) => blit.draw(gpu, &view, canvas, target, fit, clear),
                 Renderer::Video(blit) => blit.draw(gpu, &view, canvas, target, fit, clear),
+                Renderer::Scene { blit, .. } => blit.draw(gpu, &view, canvas, target, fit, clear),
             }
             gpu.queue.present(frame);
         }

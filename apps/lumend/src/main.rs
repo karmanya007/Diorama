@@ -27,7 +27,7 @@ use lumen_ipc::{ContentStatus, Fit, Layout, OutputStatus, Request, Response, Sta
 use lumen_media::AudioPlayer;
 use lumen_platform::{Coverage, DesktopEvent, Platform};
 
-use crate::clock::VideoClock;
+use crate::clock::{SceneClock, VideoClock};
 use crate::policy::{Action, Conditions, Policy, update_pauses};
 use crate::session::{Content, Look, Session, Wallpaper};
 
@@ -49,6 +49,9 @@ struct Args {
     /// Render one frame of `--scene` offscreen to this PNG and exit.
     #[arg(long, requires = "scene")]
     frame_out: Option<PathBuf>,
+    /// Frame rate cap for scenes.
+    #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u32).range(1..=240))]
+    fps: u32,
     /// Scene time in seconds for `--frame-out`.
     #[arg(long, default_value_t = 0.0)]
     time: f32,
@@ -228,6 +231,9 @@ fn main() -> Result<()> {
         audio_loop: None,
         next_audio_check: Instant::now() + AUDIO_CHECK_INTERVAL,
         clock: VideoClock::default(),
+        fps: args.fps,
+        scene_clock: SceneClock::new(args.fps),
+        we_assets: args.we_assets.is_dir().then(|| args.we_assets.clone()),
         next_coverage: Instant::now(),
         next_battery: Instant::now() + BATTERY_INTERVAL,
         needs_rebuild: false,
@@ -249,7 +255,13 @@ fn main() -> Result<()> {
     let saved_state = config_dir.as_deref().map(state::load).unwrap_or_default();
     daemon.volume = args.volume.unwrap_or(saved_state.volume).min(100);
     let saved = saved_state.wallpaper;
-    let initial = match (args.image.as_ref().or(args.video.as_ref()), saved) {
+    let initial = match (
+        args.image
+            .as_ref()
+            .or(args.video.as_ref())
+            .or(args.scene.as_ref()),
+        saved,
+    ) {
         (Some(path), _) => Some((path.clone(), None, look)),
         (None, Some(s)) => Some((
             s.path,
@@ -262,14 +274,16 @@ fn main() -> Result<()> {
         (None, None) => None,
     };
     match initial {
-        Some((path, kind, look)) => match Wallpaper::load(&path, kind, look) {
-            Ok(w) => {
-                if let Err(e) = daemon.set_wallpaper(w) {
-                    tracing::warn!("{e:#}");
+        Some((path, kind, look)) => {
+            match Wallpaper::load(&path, kind, look, daemon.we_assets.as_deref()) {
+                Ok(w) => {
+                    if let Err(e) = daemon.set_wallpaper(w) {
+                        tracing::warn!("{e:#}");
+                    }
                 }
+                Err(e) => tracing::error!("start-up wallpaper: {e:#}"),
             }
-            Err(e) => tracing::error!("start-up wallpaper: {e:#}"),
-        },
+        }
         None => tracing::info!("no wallpaper yet; waiting for `lumen set <file>`"),
     }
 
@@ -288,6 +302,19 @@ fn set_fallback(image: &std::path::Path, span: bool) {
     match lumen_platform::set_os_wallpaper(image, span) {
         Ok(()) => tracing::info!(path = %image.display(), "OS fallback wallpaper set"),
         Err(e) => tracing::warn!("could not set OS fallback wallpaper: {e}"),
+    }
+}
+
+/// Saves the current scene frame as a PNG and makes it the OS wallpaper.
+fn scene_fallback(dir: Option<&std::path::Path>, gpu: &Gpu, session: &Session, span: bool) {
+    let Some(dir) = dir else {
+        return;
+    };
+    let path = dir.join("fallback.png");
+    match session.scene_snapshot(gpu).map(|img| img.save(&path)) {
+        Some(Ok(())) => set_fallback(&path, span),
+        Some(Err(e)) => tracing::warn!("fallback snapshot not saved: {e}"),
+        None => tracing::warn!("no scene frame for the fallback snapshot"),
     }
 }
 
@@ -326,6 +353,10 @@ struct Daemon<'p> {
     wallpaper: Option<Wallpaper>,
     session: Option<Session>,
     clock: VideoClock,
+    fps: u32,
+    scene_clock: SceneClock,
+    /// `<WE install>/assets` for scene built-ins, if present.
+    we_assets: Option<PathBuf>,
     next_coverage: Instant,
     next_battery: Instant,
     /// A rebuild failed (e.g. Explorer still starting); retry on the next tick.
@@ -349,6 +380,8 @@ impl Daemon<'_> {
         let content_wait = match self.wallpaper.as_ref().map(|w| &w.content) {
             Some(Content::Video(_)) if self.clock.is_paused() => COVERAGE_INTERVAL,
             Some(Content::Video(player)) => self.clock.time_until_next(player),
+            Some(Content::Scene(_)) if self.scene_clock.is_paused() => COVERAGE_INTERVAL,
+            Some(Content::Scene(_)) => self.scene_clock.time_until_next(),
             _ => Duration::from_secs(1),
         };
         let wait = content_wait.min(self.next_coverage.saturating_duration_since(Instant::now()));
@@ -399,6 +432,25 @@ impl Daemon<'_> {
                 if resumed {
                     session.present_all(&self.gpu)?;
                 }
+            }
+            if let Some(Content::Scene(_)) = self.wallpaper.as_ref().map(|w| &w.content) {
+                // Resuming makes the next frame due immediately.
+                self.scene_clock
+                    .set_paused(session.outputs.iter().all(|o| o.paused));
+            }
+        }
+
+        if let Some(Content::Scene(_)) = self.wallpaper.as_ref().map(|w| &w.content)
+            && self.scene_clock.frame_due()
+        {
+            session.show_scene_frame(&self.gpu, self.scene_clock.time())?;
+            if self.fallback_pending {
+                self.fallback_pending = false;
+                let span = self
+                    .wallpaper
+                    .as_ref()
+                    .is_some_and(|w| w.look.layout == Layout::Span);
+                scene_fallback(self.config_dir.as_deref(), &self.gpu, session, span);
             }
         }
 
@@ -519,6 +571,7 @@ impl Daemon<'_> {
         self.session = None;
         self.audio = None;
         self.clock = VideoClock::default();
+        self.scene_clock = SceneClock::new(self.fps);
         self.persist(&wallpaper);
         if self.os_fallback {
             match wallpaper.kind {
@@ -526,7 +579,7 @@ impl Daemon<'_> {
                 MediaKind::Image => {
                     set_fallback(&wallpaper.path, wallpaper.look.layout == Layout::Span);
                 }
-                MediaKind::Video => self.fallback_pending = true,
+                MediaKind::Video | MediaKind::Scene => self.fallback_pending = true,
             }
         }
         self.wallpaper = Some(wallpaper);
@@ -563,7 +616,10 @@ impl Daemon<'_> {
                         .or(current.map(|l| l.layout))
                         .unwrap_or(Layout::PerOutput),
                 };
-                ok_or_error(Wallpaper::load(&path, kind, look).and_then(|w| self.set_wallpaper(w)))
+                ok_or_error(
+                    Wallpaper::load(&path, kind, look, self.we_assets.as_deref())
+                        .and_then(|w| self.set_wallpaper(w)),
+                )
             }
             Request::Volume { percent } => {
                 self.volume = percent.min(100);

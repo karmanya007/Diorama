@@ -176,7 +176,20 @@ impl ImageBlit {
             },
             size,
         );
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        Self::from_view(gpu, target_format, &view, width, height)
+    }
 
+    /// Blits an existing texture (e.g. a rendered scene). Its format must be
+    /// filterable float; views keep their texture alive.
+    pub fn from_view(
+        gpu: &Gpu,
+        target_format: wgpu::TextureFormat,
+        view: &wgpu::TextureView,
+        width: u32,
+        height: u32,
+    ) -> Self {
+        let device = &gpu.device;
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("wallpaper sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -223,14 +236,13 @@ impl ImageBlit {
                 },
             ],
         });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("blit"),
             layout: &layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
+                    resource: wgpu::BindingResource::TextureView(view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,

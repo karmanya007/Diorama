@@ -73,3 +73,84 @@ impl VideoClock {
         None
     }
 }
+
+/// Scene time (`g_Time`) at a fixed frame rate; frozen while every output is paused.
+#[derive(Debug)]
+pub struct SceneClock {
+    start: Instant,
+    paused_at: Option<Instant>,
+    interval: Duration,
+    next_frame: Instant,
+}
+
+impl SceneClock {
+    pub fn new(fps: u32) -> Self {
+        let now = Instant::now();
+        Self {
+            start: now,
+            paused_at: None,
+            interval: Duration::from_secs(1) / fps.clamp(1, 1000),
+            next_frame: now,
+        }
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused_at.is_some()
+    }
+
+    pub fn set_paused(&mut self, paused: bool) {
+        match (paused, self.paused_at) {
+            (true, None) => self.paused_at = Some(Instant::now()),
+            (false, Some(at)) => {
+                self.start += at.elapsed();
+                self.paused_at = None;
+                self.next_frame = Instant::now();
+            }
+            _ => {}
+        }
+    }
+
+    /// Seconds of unpaused time since start.
+    pub fn time(&self) -> f32 {
+        let end = self.paused_at.unwrap_or_else(Instant::now);
+        end.saturating_duration_since(self.start).as_secs_f32()
+    }
+
+    pub fn time_until_next(&self) -> Duration {
+        self.next_frame.saturating_duration_since(Instant::now())
+    }
+
+    /// True when a frame is due; schedules the next one. Never queues a
+    /// burst of catch-up frames after a stall.
+    pub fn frame_due(&mut self) -> bool {
+        let now = Instant::now();
+        if self.is_paused() || now < self.next_frame {
+            return false;
+        }
+        self.next_frame += self.interval;
+        if self.next_frame < now {
+            self.next_frame = now + self.interval;
+        }
+        true
+    }
+}
+
+#[cfg(test)]
+mod scene_tests {
+    use super::*;
+
+    #[test]
+    fn paused_time_does_not_advance() {
+        let mut c = SceneClock::new(30);
+        assert!(c.frame_due());
+        assert!(!c.frame_due(), "next frame is a full interval away");
+        c.set_paused(true);
+        let t = c.time();
+        std::thread::sleep(Duration::from_millis(20));
+        assert!((c.time() - t).abs() < 1e-6);
+        assert!(!c.frame_due());
+        c.set_paused(false);
+        assert!(c.frame_due(), "resume draws immediately");
+        assert!(c.time() < t + 0.015);
+    }
+}
