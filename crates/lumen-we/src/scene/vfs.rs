@@ -3,7 +3,7 @@
 //! install's `assets` directory (built-in shaders, effects, `util/*`).
 
 use std::collections::HashMap;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use lumen_core::Limits;
 
@@ -86,14 +86,21 @@ impl Vfs {
 }
 
 /// Rejects absolute paths and `..` so content cannot read outside the roots.
+///
+/// Content paths always use `/`; checking the string itself (not
+/// `Path::components`) keeps the rules identical on every OS. On Linux a
+/// Windows path such as `C:\x` would otherwise pass as one file name.
 fn safe_relative(path: &str) -> Result<PathBuf> {
-    let p = Path::new(path);
+    let unsafe_path = || Error::UnsafePath(path.to_owned());
+    if path.contains(['\\', ':', '\0']) || path.starts_with('/') {
+        return Err(unsafe_path());
+    }
     let mut out = PathBuf::new();
-    for c in p.components() {
-        match c {
-            Component::Normal(part) => out.push(part),
-            Component::CurDir => {}
-            _ => return Err(Error::UnsafePath(path.to_owned())),
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => return Err(unsafe_path()),
+            part => out.push(part),
         }
     }
     if out.as_os_str().is_empty() {
@@ -112,6 +119,9 @@ mod tests {
         assert!(safe_relative("/etc/passwd").is_err());
         assert!(safe_relative("C:\\Windows\\win.ini").is_err());
         assert!(safe_relative("").is_err());
+        assert!(safe_relative("a\\..\\..\\b").is_err());
+        assert!(safe_relative("C:/x").is_err());
+        assert!(safe_relative("a/../b").is_err());
         assert_eq!(
             safe_relative("materials/./a.tex").unwrap(),
             Path::new("materials").join("a.tex")
