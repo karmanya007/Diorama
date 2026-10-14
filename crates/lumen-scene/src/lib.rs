@@ -26,6 +26,9 @@ pub struct Scene {
     pub width: u32,
     pub height: u32,
     pub clear_color: [f32; 4],
+    /// The project's scheme colour: WE fills monitor areas the scene does not
+    /// cover with it (fit/custom alignment); also the theme colour.
+    pub scheme_color: [f32; 3],
     /// Render in floating point (WE's HDR bloom path: values above 1 bloom).
     pub hdr: bool,
     /// `g_LightAmbientColor` / `g_LightSkylightColor` for lit materials.

@@ -24,10 +24,18 @@ pub enum FitMode {
     Custom { x: i32, y: i32, zoom: i32 },
 }
 
-/// Canvas pixels per image pixel for WE custom alignment: `(z/100)^3.9`,
-/// fitted to RenderDoc captures at z = 97, 99 and 100 (1:1 at 100).
+/// Canvas pixels per image pixel for WE custom alignment, fitted to
+/// RenderDoc captures (1:1 at z = 100): `(z/100)^3.9` below 100 (exact at
+/// 97 and 99), and `exp(0.042177·d + 3.875e-5·d²)`, d = z − 100, above
+/// (exact at 112 → 1.668 and 200 → 100; empirical in between).
 pub fn custom_scale(zoom: i32) -> f32 {
-    (zoom.max(1) as f32 / 100.0).powf(3.9)
+    let z = zoom.max(1) as f32;
+    if z <= 100.0 {
+        (z / 100.0).powf(3.9)
+    } else {
+        let d = z - 100.0;
+        (0.042_177 * d + 3.875e-5 * d * d).exp()
+    }
 }
 
 /// Offset of the image centre from the canvas centre in canvas pixels
@@ -591,6 +599,9 @@ mod tests {
             "{ox} {oy}"
         );
         assert_eq!(custom_scale(100), 1.0);
+        // 3155776049 (z 112) and the z = 200 control capture.
+        assert!((custom_scale(112) - 1.668).abs() < 0.005);
+        assert!((custom_scale(200) - 100.0).abs() < 0.5);
     }
 
     #[test]

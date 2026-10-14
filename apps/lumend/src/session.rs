@@ -121,6 +121,8 @@ enum Renderer {
     Scene {
         scene: SceneRenderer,
         blit: ImageBlit,
+        /// Fills monitor areas the scene does not cover (fit/custom pan), as WE.
+        clear: [f32; 4],
     },
 }
 
@@ -214,6 +216,8 @@ impl Session {
                 let max = gpu.device.limits().max_texture_dimension_2d;
                 let (w, h) = render_size(look.fit_mode(), (scene.width, scene.height), &sizes, max);
                 let renderer = SceneRenderer::new(gpu, &scene, &compiler, Some([w, h]))?;
+                let [r, g, b] = scene.scheme_color;
+                let scene_clear = [r, g, b, 1.0];
                 // CPU copies of textures are not needed once uploaded.
                 drop(scene);
                 let [w, h] = renderer.size();
@@ -221,6 +225,7 @@ impl Session {
                 Renderer::Scene {
                     scene: renderer,
                     blit,
+                    clear: scene_clear,
                 }
             }
         };
@@ -319,7 +324,10 @@ impl Session {
             let view = frame
                 .texture
                 .create_view(&lumen_gpu::wgpu::TextureViewDescriptor::default());
-            let clear = [0.0, 0.0, 0.0, 1.0];
+            let clear = match &self.renderer {
+                Renderer::Scene { clear, .. } => *clear,
+                _ => [0.0, 0.0, 0.0, 1.0],
+            };
             match &self.renderer {
                 Renderer::Image(blit) => blit.draw(gpu, &view, canvas, target, fit, clear),
                 Renderer::Video(blit) => blit.draw(gpu, &view, canvas, target, fit, clear),

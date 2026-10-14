@@ -58,6 +58,10 @@ pub fn import_with(vfs: &Vfs, limits: &Limits, properties: &Properties) -> Resul
         groups: HashMap::new(),
     };
     importer.scene_header(&json);
+    importer.scene.scheme_color = properties
+        .0
+        .get("schemecolor")
+        .map_or([0.0; 3], |v| vec_n(Some(v), [0.0; 3]));
     let objects: Vec<&Value> = json["objects"].as_array().into_iter().flatten().collect();
     let graph = SceneGraph::new(&objects);
     // Lights first: lit shaders are generated for the scene's light count.

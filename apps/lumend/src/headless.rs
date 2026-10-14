@@ -132,7 +132,8 @@ pub fn render_to_png(
                 height: fh,
             };
             let view = target.create_view(&wgpu::TextureViewDescriptor::default());
-            blit.draw(&gpu, &view, rect, rect, mode, [0.0, 0.0, 0.0, 1.0]);
+            let [r, g, b] = scene.scheme_color;
+            blit.draw(&gpu, &view, rect, rect, mode, [r, g, b, 1.0]);
             let rgba = read_rgba8(&gpu, &target).context("reading back the frame")?;
             ([fw, fh], rgba)
         }
