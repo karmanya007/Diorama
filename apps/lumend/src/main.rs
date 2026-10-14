@@ -1,30 +1,39 @@
-//! `lumend` — Lumen wallpaper daemon (Phase 1).
+//! `lumend` — Lumen wallpaper daemon.
 //!
-//! Shows an image or a looping video on every monitor behind the desktop
-//! icons. Static images render once (≈0% GPU when idle, P2); video frames are
-//! presented on their timestamps. Windows and surfaces are rebuilt when
-//! Explorer restarts (P9), monitors change (P8) or the GPU device is lost (P11).
-//! Video never opens an audio device (P10).
+//! Shows an image or a looping video behind the desktop icons on every
+//! monitor, controlled by the `lumen` CLI over a per-user local socket.
+//! Static images render once (≈0% GPU idle, P2); video frames are presented on
+//! their timestamps. Outputs pause individually when covered (P5/P6). Windows
+//! and surfaces are rebuilt when Explorer restarts (P9), monitors change (P8)
+//! or the GPU is lost (P11). Video never opens an audio device (P10).
+
+mod clock;
+mod policy;
+mod session;
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
-use lumen_gpu::{Backend, Gpu, GpuOptions, OutputSurface};
-use lumen_media::{Nv12Frame, VideoPlayer};
-use lumen_platform::{Coverage, DesktopEvent, OutputInfo, Platform, WallpaperWindow};
-use lumen_render::{FitMode, ImageBlit, Nv12Planes, Rect, VideoBlit, display_size};
+use lumen_gpu::{Backend, Gpu, GpuOptions};
+use lumen_ipc::{ContentStatus, Fit, Layout, OutputStatus, Request, Response, Status};
+use lumen_platform::{Coverage, DesktopEvent, Platform};
+
+use crate::clock::VideoClock;
+use crate::policy::{Action, Conditions, Policy, update_pauses};
+use crate::session::{Content, Look, Session, Wallpaper};
 
 #[derive(Debug, Parser)]
 #[command(version, about)]
 struct Args {
-    /// Image to show (PNG, JPEG, …).
-    #[arg(long, conflicts_with = "video", required_unless_present_any = ["video", "list_outputs"])]
+    /// Image to show at start-up (PNG, JPEG, …). Optional: `lumen set` can choose later.
+    #[arg(long, conflicts_with = "video")]
     image: Option<PathBuf>,
-    /// Video to loop (MP4, …). Muted.
+    /// Video to loop at start-up (MP4, …). Muted.
     #[arg(long)]
     video: Option<PathBuf>,
     #[arg(long, value_enum, default_value = "fill")]
@@ -57,44 +66,6 @@ struct Args {
     on_lock: Action,
 }
 
-/// What to do with a monitor's wallpaper in a given situation (P5/P17).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-enum Action {
-    Keep,
-    Pause,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct Policy {
-    fullscreen: Action,
-    maximized: Action,
-    battery: Action,
-    locked: Action,
-}
-
-impl Policy {
-    fn pauses(self, coverage: Coverage, on_battery: bool, locked: bool) -> bool {
-        let pause = |a: Action| a == Action::Pause;
-        (locked && pause(self.locked))
-            || (on_battery && pause(self.battery))
-            || match coverage {
-                Coverage::Fullscreen => pause(self.fullscreen),
-                Coverage::Maximized => pause(self.maximized),
-                Coverage::Visible => false,
-            }
-    }
-}
-
-/// Inputs to the pause decision, refreshed from the platform.
-#[derive(Debug, Clone, Copy, Default)]
-struct Conditions {
-    on_battery: bool,
-    locked: bool,
-}
-
-const COVERAGE_INTERVAL: Duration = Duration::from_millis(500);
-const BATTERY_INTERVAL: Duration = Duration::from_secs(5);
-
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum FitArg {
     Fill,
@@ -102,7 +73,7 @@ enum FitArg {
     Stretch,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, ValueEnum)]
 enum LayoutArg {
     PerOutput,
     Span,
@@ -115,41 +86,11 @@ enum BackendArg {
     Vulkan,
 }
 
-/// How the picture is placed: fit mode plus per-output vs span layout.
-#[derive(Debug, Clone, Copy)]
-struct Look {
-    fit: FitMode,
-    layout: LayoutArg,
-}
+const COVERAGE_INTERVAL: Duration = Duration::from_millis(500);
+const BATTERY_INTERVAL: Duration = Duration::from_secs(5);
+const REBUILD_RETRY: Duration = Duration::from_secs(1);
 
-/// What is being shown. Lives across desktop rebuilds.
-enum Content {
-    Image(image::RgbaImage),
-    Video(VideoPlayer),
-}
-
-/// GPU-side renderer for the content; recreated on every rebuild.
-enum Renderer {
-    Image(ImageBlit),
-    Video(VideoBlit),
-}
-
-/// One monitor's wallpaper. Field order matters: the surface must drop before its window.
-struct Output {
-    info: OutputInfo,
-    /// Not receiving new frames (covered, locked, …); the last frame stays on screen.
-    paused: bool,
-    coverage: Coverage,
-    surface: OutputSurface,
-    _window: WallpaperWindow,
-}
-
-/// Windows, surfaces and GPU resources for the current desktop.
-struct Session {
-    outputs: Vec<Output>,
-    canvas: Rect,
-    renderer: Renderer,
-}
+type Job = (Request, SyncSender<Response>);
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -180,33 +121,28 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let content = match (&args.image, &args.video) {
-        (Some(path), _) => Content::Image(
-            image::open(path)
-                .with_context(|| format!("loading {}", path.display()))?
-                .into_rgba8(),
-        ),
-        (None, Some(path)) => Content::Video(
-            VideoPlayer::spawn(path).with_context(|| format!("opening {}", path.display()))?,
-        ),
-        (None, None) => anyhow::bail!("--image or --video is required"),
-    };
-    let look = Look {
-        fit: match args.fit {
-            FitArg::Fill => FitMode::Fill,
-            FitArg::Fit => FitMode::Fit,
-            FitArg::Stretch => FitMode::Stretch,
-        },
-        layout: args.layout,
-    };
-    let gpu_options = GpuOptions {
-        backend: match args.backend {
-            BackendArg::Auto => Backend::Auto,
-            BackendArg::Dx12 => Backend::Dx12,
-            BackendArg::Vulkan => Backend::Vulkan,
-        },
-        low_power: args.low_power,
-    };
+    let server = lumen_ipc::Server::bind().context("starting control socket")?;
+    let (jobs_tx, jobs) = sync_channel::<Job>(16);
+    let waker = platform.waker();
+    std::thread::Builder::new()
+        .name("ipc".into())
+        .spawn(move || {
+            server.serve(|request| {
+                let (reply_tx, reply_rx) = sync_channel(1);
+                if jobs_tx.send((request, reply_tx)).is_err() {
+                    return Response::Error {
+                        message: "daemon is shutting down".into(),
+                    };
+                }
+                waker.wake();
+                reply_rx
+                    .recv_timeout(Duration::from_secs(30))
+                    .unwrap_or_else(|_| Response::Error {
+                        message: "daemon did not answer".into(),
+                    })
+            });
+        })
+        .context("starting IPC thread")?;
 
     let stop = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&stop);
@@ -215,328 +151,267 @@ fn main() -> Result<()> {
         .duration
         .map(|s| Instant::now() + Duration::from_secs(s));
 
-    let policy = Policy {
-        fullscreen: args.on_fullscreen,
-        maximized: args.on_maximized,
-        battery: args.on_battery,
-        locked: args.on_lock,
+    let gpu_options = GpuOptions {
+        backend: match args.backend {
+            BackendArg::Auto => Backend::Auto,
+            BackendArg::Dx12 => Backend::Dx12,
+            BackendArg::Vulkan => Backend::Vulkan,
+        },
+        low_power: args.low_power,
     };
     // Games and foreground apps win CPU and GPU scheduling (P5).
     platform.lower_priority();
 
-    let mut gpu = Gpu::new(gpu_options).context("GPU init")?;
-    let mut session = Some(build(&platform, &gpu, &content, look)?);
-    let mut clock = VideoClock::default();
-    let mut conditions = Conditions {
-        on_battery: platform.on_battery(),
-        locked: false,
+    let mut daemon = Daemon {
+        platform: &platform,
+        gpu: Gpu::new(gpu_options).context("GPU init")?,
+        gpu_options,
+        policy: Policy {
+            fullscreen: args.on_fullscreen,
+            maximized: args.on_maximized,
+            battery: args.on_battery,
+            locked: args.on_lock,
+        },
+        conditions: Conditions {
+            on_battery: platform.on_battery(),
+            ..Conditions::default()
+        },
+        wallpaper: None,
+        session: None,
+        clock: VideoClock::default(),
+        next_coverage: Instant::now(),
+        next_battery: Instant::now() + BATTERY_INTERVAL,
+        needs_rebuild: false,
+        quit: false,
     };
-    let mut next_coverage = Instant::now();
-    let mut next_battery = Instant::now() + BATTERY_INTERVAL;
 
-    while !stop.load(Ordering::SeqCst) && deadline.is_none_or(|d| Instant::now() < d) {
-        // Static content: sleep until an event. Video: until the next frame is due.
-        let content_wait = match &content {
-            Content::Image(_) => Duration::from_secs(1),
-            Content::Video(_) if clock.is_paused() => COVERAGE_INTERVAL,
-            Content::Video(player) => clock.time_until_next(player),
-        };
-        let wait = content_wait.min(next_coverage.saturating_duration_since(Instant::now()));
-        let events = platform.poll_events(wait);
-        gpu.maintain();
-
-        for e in &events {
-            match e {
-                DesktopEvent::SessionLocked => conditions.locked = true,
-                DesktopEvent::SessionUnlocked => conditions.locked = false,
-                _ => {}
-            }
-        }
-        if Instant::now() >= next_battery {
-            conditions.on_battery = platform.on_battery();
-            next_battery = Instant::now() + BATTERY_INTERVAL;
-        }
-
-        let device_lost = gpu.is_lost();
-        if events.iter().any(|e| e.needs_rebuild()) || device_lost {
-            tracing::info!(?events, device_lost, "rebuilding wallpaper");
-            // Surfaces/windows go first; they reference the old device and old Explorer windows.
-            drop(session.take());
-            if device_lost {
-                gpu = Gpu::new(gpu_options).context("GPU re-init after device loss")?;
-            }
-            // Explorer may still be starting after a restart; retry briefly.
-            session = Some(retry(
-                || build(&platform, &gpu, &content, look),
-                10,
-                Duration::from_millis(500),
-            )?);
-            if let (Content::Video(_), Some(s)) = (&content, session.as_mut()) {
-                // New textures are empty: show the most recent frame again.
-                if let Some(frame) = clock.current.as_ref() {
-                    show_video_frame(&gpu, s, frame, look)?;
-                }
-            }
-            next_coverage = Instant::now();
-            continue;
-        }
-
-        let Some(s) = session.as_mut() else { continue };
-        if Instant::now() >= next_coverage || events.iter().any(|e| !e.needs_rebuild()) {
-            next_coverage = Instant::now() + COVERAGE_INTERVAL;
-            let resumed = update_pauses(&platform, s, policy, conditions);
-            if let Content::Video(_) = &content {
-                clock.set_paused(s.outputs.iter().all(|o| o.paused));
-                // Freshly resumed outputs still show an old frame: present the current one now.
-                if resumed {
-                    present_all(&gpu, s, look)?;
-                }
-            }
-        }
-
-        if let Content::Video(player) = &content
-            && !clock.is_paused()
-            && let Some(frame) = clock.due_frame(player)
-        {
-            show_video_frame(&gpu, s, frame, look)?;
-        }
+    let look = Look {
+        fit: match args.fit {
+            FitArg::Fill => Fit::Fill,
+            FitArg::Fit => Fit::Fit,
+            FitArg::Stretch => Fit::Stretch,
+        },
+        layout: match args.layout {
+            LayoutArg::PerOutput => Layout::PerOutput,
+            LayoutArg::Span => Layout::Span,
+        },
+    };
+    if let Some(path) = args.image.as_ref().or(args.video.as_ref()) {
+        let wallpaper = Wallpaper::load(path, None, look)?;
+        daemon.set_wallpaper(wallpaper)?;
+    } else {
+        tracing::info!("no wallpaper yet; waiting for `lumen set <file>`");
     }
 
-    drop(session);
+    while !stop.load(Ordering::SeqCst)
+        && !daemon.quit
+        && deadline.is_none_or(|d| Instant::now() < d)
+    {
+        daemon.tick(&jobs)?;
+    }
+    drop(daemon);
     tracing::info!("exiting");
     Ok(())
 }
 
-/// Re-evaluates which outputs are paused. Logs changes; returns true if any output resumed.
-fn update_pauses(
-    platform: &Platform,
-    session: &mut Session,
+struct Daemon<'p> {
+    platform: &'p Platform,
+    gpu: Gpu,
+    gpu_options: GpuOptions,
     policy: Policy,
-    c: Conditions,
-) -> bool {
-    let infos: Vec<OutputInfo> = session.outputs.iter().map(|o| o.info.clone()).collect();
-    let coverage = platform.coverage(&infos);
-    let mut resumed = false;
-    for (out, cov) in session.outputs.iter_mut().zip(coverage) {
-        let paused = policy.pauses(cov, c.on_battery, c.locked);
-        if paused != out.paused || cov != out.coverage {
-            tracing::info!(
-                output = %out.info.device,
-                coverage = ?cov,
-                on_battery = c.on_battery,
-                locked = c.locked,
-                "{}",
-                if paused { "paused" } else { "playing" }
-            );
-        }
-        resumed |= out.paused && !paused;
-        out.paused = paused;
-        out.coverage = cov;
-    }
-    resumed
+    conditions: Conditions,
+    wallpaper: Option<Wallpaper>,
+    session: Option<Session>,
+    clock: VideoClock,
+    next_coverage: Instant,
+    next_battery: Instant,
+    /// A rebuild failed (e.g. Explorer still starting); retry on the next tick.
+    needs_rebuild: bool,
+    quit: bool,
 }
 
-/// Maps frame timestamps onto wall-clock time; can be frozen while paused.
-#[derive(Default)]
-struct VideoClock {
-    start: Option<Instant>,
-    paused_at: Option<Instant>,
-    /// Decoded but not yet due.
-    pending: Option<Nv12Frame>,
-    /// Last frame shown (re-uploaded after a rebuild).
-    current: Option<Nv12Frame>,
-}
+impl Daemon<'_> {
+    /// One iteration: wait for events/IPC/next frame, then react.
+    fn tick(&mut self, jobs: &Receiver<Job>) -> Result<()> {
+        let content_wait = match self.wallpaper.as_ref().map(|w| &w.content) {
+            Some(Content::Video(_)) if self.clock.is_paused() => COVERAGE_INTERVAL,
+            Some(Content::Video(player)) => self.clock.time_until_next(player),
+            _ => Duration::from_secs(1),
+        };
+        let wait = content_wait.min(self.next_coverage.saturating_duration_since(Instant::now()));
+        let events = self.platform.poll_events(wait);
+        self.gpu.maintain();
 
-impl VideoClock {
-    fn now_pts(&mut self) -> Duration {
-        self.start.get_or_insert_with(Instant::now).elapsed()
-    }
+        while let Ok((request, reply)) = jobs.try_recv() {
+            let response = self.handle(request);
+            let _ = reply.send(response);
+        }
 
-    fn is_paused(&self) -> bool {
-        self.paused_at.is_some()
-    }
-
-    /// Freezes/unfreezes playback time so a resumed video continues where it stopped.
-    fn set_paused(&mut self, paused: bool) {
-        match (paused, self.paused_at) {
-            (true, None) => self.paused_at = Some(Instant::now()),
-            (false, Some(at)) => {
-                if let Some(start) = self.start.as_mut() {
-                    *start += at.elapsed();
-                }
-                self.paused_at = None;
+        for e in &events {
+            match e {
+                DesktopEvent::SessionLocked => self.conditions.locked = true,
+                DesktopEvent::SessionUnlocked => self.conditions.locked = false,
+                _ => {}
             }
-            _ => {}
         }
-    }
+        if Instant::now() >= self.next_battery {
+            self.conditions.on_battery = self.platform.on_battery();
+            self.next_battery = Instant::now() + BATTERY_INTERVAL;
+        }
 
-    fn time_until_next(&mut self, player: &VideoPlayer) -> Duration {
-        if self.pending.is_none() {
-            self.pending = player.try_next();
+        let device_lost = self.gpu.is_lost();
+        if device_lost {
+            self.session = None;
+            self.gpu = Gpu::new(self.gpu_options).context("GPU re-init after device loss")?;
         }
-        let now = self.now_pts();
-        match &self.pending {
-            Some(f) => f.pts.saturating_sub(now),
-            // Decoder is behind; check again shortly.
-            None => Duration::from_millis(5),
+        if events.iter().any(|e| e.needs_rebuild()) || device_lost || self.needs_rebuild {
+            tracing::info!(?events, device_lost, "rebuilding wallpaper");
+            self.rebuild();
+            return Ok(());
         }
-    }
 
-    /// The newest frame whose time has come, dropping late ones.
-    fn due_frame(&mut self, player: &VideoPlayer) -> Option<&Nv12Frame> {
-        let now = self.now_pts();
-        let mut due = None;
-        loop {
-            if self.pending.is_none() {
-                self.pending = player.try_next();
-            }
-            match self.pending.take() {
-                Some(f) if f.pts <= now => due = Some(f),
-                other => {
-                    self.pending = other;
-                    break;
+        let Some(session) = self.session.as_mut() else {
+            return Ok(());
+        };
+        if Instant::now() >= self.next_coverage || events.iter().any(|e| !e.needs_rebuild()) {
+            self.next_coverage = Instant::now() + COVERAGE_INTERVAL;
+            let resumed = update_pauses(self.platform, session, self.policy, self.conditions);
+            if let Some(Content::Video(_)) = self.wallpaper.as_ref().map(|w| &w.content) {
+                self.clock
+                    .set_paused(session.outputs.iter().all(|o| o.paused));
+                // Freshly resumed outputs still show an old frame: present the current one now.
+                if resumed {
+                    session.present_all(&self.gpu)?;
                 }
             }
         }
-        if let Some(f) = due {
-            self.current = Some(f);
-            return self.current.as_ref();
+
+        if let Some(Content::Video(player)) = self.wallpaper.as_ref().map(|w| &w.content)
+            && !self.clock.is_paused()
+            && let Some(frame) = self.clock.due_frame(player)
+        {
+            session.show_video_frame(&self.gpu, frame)?;
         }
-        None
+        Ok(())
     }
-}
 
-fn build(platform: &Platform, gpu: &Gpu, content: &Content, look: Look) -> Result<Session> {
-    let infos = platform.outputs().context("enumerating outputs")?;
-    let canvas = Rect::bounding(infos.iter().map(rect_of)).context("no outputs found")?;
-
-    let mut outputs = Vec::new();
-    for info in infos {
-        let window = platform
-            .create_wallpaper(&info)
-            .with_context(|| format!("wallpaper window for {}", info.device))?;
-        let handles = window.handles();
-        // SAFETY: `window` is stored next to the surface in `Output` and dropped after it.
-        let surface =
-            unsafe { gpu.create_surface(handles.window, handles.display, info.width, info.height) }
-                .with_context(|| format!("GPU surface for {}", info.device))?;
-        outputs.push(Output {
-            info,
-            paused: false,
-            coverage: Coverage::Visible,
-            surface,
-            _window: window,
-        });
-    }
-    let format = outputs[0].surface.format();
-
-    let renderer = match content {
-        Content::Image(image) => {
-            // Downscale once to the largest size the image is ever displayed at (sharp, less VRAM).
-            let sizes: Vec<(u32, u32)> = match look.layout {
-                LayoutArg::Span => vec![canvas.size()],
-                LayoutArg::PerOutput => outputs
-                    .iter()
-                    .map(|o| (o.info.width, o.info.height))
-                    .collect(),
-            };
-            let (w, h) = display_size(look.fit, image.dimensions(), &sizes);
-            let pixels = if (w, h) == image.dimensions() {
-                image.clone()
-            } else {
-                image::imageops::resize(image, w, h, image::imageops::FilterType::Lanczos3)
-            };
-            Renderer::Image(ImageBlit::new(gpu, format, pixels.as_raw(), w, h))
-        }
-        Content::Video(player) => {
-            let info = player.info();
-            Renderer::Video(VideoBlit::new(gpu, format, info.width, info.height))
-        }
-    };
-
-    let mut session = Session {
-        outputs,
-        canvas,
-        renderer,
-    };
-    if matches!(session.renderer, Renderer::Image(_)) {
-        present_all(gpu, &mut session, look)?;
-    }
-    tracing::info!(
-        outputs = session.outputs.len(),
-        layout = ?look.layout,
-        "wallpaper shown on {}",
-        session
-            .outputs
-            .iter()
-            .map(|o| o.info.device.as_str())
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
-    Ok(session)
-}
-
-fn show_video_frame(gpu: &Gpu, session: &mut Session, frame: &Nv12Frame, look: Look) -> Result<()> {
-    if let Renderer::Video(blit) = &session.renderer {
-        blit.upload(
-            gpu,
-            Nv12Planes {
-                width: frame.width,
-                height: frame.height,
-                stride: frame.stride,
-                luma: frame.luma(),
-                chroma: frame.chroma(),
-            },
-        );
-    }
-    present_all(gpu, session, look)
-}
-
-/// Draws the current content on every output that is not paused.
-fn present_all(gpu: &Gpu, session: &mut Session, look: Look) -> Result<()> {
-    for out in session.outputs.iter_mut().filter(|o| !o.paused) {
-        let target = rect_of(&out.info);
-        let canvas = match look.layout {
-            LayoutArg::Span => session.canvas,
-            LayoutArg::PerOutput => target,
+    /// Recreates windows/surfaces for the current wallpaper. Failures are retried next tick.
+    fn rebuild(&mut self) {
+        // Surfaces/windows go first; they reference the old device and old Explorer windows.
+        self.session = None;
+        self.needs_rebuild = false;
+        let Some(wallpaper) = self.wallpaper.as_ref() else {
+            return;
         };
-        let Some(frame) = out.surface.acquire(gpu)? else {
-            tracing::debug!(output = %out.info.device, "frame skipped (occluded)");
-            continue;
-        };
-        let view = frame
-            .texture
-            .create_view(&lumen_gpu::wgpu::TextureViewDescriptor::default());
-        let clear = [0.0, 0.0, 0.0, 1.0];
-        match &session.renderer {
-            Renderer::Image(blit) => blit.draw(gpu, &view, canvas, target, look.fit, clear),
-            Renderer::Video(blit) => blit.draw(gpu, &view, canvas, target, look.fit, clear),
-        }
-        gpu.queue.present(frame);
-    }
-    Ok(())
-}
-
-fn rect_of(o: &OutputInfo) -> Rect {
-    Rect {
-        x: o.x,
-        y: o.y,
-        width: o.width,
-        height: o.height,
-    }
-}
-
-fn retry<T>(mut f: impl FnMut() -> Result<T>, attempts: u32, delay: Duration) -> Result<T> {
-    let mut last = None;
-    for _ in 0..attempts {
-        match f() {
-            Ok(v) => return Ok(v),
+        match Session::build(self.platform, &self.gpu, wallpaper) {
+            Ok(mut session) => {
+                if let Some(frame) = self.clock.current.as_ref()
+                    && let Err(e) = session.show_video_frame(&self.gpu, frame)
+                {
+                    tracing::warn!("re-showing current frame failed: {e:#}");
+                }
+                self.session = Some(session);
+                self.next_coverage = Instant::now();
+            }
             Err(e) => {
                 tracing::warn!("{e:#}; retrying");
-                last = Some(e);
-                std::thread::sleep(delay);
+                self.needs_rebuild = true;
+                std::thread::sleep(REBUILD_RETRY);
             }
         }
     }
-    Err(last.unwrap_or_else(|| anyhow::anyhow!("no attempts made")))
+
+    fn set_wallpaper(&mut self, wallpaper: Wallpaper) -> Result<()> {
+        self.session = None;
+        self.clock = VideoClock::default();
+        self.wallpaper = Some(wallpaper);
+        self.rebuild();
+        if self.needs_rebuild {
+            anyhow::bail!(
+                "wallpaper loaded but could not be shown yet; retrying in the background"
+            );
+        }
+        Ok(())
+    }
+
+    fn handle(&mut self, request: Request) -> Response {
+        tracing::info!(?request, "control request");
+        let ok_or_error = |r: Result<()>| match r {
+            Ok(()) => Response::Ok,
+            Err(e) => Response::Error {
+                message: format!("{e:#}"),
+            },
+        };
+        match request {
+            Request::Status => Response::Status(self.status()),
+            Request::Set {
+                path,
+                kind,
+                fit,
+                layout,
+            } => {
+                let current = self.wallpaper.as_ref().map(|w| w.look);
+                let look = Look {
+                    fit: fit.or(current.map(|l| l.fit)).unwrap_or(Fit::Fill),
+                    layout: layout
+                        .or(current.map(|l| l.layout))
+                        .unwrap_or(Layout::PerOutput),
+                };
+                ok_or_error(Wallpaper::load(&path, kind, look).and_then(|w| self.set_wallpaper(w)))
+            }
+            Request::Pause | Request::Resume => {
+                self.conditions.user_paused = matches!(request, Request::Pause);
+                self.next_coverage = Instant::now();
+                Response::Ok
+            }
+            Request::Quit => {
+                self.quit = true;
+                Response::Ok
+            }
+        }
+    }
+
+    fn status(&self) -> Status {
+        let outputs = match &self.session {
+            Some(s) => s
+                .outputs
+                .iter()
+                .map(|o| (o.info.clone(), o.paused, o.coverage))
+                .collect(),
+            None => self
+                .platform
+                .outputs()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|info| (info, false, Coverage::Visible))
+                .collect::<Vec<_>>(),
+        };
+        Status {
+            pid: std::process::id(),
+            daemon_version: env!("CARGO_PKG_VERSION").to_owned(),
+            content: self.wallpaper.as_ref().map(|w| ContentStatus {
+                kind: w.kind,
+                path: w.path.clone(),
+                fit: w.look.fit,
+                layout: w.look.layout,
+            }),
+            user_paused: self.conditions.user_paused,
+            outputs: outputs
+                .into_iter()
+                .map(|(info, paused, coverage)| OutputStatus {
+                    id: info.id.0,
+                    device: info.device,
+                    name: info.name,
+                    x: info.x,
+                    y: info.y,
+                    width: info.width,
+                    height: info.height,
+                    refresh_hz: f64::from(info.refresh_mhz) / 1000.0,
+                    primary: info.primary,
+                    paused,
+                    coverage: format!("{coverage:?}").to_lowercase(),
+                })
+                .collect(),
+        }
+    }
 }

@@ -15,13 +15,13 @@ pub use coverage::{Coverage, WindowRect, classify};
 mod windows;
 
 #[cfg(windows)]
-pub use windows::{Platform, WallpaperWindow};
+pub use windows::{Platform, Waker, WallpaperWindow};
 
 #[cfg(not(windows))]
 mod unsupported;
 
 #[cfg(not(windows))]
-pub use unsupported::{Platform, WallpaperWindow};
+pub use unsupported::{Platform, Waker, WallpaperWindow};
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 

@@ -12,6 +12,7 @@ clap.workspace = true
 ctrlc.workspace = true
 image.workspace = true
 lumen-gpu.workspace = true
+lumen-ipc.workspace = true
 lumen-media.workspace = true
 lumen-platform.workspace = true
 lumen-render.workspace = true

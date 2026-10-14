@@ -2,7 +2,7 @@
 
 Open, cross-platform live wallpaper engine that can play Wallpaper Engine Workshop content you own. Windows first, then Linux, then macOS.
 
-Status: Phase 0 (recon and tooling). See [PROGRESS.md](PROGRESS.md).
+Status: Phase 1 (Windows: image/video wallpapers behind the icons, pause policies, CLI). See [PROGRESS.md](PROGRESS.md).
 
 ## Layout
 
@@ -10,14 +10,35 @@ Status: Phase 0 (recon and tooling). See [PROGRESS.md](PROGRESS.md).
 |---|---|
 | `crates/lumen-core` | Clock, limits, shared foundation types |
 | `crates/lumen-we` | Wallpaper Engine importer (pkg, tex, json, shaders) |
+| `crates/lumen-platform` | OS integration: monitors, wallpaper windows behind the icons, coverage, power |
+| `crates/lumen-gpu` | wgpu device and per-monitor surfaces |
+| `crates/lumen-render` | Image/video drawing, fit and span placement |
+| `crates/lumen-media` | Video decoding (Media Foundation + DXVA on Windows) |
+| `crates/lumen-ipc` | Daemon ↔ client protocol over a per-user local socket |
+| `apps/lumend` | Wallpaper daemon |
+| `apps/lumen-cli` | `lumen` control command |
 | `tools/wpdump` | Inspect / unpack WE content |
 | `docs/formats` | File format specs |
 | `docs/adr` | Architecture decisions |
 | `docs/re-notes` | Reverse-engineering notes (RenderDoc, Ghidra) |
 
-Planned crates (added when their phase starts): `lumen-scene`, `lumen-assets`, `lumen-ipc`, `lumen-gpu`, `lumen-runtime`, `lumen-render`, `lumen-platform`, and apps `lumend`, `lumen-cli`, `lumen-ui`, `lumen-webhost`.
+Planned crates (added when their phase starts): `lumen-scene`, `lumen-assets`, `lumen-runtime`, and apps `lumen-ui`, `lumen-webhost`.
 
 ## Usage
+
+Run the daemon, then control it (Windows):
+
+```sh
+cargo build --release
+target/release/lumend                                   # starts empty; or --image/--video <file>
+target/release/lumen set <image-or-video> [--fit fill|fit|stretch] [--layout per-output|span]
+target/release/lumen status                             # what is playing, per-monitor state
+target/release/lumen pause | resume | quit
+```
+
+`lumend --help` lists pause rules (`--on-fullscreen`, `--on-maximized`, `--on-battery`, `--on-lock`).
+
+Developer tools:
 
 ```sh
 cargo run -p wpdump -- list   "<workshop item>/scene.pkg"

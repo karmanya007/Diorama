@@ -34,6 +34,17 @@ impl Platform {
     }
 
     pub fn lower_priority(&self) {}
+
+    pub fn waker(&self) -> Waker {
+        Waker
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Waker;
+
+impl Waker {
+    pub fn wake(&self) {}
 }
 
 /// Uninhabited: no wallpaper windows exist on unsupported platforms.

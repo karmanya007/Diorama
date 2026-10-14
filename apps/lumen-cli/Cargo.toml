@@ -1,0 +1,19 @@
+[package]
+name = "lumen-cli"
+description = "Command-line control for the Lumen wallpaper daemon."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "lumen"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+lumen-ipc.workspace = true
+
+[lints]
+workspace = true

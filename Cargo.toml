@@ -1,9 +1,11 @@
 [workspace]
 resolver = "3"
 members = [
+    "apps/lumen-cli",
     "apps/lumend",
     "crates/lumen-core",
     "crates/lumen-gpu",
+    "crates/lumen-ipc",
     "crates/lumen-media",
     "crates/lumen-platform",
     "crates/lumen-render",
@@ -24,6 +26,7 @@ publish = false
 lumen-core = { path = "crates/lumen-core", version = "0.0.1" }
 lumen-we = { path = "crates/lumen-we", version = "0.0.1" }
 lumen-gpu = { path = "crates/lumen-gpu", version = "0.0.1" }
+lumen-ipc = { path = "crates/lumen-ipc", version = "0.0.1" }
 lumen-media = { path = "crates/lumen-media", version = "0.0.1" }
 lumen-platform = { path = "crates/lumen-platform", version = "0.0.1" }
 lumen-render = { path = "crates/lumen-render", version = "0.0.1" }
@@ -32,6 +35,8 @@ lumen-render = { path = "crates/lumen-render", version = "0.0.1" }
 anyhow = "1"
 bytemuck = { version = "1.25", features = ["derive"] }
 ctrlc = "3"
+# 2.4.5 is days old; stay on the previous release.
+interprocess = "=2.4.4"
 pollster = "1"
 raw-window-handle = "0.6"
 wgpu = "30.0.1"
