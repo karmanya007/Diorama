@@ -54,6 +54,9 @@ pub fn import_from(vfs: &Vfs, limits: &Limits) -> Result<Scene> {
     for object in objects {
         importer.object(object, &graph);
     }
+    if let Err(e) = importer.bloom(&json["general"]) {
+        importer.skip(format!("bloom: {e}"));
+    }
     Ok(importer.scene)
 }
 
@@ -151,7 +154,7 @@ impl Importer<'_> {
         self.scene.clear_color = [r, g, b, 1.0];
         self.scene.ambient_color = vec_n(general.get("ambientcolor"), [0.2; 3]);
         self.scene.skylight_color = vec_n(general.get("skylightcolor"), [0.3; 3]);
-        for flag in ["bloom", "cameraparallax", "camerashake"] {
+        for flag in ["cameraparallax", "camerashake"] {
             if boolean(general.get(flag), false) {
                 self.skip(format!("general.{flag}"));
             }
@@ -162,6 +165,113 @@ impl Importer<'_> {
         if !self.scene.skipped.contains(&what) {
             self.scene.skipped.push(what);
         }
+    }
+
+    /// `general.bloom`: WE's LDR bloom after all layers (capture 285):
+    /// frame → ¼ thresholded downsample → ⅛ vertical blur → ⅛ horizontal
+    /// blur → combine (frame + bloom). Built as a fullscreen layer whose
+    /// effect passes run WE's own `assets/shaders` programs.
+    fn bloom(&mut self, general: &Value) -> Result<()> {
+        if !boolean(general.get("bloom"), false) {
+            return Ok(());
+        }
+        if boolean(general.get("hdr"), false) {
+            self.skip("HDR bloom".into());
+            return Ok(());
+        }
+        let mut constants = serde_json::Map::new();
+        for key in ["bloomstrength", "bloomthreshold", "bloomtint"] {
+            if let Some(v) = general.get(key).filter(|v| !v.is_null()) {
+                constants.insert(key.to_owned(), unwrap_value(v).clone());
+            }
+        }
+        // Every pass samples with frame-buffer texel offsets.
+        let texel = serde_json::json!([
+            1.0 / self.scene.width as f64,
+            1.0 / self.scene.height as f64
+        ]);
+        let fbos = vec![
+            Fbo {
+                name: "_rt_Bloom4".into(),
+                scale_div: 4,
+            },
+            Fbo {
+                name: "_rt_Bloom8a".into(),
+                scale_div: 8,
+            },
+            Fbo {
+                name: "_rt_Bloom8b".into(),
+                scale_div: 8,
+            },
+        ];
+        let steps: [(&str, &[&str], Option<&str>); 4] = [
+            (
+                "downsample_quarter_bloom",
+                &["previous"],
+                Some("_rt_Bloom4"),
+            ),
+            (
+                "downsample_eighth_blur_v",
+                &["_rt_Bloom4"],
+                Some("_rt_Bloom8a"),
+            ),
+            ("blur_h_bloom", &["_rt_Bloom8a"], Some("_rt_Bloom8b")),
+            ("combine", &["previous", "_rt_Bloom8b"], None),
+        ];
+        let mut passes = Vec::new();
+        for (shader, inputs, target) in steps {
+            let spec = PassSpec {
+                shader: shader.to_owned(),
+                blend: Blend::Opaque,
+                combos: BTreeMap::new(),
+                textures: BTreeMap::new(),
+                constants: vec![&constants],
+            };
+            let mut pass = self.pass(&spec, Some(&fbos))?;
+            for (slot, input) in (0u32..).zip(inputs.iter()) {
+                pass.textures.insert(slot, self.rt_binding(input, &fbos));
+            }
+            if let Some(t) = texel.as_array() {
+                pass.constants.insert(
+                    "g_TexelSize".into(),
+                    t.iter()
+                        .filter_map(|v| v.as_f64())
+                        .map(|v| v as f32)
+                        .collect(),
+                );
+            }
+            pass.target = target.map(str::to_owned);
+            passes.push(pass);
+        }
+
+        let passthrough = PassSpec {
+            shader: "passthrough".into(),
+            blend: Blend::Opaque,
+            combos: BTreeMap::new(),
+            textures: BTreeMap::from([(0, "_rt_FullFrameBuffer".to_owned())]),
+            constants: Vec::new(),
+        };
+        let albedo = self.pass(&passthrough, None)?;
+        let centre = [
+            self.scene.width as f32 / 2.0,
+            self.scene.height as f32 / 2.0,
+        ];
+        self.scene.layers.push(ImageLayer {
+            name: "bloom".into(),
+            size: [self.scene.width, self.scene.height],
+            transform: lumen_scene::affine(centre, 0.0, [1.0, 1.0]),
+            visible: true,
+            kind: LayerKind::Fullscreen,
+            color: [1.0; 4],
+            blend: Blend::Opaque,
+            albedo,
+            effects: vec![Effect {
+                name: "bloom".into(),
+                fbos,
+                passes,
+            }],
+        });
+        Ok(())
     }
 
     fn light(&mut self, object: &Value, graph: &SceneGraph) {

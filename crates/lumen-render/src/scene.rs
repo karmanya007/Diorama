@@ -619,6 +619,9 @@ impl SceneRenderer {
                     .collect();
                 layout.write(buf, &m.name, &identity);
             }
+            // Defaults the pass may override (WE's bloom uses frame-buffer texels).
+            layout.write(buf, "g_TexelSize", &[1.0 / tw, 1.0 / th]);
+            layout.write(buf, "g_TexelSizeHalf", &[0.5 / tw, 0.5 / th]);
             for (name, value) in &plan.pass.constants {
                 layout.write(buf, name, value);
             }
@@ -664,8 +667,6 @@ impl SceneRenderer {
             layout.write(buf, "g_Screen", &[sw, sh, sw / sh]);
             layout.write(buf, "g_LightAmbientColor", &ctx.scene.ambient_color);
             layout.write(buf, "g_LightSkylightColor", &ctx.scene.skylight_color);
-            layout.write(buf, "g_TexelSize", &[1.0 / tw, 1.0 / th]);
-            layout.write(buf, "g_TexelSizeHalf", &[0.5 / tw, 0.5 / th]);
         }
         let [vs_data, fs_data] = data;
         let vs_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
