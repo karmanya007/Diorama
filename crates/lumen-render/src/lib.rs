@@ -1,6 +1,7 @@
-//! Rendering (L3). Phase 1: a single image or video drawn over each output.
-//! Scene rendering (layers, effect chains) arrives in Phase 2.
+//! Rendering (L3): image/video blits over each output (Phase 1) and the
+//! scene IR renderer (Phase 2, [`scene`]).
 
+pub mod scene;
 mod video;
 
 use lumen_gpu::{Gpu, wgpu};

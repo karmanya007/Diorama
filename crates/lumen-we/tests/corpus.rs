@@ -140,3 +140,56 @@ fn every_tex_parses_and_decodes() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+#[test]
+fn every_corpus_scene_imports() {
+    let (Some(corpus), Some(install)) = (
+        dir_from_env("LUMEN_WE_CORPUS", DEFAULT_CORPUS),
+        dir_from_env("LUMEN_WE_INSTALL", DEFAULT_INSTALL),
+    ) else {
+        eprintln!("corpus or install not found; skipping");
+        return;
+    };
+    let assets = install.join("assets");
+    let limits = Limits::default();
+    let mut failures = Vec::new();
+    let mut skipped: BTreeMap<String, usize> = BTreeMap::new();
+    let (mut scenes, mut layers, mut effects, mut programs) = (0, 0, 0, 0);
+    for pkg in scene_pkgs(&corpus) {
+        let dir = pkg.parent().unwrap();
+        match lumen_we::scene::import(dir, Some(&assets), &limits) {
+            Ok(scene) => {
+                scenes += 1;
+                layers += scene.layers.len();
+                effects += scene.layers.iter().map(|l| l.effects.len()).sum::<usize>();
+                programs += scene.programs.len();
+                for s in scene.skipped {
+                    // Group by kind, not by individual file.
+                    let key: String = match s.split_once(": ") {
+                        Some((k, v))
+                            if k.starts_with("image layer")
+                                || k.starts_with("texture")
+                                || k.starts_with("effect") =>
+                        {
+                            format!("{} ~ {v}", k.split_whitespace().next().unwrap_or(k))
+                        }
+                        Some((k, _)) => k.to_owned(),
+                        None => s.clone(),
+                    }
+                    .chars()
+                    .take(110)
+                    .collect();
+                    *skipped.entry(key).or_default() += 1;
+                }
+            }
+            Err(e) => failures.push(format!("{}: {e}", dir.display())),
+        }
+    }
+    eprintln!("{scenes} scenes: {layers} image layers, {effects} effects, {programs} programs");
+    let mut rows: Vec<_> = skipped.into_iter().collect();
+    rows.sort_by_key(|r| std::cmp::Reverse(r.1));
+    for (k, n) in rows.iter().take(40) {
+        eprintln!("  skipped {n:4} × {k}");
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}

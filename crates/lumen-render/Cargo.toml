@@ -9,6 +9,10 @@ publish.workspace = true
 [dependencies]
 bytemuck.workspace = true
 lumen-gpu.workspace = true
+lumen-scene.workspace = true
+pollster.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
 wgpu.workspace = true
 
 [lints]

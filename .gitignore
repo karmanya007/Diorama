@@ -12,3 +12,4 @@
 # Ghidra project files
 *.gpr
 *.rep/
+/.tools/

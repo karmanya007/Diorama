@@ -596,6 +596,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "imgdiff"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "clap",
+ "image",
+]
+
+[[package]]
 name = "indexmap"
 version = "2.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -783,6 +792,7 @@ version = "0.0.1"
 name = "lumen-gpu"
 version = "0.0.1"
 dependencies = [
+ "naga",
  "pollster",
  "raw-window-handle",
  "thiserror 2.0.21",
@@ -827,8 +837,16 @@ version = "0.0.1"
 dependencies = [
  "bytemuck",
  "lumen-gpu",
+ "lumen-scene",
+ "pollster",
+ "thiserror 2.0.21",
+ "tracing",
  "wgpu",
 ]
+
+[[package]]
+name = "lumen-scene"
+version = "0.0.1"
 
 [[package]]
 name = "lumen-we"
@@ -836,6 +854,7 @@ version = "0.0.1"
 dependencies = [
  "image",
  "lumen-core",
+ "lumen-scene",
  "lz4_flex",
  "serde_json",
  "thiserror 2.0.21",
@@ -849,11 +868,14 @@ dependencies = [
  "clap",
  "ctrlc",
  "image",
+ "lumen-core",
  "lumen-gpu",
  "lumen-ipc",
  "lumen-media",
  "lumen-platform",
  "lumen-render",
+ "lumen-scene",
+ "lumen-we",
  "serde",
  "serde_json",
  "tracing",

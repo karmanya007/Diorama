@@ -9,7 +9,9 @@ members = [
     "crates/lumen-media",
     "crates/lumen-platform",
     "crates/lumen-render",
+    "crates/lumen-scene",
     "crates/lumen-we",
+    "tools/imgdiff",
     "tools/wpdump",
 ]
 exclude = ["fuzz"]
@@ -30,6 +32,7 @@ lumen-ipc = { path = "crates/lumen-ipc", version = "0.0.1" }
 lumen-media = { path = "crates/lumen-media", version = "0.0.1" }
 lumen-platform = { path = "crates/lumen-platform", version = "0.0.1" }
 lumen-render = { path = "crates/lumen-render", version = "0.0.1" }
+lumen-scene = { path = "crates/lumen-scene", version = "0.0.1" }
 
 # external
 anyhow = "1"

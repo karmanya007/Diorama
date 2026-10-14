@@ -16,8 +16,8 @@ mod windows;
 
 #[cfg(windows)]
 pub use windows::{
-    Platform, Waker, WallpaperWindow, autostart, config_dir, detach_console, set_autostart,
-    set_os_wallpaper,
+    Platform, Waker, WallpaperWindow, autostart, cache_dir, config_dir, detach_console,
+    set_autostart, set_os_wallpaper,
 };
 
 #[cfg(not(windows))]
@@ -25,8 +25,8 @@ mod unsupported;
 
 #[cfg(not(windows))]
 pub use unsupported::{
-    Platform, Waker, WallpaperWindow, autostart, config_dir, detach_console, set_autostart,
-    set_os_wallpaper,
+    Platform, Waker, WallpaperWindow, autostart, cache_dir, config_dir, detach_console,
+    set_autostart, set_os_wallpaper,
 };
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

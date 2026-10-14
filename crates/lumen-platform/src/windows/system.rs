@@ -32,6 +32,11 @@ pub fn config_dir() -> Option<PathBuf> {
     std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("Lumen"))
 }
 
+/// `%LOCALAPPDATA%\Lumen\cache`: machine-local, safe to delete (shader cache, thumbnails).
+pub fn cache_dir() -> Option<PathBuf> {
+    std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("Lumen").join("cache"))
+}
+
 /// Per-user `HKCU\…\Run` entry: no admin rights, removable by the user in Task Manager.
 pub fn set_autostart(command: Option<&str>) -> Result<()> {
     // SAFETY: registry calls with valid key handles and buffers; key closed below.

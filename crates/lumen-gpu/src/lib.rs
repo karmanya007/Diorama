@@ -10,6 +10,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 
+pub mod shader;
+
 pub use wgpu;
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -102,6 +104,9 @@ impl Gpu {
             tracing::error!(?reason, %message, "GPU device lost");
             flag.store(true, Ordering::SeqCst);
         });
+
+        // Validation errors would otherwise panic; content-driven pipelines can trigger them.
+        device.on_uncaptured_error(Arc::new(|e| tracing::error!("wgpu: {e}")));
 
         let info = adapter.get_info();
         tracing::info!(adapter = %info.name, backend = ?info.backend, "GPU ready");

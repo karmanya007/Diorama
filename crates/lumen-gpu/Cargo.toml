@@ -7,11 +7,12 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+naga.workspace = true
 pollster.workspace = true
 raw-window-handle.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-wgpu.workspace = true
+wgpu = { workspace = true, features = ["naga-ir"] }
 
 [lints]
 workspace = true

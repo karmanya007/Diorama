@@ -58,6 +58,14 @@ pub struct HlslPair {
     pub fragment: String,
     pub vertex_entry: &'static str,
     pub fragment_entry: &'static str,
+    /// Vertex-stage uniforms in `cbuffer` order (space 0, `b0`).
+    pub vertex_uniforms: Vec<Decl>,
+    /// Fragment-stage uniforms in `cbuffer` order (space 0, `b1`).
+    pub fragment_uniforms: Vec<Decl>,
+    /// Textures in binding order: texture at `t(2i)`, sampler at `s(2i + 1)` (space 1).
+    pub textures: Vec<Decl>,
+    /// Vertex inputs; locations are assigned in this order (see `location_slots`).
+    pub attributes: Vec<Decl>,
 }
 
 fn hlsl_texture_type(sampler_ty: &str) -> Result<&'static str> {
@@ -177,21 +185,35 @@ pub fn to_hlsl(vertex: &str, fragment: &str, defines: &[(String, String)]) -> Re
         fragment,
         vertex_entry: "lumen_vs",
         fragment_entry: "lumen_ps",
+        vertex_uniforms: stage_uniforms(&vs),
+        fragment_uniforms: stage_uniforms(&fs),
+        textures,
+        attributes: vs
+            .decls
+            .iter()
+            .filter(|d| d.qualifier == Qualifier::Attribute)
+            .cloned()
+            .collect(),
     })
 }
 
-fn stage_cbuffer(out: &mut String, stage: &Stage, name: &str, register: u32) {
-    let uniforms: Vec<&Decl> = stage
+fn stage_uniforms(stage: &Stage) -> Vec<Decl> {
+    stage
         .decls
         .iter()
         .filter(|d| d.qualifier == Qualifier::Uniform && !d.is_texture())
-        .collect();
+        .cloned()
+        .collect()
+}
+
+fn stage_cbuffer(out: &mut String, stage: &Stage, name: &str, register: u32) {
+    let uniforms = stage_uniforms(stage);
     if uniforms.is_empty() {
         return;
     }
     let _ = writeln!(out, "cbuffer {name} : register(b{register}, space0) {{");
     for u in uniforms {
-        let _ = writeln!(out, "    {} {}{};", u.ty, u.name, array_suffix(u));
+        let _ = writeln!(out, "    {} {}{};", u.ty, u.name, array_suffix(&u));
     }
     out.push_str("};\n");
 }

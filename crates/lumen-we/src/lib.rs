@@ -6,6 +6,7 @@
 pub mod error;
 pub mod pkg;
 mod reader;
+pub mod scene;
 pub mod shader;
 pub mod tex;
 pub mod tex_decode;

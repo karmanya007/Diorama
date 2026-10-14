@@ -49,3 +49,9 @@ Engine cbuffers are named `g_bufDynamic` (per-draw: matrices, `g_Time`, texture 
 3. Per-layer RTs sized to the layer + effect ping-pong is the core render graph shape (Phase 2).
 4. Span layout = one camera over the bounding box of all outputs, cover-fit. Lumen renders per output (P6/P7) but can reproduce span by giving each output a viewport into the same projection.
 5. Particles use geometry shaders in WE; Lumen uses the shaders' non-GS path (instanced quads), so particle golden comparisons must allow for that.
+
+## Verified by reimplementation (Phase 2)
+Lumen's renderer reproduces frame 289 (scene 1132505365: image layer + waterripple + shake + godrays) at SSIM 0.996 / PSNR 40.9 dB using exactly the structure above:
+- albedo → target A (no blending), ripple A→B, shake B→A, godrays: downsample A→½ FBO1, cast →FBO2, blur x →FBO1, blur y →FBO2, combine (FBO2 + A) → B, composite B with the material's `translucent` blending;
+- effect quads: clip-space positions, MVP `diag(1, 1, 0.0005)` + row 3 `(0, 0, 0.5, 1)`;
+- `g_TextureNResolution` = `(allocated w, h, image w, h)` for textures, `(w, h, w, h)` for render targets.

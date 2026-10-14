@@ -1,0 +1,141 @@
+//! Engine-neutral scene IR (L1, ADR-002).
+//!
+//! Importers (e.g. `lumen-we`) resolve everything format-specific — file
+//! lookups, shader dialect translation, texture decoding, default values —
+//! and hand the renderer this fully resolved description. The renderer never
+//! reads importer formats.
+//!
+//! Conventions match what the captured reference frames show:
+//! - image layers render into their own target, then effect passes ping-pong
+//!   over it, then the result is composited onto the screen;
+//! - colours are gamma-encoded RGBA8 throughout (no sRGB conversion).
+
+use std::collections::BTreeMap;
+
+/// Index into [`Scene::textures`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct TextureId(pub usize);
+
+/// Index into [`Scene::programs`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ProgramId(pub usize);
+
+#[derive(Debug, Clone, Default)]
+pub struct Scene {
+    /// Size of the scene's orthographic projection in scene pixels.
+    pub width: u32,
+    pub height: u32,
+    pub clear_color: [f32; 4],
+    /// Back to front.
+    pub layers: Vec<ImageLayer>,
+    pub textures: Vec<Texture>,
+    pub programs: Vec<ShaderProgram>,
+    /// Things the importer could not represent yet (shown in logs/reports).
+    pub skipped: Vec<String>,
+}
+
+/// A decoded texture (mip 0 only for now).
+#[derive(Debug, Clone)]
+pub struct Texture {
+    pub name: String,
+    /// Allocated size of `rgba` (may be padded beyond the image).
+    pub width: u32,
+    pub height: u32,
+    /// Meaningful image inside the allocation.
+    pub image_width: u32,
+    pub image_height: u32,
+    /// Tightly packed RGBA8, gamma-encoded.
+    pub rgba: Vec<u8>,
+    pub clamp: bool,
+    pub nearest: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Blend {
+    /// Replace destination.
+    #[default]
+    Opaque,
+    /// `src * a + dst * (1 - a)`.
+    Translucent,
+    /// `src * a + dst`.
+    Additive,
+}
+
+#[derive(Debug, Clone)]
+pub struct ImageLayer {
+    pub name: String,
+    /// Centre of the layer in scene pixels (y up).
+    pub origin: [f32; 3],
+    /// Unscaled size in scene pixels; also the size of its render targets.
+    pub size: [u32; 2],
+    pub scale: [f32; 3],
+    /// Euler angles in radians.
+    pub angles: [f32; 3],
+    pub visible: bool,
+    /// How the finished layer is composited onto the scene.
+    pub blend: Blend,
+    /// Draws the layer's own image into its first target.
+    pub albedo: Pass,
+    pub effects: Vec<Effect>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Effect {
+    pub name: String,
+    /// Extra render targets this effect uses, sized `layer size / scale_div`.
+    pub fbos: Vec<Fbo>,
+    pub passes: Vec<Pass>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fbo {
+    pub name: String,
+    pub scale_div: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TextureBinding {
+    Asset(TextureId),
+    /// The layer's current image (its running ping-pong target).
+    Previous,
+    /// A named effect FBO.
+    Fbo(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct Pass {
+    pub program: ProgramId,
+    /// By texture slot (`g_TextureN` ↔ index N).
+    pub textures: BTreeMap<u32, TextureBinding>,
+    /// Write into this FBO instead of the layer's next ping-pong target.
+    pub target: Option<String>,
+    /// Uniform values by uniform name (material constants and defaults,
+    /// already resolved). Engine uniforms (time, matrices, resolutions) are
+    /// supplied by the renderer and override nothing here.
+    pub constants: BTreeMap<String, Vec<f32>>,
+    pub blend: Blend,
+}
+
+/// A translated vertex + fragment shader with the metadata the renderer
+/// needs to feed it.
+#[derive(Debug, Clone)]
+pub struct ShaderProgram {
+    /// Human-readable origin (e.g. `effects/waterripple`).
+    pub name: String,
+    pub vertex_hlsl: String,
+    pub fragment_hlsl: String,
+    pub vertex_entry: String,
+    pub fragment_entry: String,
+    /// Vertex inputs in location order.
+    pub attributes: Vec<Attribute>,
+    /// Texture slot → binding index `i` (texture at `2i`, sampler at `2i + 1`, group 1).
+    pub texture_bindings: BTreeMap<u32, u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attribute {
+    pub name: String,
+    pub location: u32,
+    /// Number of float components (2, 3 or 4).
+    pub components: u32,
+}

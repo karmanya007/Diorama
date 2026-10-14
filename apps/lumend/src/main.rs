@@ -8,6 +8,7 @@
 //! or the GPU is lost (P11). Video never opens an audio device (P10).
 
 mod clock;
+mod headless;
 mod policy;
 mod session;
 mod state;
@@ -34,11 +35,26 @@ use crate::session::{Content, Look, Session, Wallpaper};
 #[command(version, about)]
 struct Args {
     /// Image to show at start-up (PNG, JPEG, …). Optional: `lumen set` can choose later.
-    #[arg(long, conflicts_with = "video")]
+    #[arg(long, conflicts_with_all = ["video", "scene"])]
     image: Option<PathBuf>,
     /// Video to loop at start-up (MP4, …). Muted.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "scene")]
     video: Option<PathBuf>,
+    /// Wallpaper Engine scene project folder (contains `scene.pkg` or `scene.json`).
+    #[arg(long)]
+    scene: Option<PathBuf>,
+    /// Wallpaper Engine `assets` folder (built-in shaders and effects used by scenes).
+    #[arg(long, default_value = headless::DEFAULT_WE_ASSETS)]
+    we_assets: PathBuf,
+    /// Render one frame of `--scene` offscreen to this PNG and exit.
+    #[arg(long, requires = "scene")]
+    frame_out: Option<PathBuf>,
+    /// Scene time in seconds for `--frame-out`.
+    #[arg(long, default_value_t = 0.0)]
+    time: f32,
+    /// With `--frame-out`: also save every intermediate render target beside it.
+    #[arg(long, requires = "frame_out")]
+    dump_targets: bool,
     #[arg(long, value_enum, default_value = "fill")]
     fit: FitArg,
     /// `per-output`: the whole picture on every monitor. `span`: one picture across all monitors.
@@ -99,6 +115,17 @@ enum BackendArg {
     Vulkan,
 }
 
+fn gpu_options(args: &Args) -> GpuOptions {
+    GpuOptions {
+        backend: match args.backend {
+            BackendArg::Auto => Backend::Auto,
+            BackendArg::Dx12 => Backend::Dx12,
+            BackendArg::Vulkan => Backend::Vulkan,
+        },
+        low_power: args.low_power,
+    }
+}
+
 const COVERAGE_INTERVAL: Duration = Duration::from_millis(500);
 const BATTERY_INTERVAL: Duration = Duration::from_secs(5);
 const REBUILD_RETRY: Duration = Duration::from_secs(1);
@@ -111,6 +138,18 @@ fn main() -> Result<()> {
     let config_dir = lumen_platform::config_dir();
     init_logging(args.background, config_dir.as_deref());
     let platform = Platform::new().context("platform init")?;
+
+    if let (Some(scene), Some(out)) = (&args.scene, &args.frame_out) {
+        let assets = args.we_assets.is_dir().then_some(args.we_assets.as_path());
+        return headless::render_to_png(
+            scene,
+            assets,
+            gpu_options(&args),
+            args.time,
+            out,
+            args.dump_targets,
+        );
+    }
 
     if args.list_outputs {
         for o in platform.outputs()? {
@@ -161,14 +200,7 @@ fn main() -> Result<()> {
         .duration
         .map(|s| Instant::now() + Duration::from_secs(s));
 
-    let gpu_options = GpuOptions {
-        backend: match args.backend {
-            BackendArg::Auto => Backend::Auto,
-            BackendArg::Dx12 => Backend::Dx12,
-            BackendArg::Vulkan => Backend::Vulkan,
-        },
-        low_power: args.low_power,
-    };
+    let gpu_options = gpu_options(&args);
     // Games and foreground apps win CPU and GPU scheduling (P5).
     platform.lower_priority();
 

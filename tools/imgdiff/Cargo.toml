@@ -1,0 +1,15 @@
+[package]
+name = "imgdiff"
+description = "Image comparison (SSIM, PSNR, diff images) for golden tests against reference captures."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+image.workspace = true
+
+[lints]
+workspace = true
