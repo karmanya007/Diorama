@@ -101,6 +101,7 @@ fn layer(name: &str, origin: [f32; 2], texture: usize, alpha: f32) -> ImageLayer
         transform: affine(origin, 0.0, [1.0, 1.0]),
         visible: true,
         parallax_depth: [1.0, 1.0],
+        group: None,
         kind: LayerKind::Image,
         color: [1.0, 1.0, 1.0, alpha],
         blend: Blend::Translucent,
@@ -232,5 +233,35 @@ fn parallax_moves_layers_away_from_the_cursor() {
         px(&img, 64, 39, 16),
         [255, 0, 0, 255],
         "right edge moved in"
+    );
+}
+
+#[test]
+fn group_children_render_inside_the_group_before_its_effects() {
+    let Some((gpu, compiler)) = setup() else {
+        return;
+    };
+    let mut s = scene();
+    // A small red child centred on the right (green, inverting) layer.
+    let mut child = layer("child", [48.0, 16.0], 0, 1.0);
+    child.size = [8, 8];
+    child.group = Some(1);
+    s.layers.push(child);
+    let img = render(&gpu, &compiler, &s, [0.5, 0.5]);
+    // Red drawn into the group, then inverted with it → cyan.
+    assert_eq!(
+        px(&img, 64, 48, 16),
+        [0, 255, 255, 255],
+        "child inside group"
+    );
+    assert_eq!(
+        px(&img, 64, 41, 16),
+        [255, 0, 255, 255],
+        "rest of the group"
+    );
+    assert_eq!(
+        px(&img, 64, 16, 16),
+        [255, 0, 0, 255],
+        "other layer untouched"
     );
 }

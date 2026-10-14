@@ -99,17 +99,22 @@ struct GpuPass {
     /// Draw onto the target's current contents instead of clearing it
     /// (blended passes into effect FBOs, e.g. additive bloom upsampling).
     load: bool,
-    /// Scene placement of a pass drawn straight into the scene (moved by
-    /// parallax each frame); `None` for passes into layer targets.
-    placement: Option<[f32; 6]>,
+    /// Placement and camera of a pass drawn into the scene or a group target
+    /// (moved by parallax each frame); `None` for passes into layer targets.
+    placement: Option<([f32; 6], Rows)>,
 }
 
 struct GpuLayer {
     /// Albedo then effect passes. A layer without effects has only its albedo
     /// pass, drawn straight into the scene like WE does (no layer target).
     passes: Vec<GpuPass>,
-    /// Final layer target → scene (layers with effects only).
-    composite: Option<(wgpu::BindGroup, wgpu::Buffer)>,
+    /// Final layer target → its frame (layers with effects only): bind group,
+    /// quad, frame target and frame camera.
+    composite: Option<(wgpu::BindGroup, wgpu::Buffer, usize, Rows)>,
+    /// Layers drawn into this composition layer's target, after the first
+    /// `children_at` passes (its albedo) and before its effects.
+    children: Vec<GpuLayer>,
+    children_at: usize,
     blend: Blend,
     /// Samples `_rt_FullFrameBuffer`: snapshot the scene before running.
     needs_framebuffer: bool,
@@ -179,6 +184,21 @@ const IDENTITY_ROWS: Rows = [
     [0.0, 0.0, 1.0, 0.0],
     [0.0, 0.0, 0.0, 1.0],
 ];
+
+/// Inverse of [`model_rows`] (scene pixels → layer-local pixels).
+fn inverse_model_rows(t: [f32; 6]) -> Rows {
+    let [a, b, c, d, e, f] = t;
+    let det = a * d - b * c;
+    let inv = if det.abs() < 1e-12 { 0.0 } else { 1.0 / det };
+    // Inverse linear part [[d, -b], [-c, a]] / det; translation follows.
+    let (ia, ib, ic, id) = (d * inv, -b * inv, -c * inv, a * inv);
+    [
+        [ia, ib, 0.0, 0.0],
+        [ic, id, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [-(e * ia + f * ic), -(e * ib + f * id), 0.0, 1.0],
+    ]
+}
 
 /// Layer world transform (layer-local pixels, centred → scene pixels).
 fn model_rows(t: [f32; 6]) -> Rows {
@@ -389,8 +409,15 @@ impl SceneRenderer {
             samplers: &samplers,
             uniforms_layout: &uniforms_layout,
         };
-        for layer in scene.layers.iter().filter(|l| l.visible) {
-            if let Some(gpu_layer) = renderer.build_layer(&ctx, layer, &composite.layout) {
+        let top = Frame {
+            target: SCENE,
+            camera: renderer.camera,
+        };
+        for (i, layer) in scene.layers.iter().enumerate() {
+            if layer.visible
+                && layer.group.is_none()
+                && let Some(gpu_layer) = renderer.build_layer(&ctx, i, top, &composite.layout)
+            {
                 renderer.layers.push(gpu_layer);
             }
         }
@@ -412,10 +439,14 @@ impl SceneRenderer {
     fn build_layer(
         &mut self,
         ctx: &BuildContext<'_>,
-        layer: &ir::ImageLayer,
+        index: usize,
+        frame: Frame,
         composite_layout: &wgpu::BindGroupLayout,
     ) -> Option<GpuLayer> {
+        let layer = &ctx.scene.layers[index];
         let device = &ctx.gpu.device;
+        // Drawing into a group target keeps what is already there.
+        let into_group = frame.target != SCENE;
         let needs_framebuffer = std::iter::once(&layer.albedo)
             .chain(layer.composite.as_ref())
             .chain(layer.effects.iter().flat_map(|e| &e.passes))
@@ -431,19 +462,24 @@ impl SceneRenderer {
                 blend: layer.blend,
                 previous: None,
                 fbos: &HashMap::new(),
-                target: SCENE,
+                target: frame.target,
                 geometry: match layer.kind {
                     LayerKind::Fullscreen => Geometry::Fullscreen,
                     LayerKind::Image | LayerKind::Compose => Geometry::Direct {
                         size: layer.size,
                         transform: layer.transform,
+                        camera: frame.camera,
                     },
                 },
                 color: layer.color,
             };
+            let mut pass = self.build_pass(ctx, &plan)?;
+            pass.load |= into_group;
             return Some(GpuLayer {
-                passes: vec![self.build_pass(ctx, &plan)?],
+                passes: vec![pass],
                 composite: None,
+                children: Vec::new(),
+                children_at: 0,
                 blend: layer.blend,
                 needs_framebuffer,
                 size: layer.size,
@@ -483,11 +519,32 @@ impl SceneRenderer {
                 LayerKind::Compose => Geometry::Direct {
                     size: layer.size,
                     transform: layer.transform,
+                    camera: frame.camera,
                 },
             },
             color: layer.color,
         };
         passes.push(self.build_pass(ctx, &albedo)?);
+
+        // Children of a composition layer draw into its target (scene
+        // coordinates mapped onto the layer's rect) before its effects.
+        let group = Frame {
+            target: ping,
+            camera: mat_mul(
+                inverse_model_rows(layer.transform),
+                centred_ortho_rows(layer.size[0] as f32, layer.size[1] as f32),
+            ),
+        };
+        let mut children = Vec::new();
+        for (j, child) in ctx.scene.layers.iter().enumerate() {
+            if child.visible
+                && child.group == Some(index)
+                && let Some(c) = self.build_layer(ctx, j, group, composite_layout)
+            {
+                children.push(c);
+            }
+        }
+        let children_at = passes.len();
 
         for effect in &layer.effects {
             let mut fbos = HashMap::new();
@@ -536,19 +593,23 @@ impl SceneRenderer {
                 blend: layer.blend,
                 previous: Some(current),
                 fbos: &HashMap::new(),
-                target: SCENE,
+                target: frame.target,
                 geometry: Geometry::Direct {
                     size: layer.size,
                     transform: layer.transform,
+                    camera: frame.camera,
                 },
                 // Colour and alpha were applied by the albedo pass.
                 color: [1.0; 4],
             };
-            if let Some(p) = self.build_pass(ctx, &plan) {
+            if let Some(mut p) = self.build_pass(ctx, &plan) {
+                p.load |= into_group;
                 passes.push(p);
                 return Some(GpuLayer {
                     passes,
                     composite: None,
+                    children,
+                    children_at,
                     blend: layer.blend,
                     needs_framebuffer,
                     size: layer.size,
@@ -578,13 +639,15 @@ impl SceneRenderer {
             contents: bytemuck::cast_slice(&composite_quad(
                 layer.size,
                 layer.transform,
-                self.camera,
+                frame.camera,
             )),
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
         Some(GpuLayer {
             passes,
-            composite: Some((composite, composite_vertices)),
+            composite: Some((composite, composite_vertices, frame.target, frame.camera)),
+            children,
+            children_at,
             blend: layer.blend,
             needs_framebuffer,
             size: layer.size,
@@ -685,7 +748,9 @@ impl SceneRenderer {
             Geometry::LayerTarget { size: [w, h], .. } => {
                 (IDENTITY_ROWS, centred_ortho_rows(w as f32, h as f32))
             }
-            Geometry::Direct { transform, .. } => (model_rows(transform), self.camera),
+            Geometry::Direct {
+                transform, camera, ..
+            } => (model_rows(transform), camera),
             Geometry::Effect | Geometry::Fullscreen => (IDENTITY_ROWS, EFFECT_ROWS),
         };
         let mvp = upload_matrix(mat_mul(model, view_projection));
@@ -816,7 +881,9 @@ impl SceneRenderer {
             target: plan.target,
             load: plan.blend != Blend::Opaque && plan.pass.target.is_some(),
             placement: match plan.geometry {
-                Geometry::Direct { transform, .. } if plan.target == SCENE => Some(transform),
+                Geometry::Direct {
+                    transform, camera, ..
+                } => Some((transform, camera)),
                 _ => None,
             },
         })
@@ -912,90 +979,18 @@ impl SceneRenderer {
         let shake = self.shake_offset(inputs.time);
         // The scene target is cleared by whichever pass touches it first.
         let mut scene_load = wgpu::LoadOp::Clear(self.clear);
-        for layer in &mut self.layers {
-            let offset = [
-                shift[0] * layer.parallax_depth[0] + shake[0],
-                shift[1] * layer.parallax_depth[1] + shake[1],
-            ];
-            let moved = offset != layer.offset;
-            if moved {
-                layer.offset = offset;
-                if let Some((_, vertices)) = &layer.composite {
-                    let t = offset_transform(layer.transform, offset);
-                    let quad = composite_quad(layer.size, t, self.camera);
-                    gpu.queue
-                        .write_buffer(vertices, 0, bytemuck::cast_slice(&quad));
-                }
-            }
-            if layer.needs_framebuffer {
-                if let wgpu::LoadOp::Clear(_) = scene_load {
-                    scene_pass(&mut encoder, &self.targets[SCENE].view, scene_load, "clear");
-                    scene_load = wgpu::LoadOp::Load;
-                }
-                let [width, height] = self.targets[SCENE].size;
-                let size = wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                };
-                encoder.copy_texture_to_texture(
-                    self.targets[SCENE].texture.as_image_copy(),
-                    self.targets[FRAMEBUFFER].texture.as_image_copy(),
-                    size,
-                );
-            }
-            for pass in &mut layer.passes {
-                let Some(Some(program)) = self.programs.get(pass.program) else {
-                    continue;
-                };
-                for (layout, buf, gpu_buf) in [
-                    (&program.vs_uniforms, &mut pass.vs_data, &pass.vs_buffer),
-                    (&program.fs_uniforms, &mut pass.fs_data, &pass.fs_buffer),
-                ] {
-                    let mut dirty = layout.write(buf, "g_Time", &[inputs.time]);
-                    if let (true, Some(base)) = (moved, pass.placement) {
-                        let model = model_rows(offset_transform(base, offset));
-                        let mvp = upload_matrix(mat_mul(model, self.camera));
-                        dirty |= layout.write(buf, "g_ModelViewProjectionMatrix", &mvp);
-                        dirty |= layout.write(buf, "g_ModelMatrix", &upload_matrix(model));
-                    }
-                    dirty |= layout.write(buf, "g_Daytime", &[inputs.daytime]);
-                    dirty |= layout.write(buf, "g_PointerPosition", &inputs.pointer);
-                    dirty |= layout.write(buf, "g_PointerPositionLast", &inputs.pointer);
-                    if dirty {
-                        gpu.queue.write_buffer(gpu_buf, 0, buf);
-                    }
-                }
-                let load = if pass.target == SCENE {
-                    std::mem::replace(&mut scene_load, wgpu::LoadOp::Load)
-                } else if pass.load {
-                    wgpu::LoadOp::Load
-                } else {
-                    wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
-                };
-                let mut rp = scene_pass(
-                    &mut encoder,
-                    &self.targets[pass.target].view,
-                    load,
-                    &program.name,
-                );
-                rp.set_pipeline(&pass.pipeline);
-                rp.set_bind_group(0, &pass.uniforms, &[]);
-                rp.set_bind_group(1, &pass.textures, &[]);
-                rp.set_vertex_buffer(0, pass.vertices.slice(..));
-                rp.draw(0..4, 0..1);
-            }
-            if let Some((bind_group, vertices)) = &layer.composite
-                && let Some(pipeline) = self.composite_pipelines.get(&layer.blend)
-            {
-                let load = std::mem::replace(&mut scene_load, wgpu::LoadOp::Load);
-                let mut rp = scene_pass(&mut encoder, &self.targets[SCENE].view, load, "composite");
-                rp.set_pipeline(pipeline);
-                rp.set_bind_group(0, bind_group, &[]);
-                rp.set_vertex_buffer(0, vertices.slice(..));
-                rp.draw(0..4, 0..1);
-            }
+        let mut layers = std::mem::take(&mut self.layers);
+        let mut frame = FrameState {
+            gpu,
+            inputs,
+            shift,
+            shake,
+            scene_load: &mut scene_load,
+        };
+        for layer in &mut layers {
+            self.encode_layer(&mut encoder, layer, &mut frame);
         }
+        self.layers = layers;
         if let wgpu::LoadOp::Clear(_) = scene_load {
             scene_pass(&mut encoder, &self.targets[SCENE].view, scene_load, "clear");
         }
@@ -1003,7 +998,140 @@ impl SceneRenderer {
     }
 }
 
+/// Where a layer is drawn: the scene, or a composition group's target.
+#[derive(Clone, Copy)]
+struct Frame {
+    target: usize,
+    camera: Rows,
+}
+
+/// Per-frame state shared while encoding layers.
+struct FrameState<'a> {
+    gpu: &'a Gpu,
+    inputs: &'a FrameInputs,
+    shift: [f32; 2],
+    shake: [f32; 2],
+    scene_load: &'a mut wgpu::LoadOp<wgpu::Color>,
+}
+
 impl SceneRenderer {
+    /// Encodes one layer: its passes, its children (composition groups) after
+    /// its albedo, then its composite into its frame.
+    fn encode_layer(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        layer: &mut GpuLayer,
+        f: &mut FrameState<'_>,
+    ) {
+        let gpu = f.gpu;
+        let offset = [
+            f.shift[0] * layer.parallax_depth[0] + f.shake[0],
+            f.shift[1] * layer.parallax_depth[1] + f.shake[1],
+        ];
+        let moved = offset != layer.offset;
+        if moved {
+            layer.offset = offset;
+            if let Some((_, vertices, _, camera)) = &layer.composite {
+                let t = offset_transform(layer.transform, offset);
+                let quad = composite_quad(layer.size, t, *camera);
+                gpu.queue
+                    .write_buffer(vertices, 0, bytemuck::cast_slice(&quad));
+            }
+        }
+        if layer.needs_framebuffer {
+            if let wgpu::LoadOp::Clear(_) = *f.scene_load {
+                scene_pass(encoder, &self.targets[SCENE].view, *f.scene_load, "clear");
+                *f.scene_load = wgpu::LoadOp::Load;
+            }
+            let [width, height] = self.targets[SCENE].size;
+            let size = wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            };
+            encoder.copy_texture_to_texture(
+                self.targets[SCENE].texture.as_image_copy(),
+                self.targets[FRAMEBUFFER].texture.as_image_copy(),
+                size,
+            );
+        }
+        let children_at = layer.children_at.min(layer.passes.len());
+        let (before, after) = layer.passes.split_at_mut(children_at);
+        for pass in before {
+            self.encode_pass(encoder, pass, moved, offset, f);
+        }
+        for child in &mut layer.children {
+            self.encode_layer(encoder, child, f);
+        }
+        for pass in after {
+            self.encode_pass(encoder, pass, moved, offset, f);
+        }
+        if let Some((bind_group, vertices, target, _)) = &layer.composite
+            && let Some(pipeline) = self.composite_pipelines.get(&layer.blend)
+        {
+            let load = if *target == SCENE {
+                std::mem::replace(f.scene_load, wgpu::LoadOp::Load)
+            } else {
+                wgpu::LoadOp::Load
+            };
+            let mut rp = scene_pass(encoder, &self.targets[*target].view, load, "composite");
+            rp.set_pipeline(pipeline);
+            rp.set_bind_group(0, bind_group, &[]);
+            rp.set_vertex_buffer(0, vertices.slice(..));
+            rp.draw(0..4, 0..1);
+        }
+    }
+
+    fn encode_pass(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        pass: &mut GpuPass,
+        moved: bool,
+        offset: [f32; 2],
+        f: &mut FrameState<'_>,
+    ) {
+        let Some(Some(program)) = self.programs.get(pass.program) else {
+            return;
+        };
+        let inputs = f.inputs;
+        for (layout, buf, gpu_buf) in [
+            (&program.vs_uniforms, &mut pass.vs_data, &pass.vs_buffer),
+            (&program.fs_uniforms, &mut pass.fs_data, &pass.fs_buffer),
+        ] {
+            let mut dirty = layout.write(buf, "g_Time", &[inputs.time]);
+            if let (true, Some((base, camera))) = (moved, pass.placement) {
+                let model = model_rows(offset_transform(base, offset));
+                let mvp = upload_matrix(mat_mul(model, camera));
+                dirty |= layout.write(buf, "g_ModelViewProjectionMatrix", &mvp);
+                dirty |= layout.write(buf, "g_ModelMatrix", &upload_matrix(model));
+            }
+            dirty |= layout.write(buf, "g_Daytime", &[inputs.daytime]);
+            dirty |= layout.write(buf, "g_PointerPosition", &inputs.pointer);
+            dirty |= layout.write(buf, "g_PointerPositionLast", &inputs.pointer);
+            if dirty {
+                f.gpu.queue.write_buffer(gpu_buf, 0, buf);
+            }
+        }
+        let load = if pass.target == SCENE {
+            std::mem::replace(f.scene_load, wgpu::LoadOp::Load)
+        } else if pass.load {
+            wgpu::LoadOp::Load
+        } else {
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+        };
+        let mut rp = scene_pass(
+            encoder,
+            &self.targets[pass.target].view,
+            load,
+            &program.name,
+        );
+        rp.set_pipeline(&pass.pipeline);
+        rp.set_bind_group(0, &pass.uniforms, &[]);
+        rp.set_bind_group(1, &pass.textures, &[]);
+        rp.set_vertex_buffer(0, pass.vertices.slice(..));
+        rp.draw(0..4, 0..1);
+    }
+
     /// Scene-space parallax shift for depth 1 this frame (smoothed cursor).
     fn parallax_shift(&mut self, inputs: &FrameInputs) -> [f32; 2] {
         let Some(p) = self.parallax else {
@@ -1134,8 +1262,13 @@ enum Geometry {
     /// ortho MVP; `transform` places it in the scene for lighting
     /// (`g_AltModelMatrix`, WE's PRELIGHTING path).
     LayerTarget { size: [u32; 2], transform: [f32; 6] },
-    /// Albedo placed in the scene by `transform`: centred quad.
-    Direct { size: [u32; 2], transform: [f32; 6] },
+    /// Albedo placed by `transform` and drawn through `camera` (the scene's,
+    /// or a composition group's when drawing into its target): centred quad.
+    Direct {
+        size: [u32; 2],
+        transform: [f32; 6],
+        camera: Rows,
+    },
     /// Effect pass: clip-space quad.
     Effect,
     /// Albedo of a fullscreen layer: clip-space quad, no padded-UV crop.

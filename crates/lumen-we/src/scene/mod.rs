@@ -55,6 +55,7 @@ pub fn import_with(vfs: &Vfs, limits: &Limits, properties: &Properties) -> Resul
         program_uniforms: HashMap::new(),
         engine: shader::EngineContext::default(),
         zoom: 1.0,
+        groups: HashMap::new(),
     };
     importer.scene_header(&json);
     let objects: Vec<&Value> = json["objects"].as_array().into_iter().flatten().collect();
@@ -96,6 +97,20 @@ impl SceneGraph {
             })
             .collect();
         Self { nodes }
+    }
+
+    /// Parent ids from the nearest up (bounded against cycles).
+    fn ancestors(&self, object: &Value) -> Vec<i64> {
+        let mut out = Vec::new();
+        let mut parent = integer(object.get("parent"));
+        while let Some(id) = parent {
+            if out.len() >= 64 || out.contains(&id) {
+                break;
+            }
+            out.push(id);
+            parent = self.nodes.get(&id).and_then(|n| n.2);
+        }
+        out
     }
 
     /// World transform and effective visibility (hidden parents hide children).
@@ -142,6 +157,8 @@ struct Importer<'a> {
     engine: shader::EngineContext,
     /// `general.zoom`.
     zoom: f32,
+    /// Object id → layer index of composition layers (groups for children).
+    groups: HashMap<i64, usize>,
 }
 
 /// A synthetic pass of an engine post-processing chain (bloom).
@@ -451,6 +468,7 @@ impl Importer<'_> {
             transform: lumen_scene::affine(centre, 0.0, [1.0, 1.0]),
             visible: true,
             parallax_depth: [0.0, 0.0],
+            group: None,
             kind: LayerKind::Fullscreen,
             color: [1.0; 4],
             blend: Blend::Opaque,
@@ -463,6 +481,15 @@ impl Importer<'_> {
             }],
         });
         Ok(())
+    }
+
+    /// Nearest ancestor that is a composition layer: WE renders children of
+    /// a composition layer into it (capture of 3343525585).
+    fn group_of(&self, object: &Value, graph: &SceneGraph) -> Option<usize> {
+        graph
+            .ancestors(object)
+            .into_iter()
+            .find_map(|id| self.groups.get(&id).copied())
     }
 
     fn light(&mut self, object: &Value, graph: &SceneGraph) {
@@ -611,6 +638,7 @@ impl Importer<'_> {
             transform,
             visible,
             parallax_depth: vec_n(object.get("parallaxDepth"), [1.0, 1.0]),
+            group: self.group_of(object, graph),
             kind: if fullscreen {
                 LayerKind::Fullscreen
             } else if passthrough {
@@ -654,6 +682,11 @@ impl Importer<'_> {
         }
         // A passthrough layer without effects redraws what is already there.
         if !(passthrough && layer.effects.is_empty()) {
+            if layer.kind == LayerKind::Compose
+                && let Some(id) = integer(object.get("id"))
+            {
+                self.groups.insert(id, self.scene.layers.len());
+            }
             self.scene.layers.push(layer);
         }
         Ok(())

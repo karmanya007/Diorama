@@ -117,6 +117,10 @@ pub struct ImageLayer {
     pub transform: [f32; 6],
     pub visible: bool,
     pub kind: LayerKind,
+    /// Index (in [`Scene::layers`]) of the composition layer this layer is
+    /// drawn into instead of the scene; it renders right after that layer's
+    /// albedo and before its effects.
+    pub group: Option<usize>,
     /// `parallaxDepth`: how strongly the layer follows the camera parallax.
     pub parallax_depth: [f32; 2],
     /// Object colour and alpha (`g_Color4`; `g_Color`/`g_Alpha` for solid layers).
