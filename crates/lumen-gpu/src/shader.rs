@@ -6,6 +6,8 @@
 //! SPIR-V is cached by a hash of (compiler flags, entry, profile, source), so
 //! DXC only runs the first time a shader variant is seen.
 
+pub use naga;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -226,8 +228,15 @@ impl UniformLayout {
         let naga::TypeInner::Struct { members, span } = &ty.inner else {
             return None;
         };
+        // wgpu validates bindings against naga's layout of the type, which can
+        // exceed the declared span (std140 padding of trailing arrays).
+        let mut layouter = naga::proc::Layouter::default();
+        let laid_out = layouter
+            .update(module.to_ctx())
+            .ok()
+            .map_or(0, |()| layouter[var.ty].size);
         let mut out = Self {
-            size: *span,
+            size: (*span).max(laid_out),
             members: Vec::new(),
         };
         for m in members {

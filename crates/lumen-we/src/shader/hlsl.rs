@@ -114,6 +114,68 @@ fn rewrite(body: &str, renamed: &[&str]) -> String {
     out
 }
 
+/// Type names a top-level variable declaration can start with.
+const GLOBAL_TYPES: [&str; 21] = [
+    "float", "int", "uint", "bool", "vec2", "vec3", "vec4", "ivec2", "ivec3", "ivec4", "uvec2",
+    "uvec3", "uvec4", "mat2", "mat3", "mat4", "mat4x3", "float2", "float3", "float4", "float4x4",
+];
+
+/// In HLSL every global that is not `static` is a uniform: DXC gathers them
+/// into an implicit `$Globals` buffer at `b0`, colliding with our vertex
+/// cbuffer. GLSL globals (`const` or not) are plain values, so mark
+/// top-level variable declarations `static`.
+fn staticize_globals(body: &str) -> String {
+    let mut out = String::with_capacity(body.len() + 64);
+    // Brace and parenthesis depth: continuation lines of a multi-line
+    // parameter list (`float radius, ...`) look like declarations too.
+    let (mut braces, mut parens) = (0i32, 0i32);
+    for line in body.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+        if braces == 0 && parens == 0 && is_global_variable(trimmed) {
+            let indent = &line[..line.len() - trimmed.len()];
+            out.push_str(indent);
+            out.push_str("static ");
+            out.push_str(trimmed);
+        } else {
+            out.push_str(line);
+        }
+        for c in line.chars() {
+            match c {
+                '{' => braces += 1,
+                '}' => braces -= 1,
+                '(' => parens += 1,
+                ')' => parens -= 1,
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+fn is_global_variable(line: &str) -> bool {
+    if line.starts_with("static ") || line.starts_with('#') {
+        return false;
+    }
+    let rest = line.strip_prefix("const ").unwrap_or(line);
+    let mut words = rest.split_whitespace();
+    let Some(ty) = words.next() else {
+        return false;
+    };
+    if !GLOBAL_TYPES.contains(&ty) {
+        return false;
+    }
+    // `type name = ...;` / `type name[3];`, not `type name(args)` (a function).
+    let after_type = rest[ty.len()..].trim_start();
+    let name_end = after_type
+        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .unwrap_or(after_type.len());
+    if name_end == 0 {
+        return false;
+    }
+    let tail = after_type[name_end..].trim_start();
+    tail.starts_with('=') || tail.starts_with(';') || tail.starts_with('[') || tail.starts_with(',')
+}
+
 fn builtin_semantic(name: &str) -> Option<&'static str> {
     match name {
         "gl_InstanceID" => Some("SV_InstanceID"),
@@ -281,7 +343,7 @@ fn emit_vertex(
     }
     out.push_str("static float4 lumen_Position;\n");
 
-    out.push_str(&rewrite(&vs.body, renamed));
+    out.push_str(&staticize_globals(&rewrite(&vs.body, renamed)));
 
     out.push_str("\nLumenVsOut lumen_vs(LumenVsIn lumen_in) {\n");
     for a in &attributes {
@@ -386,7 +448,7 @@ fn emit_fragment(
     }
     out.push_str("static float4 lumen_FragColor;\n");
 
-    out.push_str(&rewrite(&fs.body, renamed));
+    out.push_str(&staticize_globals(&rewrite(&fs.body, renamed)));
 
     out.push_str("\nfloat4 lumen_ps(LumenPsIn lumen_in) : SV_Target0 {\n");
     for m in &members {
@@ -399,6 +461,21 @@ fn emit_fragment(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn top_level_variables_become_static() {
+        let body = "const mat3 M = mat3(a, b, c);\nfloat g = 1.0;\nvec3 f(vec3 x) {\n    float local = 2.0;\n    return x;\n}\nconst float K[2] = {1.0, 2.0};\n";
+        let out = staticize_globals(body);
+        assert!(out.contains("static const mat3 M"));
+        assert!(out.contains("static float g = 1.0;"));
+        assert!(out.contains("static const float K[2]"));
+        assert!(out.contains("vec3 f(vec3 x) {"));
+        assert!(out.contains("    float local = 2.0;"));
+        assert!(!out.contains("static vec3 f"));
+        let signature =
+            "vec3 Light(vec3 n,\n    float radius, float exponent)\n{\n    return n;\n}\n";
+        assert_eq!(staticize_globals(signature), signature);
+    }
 
     #[test]
     fn emits_entry_points_and_bindings() {

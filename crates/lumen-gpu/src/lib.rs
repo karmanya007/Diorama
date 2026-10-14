@@ -106,7 +106,7 @@ impl Gpu {
         });
 
         // Validation errors would otherwise panic; content-driven pipelines can trigger them.
-        device.on_uncaptured_error(Arc::new(|e| tracing::error!("wgpu: {e}")));
+        device.on_uncaptured_error(Arc::new(|e| tracing::error!("wgpu: {e:?}")));
 
         let info = adapter.get_info();
         tracing::info!(adapter = %info.name, backend = ?info.backend, "GPU ready");

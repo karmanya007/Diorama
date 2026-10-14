@@ -17,6 +17,9 @@ struct Args {
     /// Write |reference − candidate| × 4 here.
     #[arg(long)]
     diff: Option<PathBuf>,
+    /// Print mean RGBA of both images (spot empty or black targets).
+    #[arg(long)]
+    stats: bool,
     /// Write reference | candidate side by side (half size) here.
     #[arg(long)]
     side_by_side: Option<PathBuf>,
@@ -32,6 +35,18 @@ fn main() -> Result<()> {
     let args = Args::parse();
     let reference = open(&args.reference)?;
     let mut candidate = open(&args.candidate)?;
+    if args.stats {
+        for (name, img) in [("reference", &reference), ("candidate", &candidate)] {
+            let n = f64::from(img.width()) * f64::from(img.height());
+            let mut sum = [0f64; 4];
+            for p in img.pixels() {
+                for (s, c) in sum.iter_mut().zip(p.0) {
+                    *s += f64::from(c);
+                }
+            }
+            println!("{name}: mean RGBA {:?}", sum.map(|s| (s / n).round()));
+        }
+    }
     let (w, h) = reference.dimensions();
     if args.cover || candidate.dimensions() != (w, h) {
         candidate = imgdiff::cover(&candidate, w, h);

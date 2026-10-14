@@ -1067,6 +1067,22 @@ fn build_program(
     let fs = compiler
         .compile(&p.fragment_hlsl, &p.fragment_entry, Stage::Fragment)
         .map_err(|e| e.to_string())?;
+    // Anything besides our per-stage cbuffer (e.g. DXC's implicit `$Globals`)
+    // would fail validation at draw time and void the whole frame.
+    for (module, stage, binding) in [(&vs, "vertex", 0), (&fs, "fragment", 1)] {
+        for (_, v) in module.global_variables.iter() {
+            if v.space == lumen_gpu::shader::naga::AddressSpace::Uniform
+                && v.binding
+                    .as_ref()
+                    .is_none_or(|b| b.group != 0 || b.binding != binding)
+            {
+                return Err(format!(
+                    "{stage} shader has unexpected uniform buffer {:?}",
+                    v.name.as_deref().unwrap_or("?")
+                ));
+            }
+        }
+    }
     let vs_uniforms = UniformLayout::reflect(&vs, 0, 0).unwrap_or_default();
     let fs_uniforms = UniformLayout::reflect(&fs, 0, 1).unwrap_or_default();
     let texture_count = p.texture_bindings.values().max().map_or(0, |m| m + 1);
