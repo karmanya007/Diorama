@@ -94,6 +94,10 @@ pub struct ImageLayer {
     pub blend: Blend,
     /// Draws the layer's own image into its first target.
     pub albedo: Pass,
+    /// Custom composite for layers with effects (e.g. a colour blend mode):
+    /// placed like a direct layer, sampling the finished layer image as
+    /// `Previous`. `None` = plain blended copy.
+    pub composite: Option<Pass>,
     pub effects: Vec<Effect>,
 }
 

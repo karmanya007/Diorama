@@ -374,6 +374,7 @@ impl SceneRenderer {
     ) -> Option<GpuLayer> {
         let device = &ctx.gpu.device;
         let needs_framebuffer = std::iter::once(&layer.albedo)
+            .chain(layer.composite.as_ref())
             .chain(layer.effects.iter().flat_map(|e| &e.passes))
             .any(|p| {
                 p.textures
@@ -477,6 +478,31 @@ impl SceneRenderer {
                         current = target;
                     }
                 }
+            }
+        }
+
+        if let Some(pass) = &layer.composite {
+            let plan = PassPlan {
+                pass,
+                blend: layer.blend,
+                previous: Some(current),
+                fbos: &HashMap::new(),
+                target: SCENE,
+                geometry: Geometry::Direct {
+                    size: layer.size,
+                    transform: layer.transform,
+                },
+                // Colour and alpha were applied by the albedo pass.
+                color: [1.0; 4],
+            };
+            if let Some(p) = self.build_pass(ctx, &plan) {
+                passes.push(p);
+                return Some(GpuLayer {
+                    passes,
+                    composite: None,
+                    blend: layer.blend,
+                    needs_framebuffer,
+                });
             }
         }
 

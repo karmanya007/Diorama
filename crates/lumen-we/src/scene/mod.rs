@@ -265,6 +265,7 @@ impl Importer<'_> {
             color: [1.0; 4],
             blend: Blend::Opaque,
             albedo,
+            composite: None,
             effects: vec![Effect {
                 name: "bloom".into(),
                 fbos,
@@ -356,6 +357,13 @@ impl Importer<'_> {
         if has_effects && !fullscreen {
             spec.combos.insert("PRELIGHTING".to_owned(), 1);
         }
+        // colorBlendMode N = BLENDMODE combo N: the albedo shader blends with
+        // _rt_FullFrameBuffer at its screen position, which is only the scene
+        // position when the layer draws straight into the scene.
+        let blend_mode = integer(object.get("colorBlendMode")).unwrap_or(0);
+        if blend_mode != 0 && !has_effects {
+            spec.combos.insert("BLENDMODE".to_owned(), blend_mode);
+        }
         let composite_blend = spec.blend;
         let albedo = self.pass(&spec, None)?;
 
@@ -413,11 +421,26 @@ impl Importer<'_> {
             blend: composite_blend,
             albedo,
             effects: Vec::new(),
+            composite: None,
         };
-        if integer(object.get("colorBlendMode")).unwrap_or(0) != 0 {
-            self.skip("layer colorBlendMode".into());
+        if blend_mode != 0 && has_effects {
+            // WE composites layers through a genericimage material; give it
+            // the blend mode and the finished layer image.
+            let spec = PassSpec {
+                shader: "genericimage2".into(),
+                blend: layer.blend,
+                combos: BTreeMap::from([("BLENDMODE".to_owned(), blend_mode)]),
+                textures: BTreeMap::new(),
+                constants: Vec::new(),
+            };
+            match self.pass(&spec, None) {
+                Ok(mut pass) => {
+                    pass.textures.insert(0, TextureBinding::Previous);
+                    layer.composite = Some(pass);
+                }
+                Err(e) => self.skip(format!("colorBlendMode composite: {e}")),
+            }
         }
-
         for effect in object["effects"].as_array().into_iter().flatten() {
             if !boolean(effect.get("visible"), true) {
                 continue;
