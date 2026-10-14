@@ -87,8 +87,10 @@ pub struct Texture {
     /// Meaningful image inside the allocation.
     pub image_width: u32,
     pub image_height: u32,
-    /// Tightly packed RGBA8, gamma-encoded.
+    /// Tightly packed RGBA8, gamma-encoded (mip 0).
     pub rgba: Vec<u8>,
+    /// Further mip levels, each half the previous size (at least 1×1).
+    pub mips: Vec<Vec<u8>>,
     pub clamp: bool,
     pub nearest: bool,
 }

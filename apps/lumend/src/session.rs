@@ -8,7 +8,7 @@ use lumen_ipc::{Fit, Layout, MediaKind};
 use lumen_media::{Nv12Frame, VideoPlayer};
 use lumen_platform::{Coverage, OutputInfo, Platform, WallpaperWindow};
 use lumen_render::scene::{FrameInputs, SceneRenderer};
-use lumen_render::{FitMode, ImageBlit, Nv12Planes, Rect, VideoBlit, display_size};
+use lumen_render::{FitMode, ImageBlit, Nv12Planes, Rect, VideoBlit, display_size, render_size};
 
 /// How the picture is placed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,8 +31,28 @@ impl Look {
 pub enum Content {
     Image(image::RgbaImage),
     Video(VideoPlayer),
-    /// Imported scene; GPU resources are rebuilt from it with every session.
-    Scene(Box<lumen_scene::Scene>),
+    /// A scene project. Its imported form (decoded textures, often hundreds
+    /// of MB) is only held until the GPU has it; a rebuild re-imports.
+    Scene(SceneSource),
+}
+
+pub struct SceneSource {
+    dir: PathBuf,
+    we_assets: Option<PathBuf>,
+    imported: std::cell::RefCell<Option<Box<lumen_scene::Scene>>>,
+}
+
+impl SceneSource {
+    /// The imported scene: the copy from loading if still held, else a fresh import.
+    fn take(&self) -> Result<Box<lumen_scene::Scene>> {
+        match self.imported.borrow_mut().take() {
+            Some(scene) => Ok(scene),
+            None => Ok(Box::new(crate::headless::load_scene(
+                &self.dir,
+                self.we_assets.as_deref(),
+            )?)),
+        }
+    }
 }
 
 /// The wallpaper the user asked for.
@@ -76,9 +96,14 @@ impl Wallpaper {
             MediaKind::Video => Content::Video(
                 VideoPlayer::spawn(path).with_context(|| format!("opening {}", path.display()))?,
             ),
-            MediaKind::Scene => {
-                Content::Scene(Box::new(crate::headless::load_scene(path, we_assets)?))
-            }
+            // Import now so a broken scene is reported by `lumen set`.
+            MediaKind::Scene => Content::Scene(SceneSource {
+                dir: path.to_path_buf(),
+                we_assets: we_assets.map(Path::to_path_buf),
+                imported: std::cell::RefCell::new(Some(Box::new(crate::headless::load_scene(
+                    path, we_assets,
+                )?))),
+            }),
         };
         Ok(Self {
             path: path.to_path_buf(),
@@ -173,9 +198,23 @@ impl Session {
                 let info = player.info();
                 Renderer::Video(VideoBlit::new(gpu, format, info.width, info.height))
             }
-            Content::Scene(scene) => {
+            Content::Scene(source) => {
+                let scene = source.take()?;
                 let compiler = crate::headless::shader_compiler()?;
-                let renderer = SceneRenderer::new(gpu, scene, &compiler)?;
+                // Composite at the size the monitors actually show (P12),
+                // like WE rendering straight into its swapchain.
+                let sizes: Vec<(u32, u32)> = match look.layout {
+                    Layout::Span => vec![canvas.size()],
+                    Layout::PerOutput => outputs
+                        .iter()
+                        .map(|o| (o.info.width, o.info.height))
+                        .collect(),
+                };
+                let max = gpu.device.limits().max_texture_dimension_2d;
+                let (w, h) = render_size(look.fit_mode(), (scene.width, scene.height), &sizes, max);
+                let renderer = SceneRenderer::new(gpu, &scene, &compiler, Some([w, h]))?;
+                // CPU copies of textures are not needed once uploaded.
+                drop(scene);
                 let [w, h] = renderer.size();
                 let blit = ImageBlit::from_view(gpu, format, renderer.output(), w, h);
                 Renderer::Scene {

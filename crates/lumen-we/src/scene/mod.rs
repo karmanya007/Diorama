@@ -984,6 +984,7 @@ impl Importer<'_> {
             .first_mip()
             .ok_or_else(|| unsupported("texture without mips", name))?;
         let image = mip_to_rgba8(&tex, mip)?;
+        let mips = mip_chain(&tex, image.width, image.height, &image.pixels);
         let h = &tex.header;
         Ok(Texture {
             name: stem.to_owned(),
@@ -992,10 +993,62 @@ impl Importer<'_> {
             image_width: h.image_width.min(image.width).max(1),
             image_height: h.image_height.min(image.height).max(1),
             rgba: image.pixels,
+            mips,
             clamp: h.flags.contains(TexFlags::CLAMP_UVS),
             nearest: h.flags.contains(TexFlags::NO_INTERPOLATION),
         })
     }
+}
+
+/// Mip levels below 0: WE's own when the TEX carries a full chain, else a
+/// 2×2 box-filtered chain (encoded PNG/JPEG textures have one level).
+fn mip_chain(tex: &Tex, width: u32, height: u32, level0: &[u8]) -> Vec<Vec<u8>> {
+    let stored = tex
+        .images
+        .first()
+        .map(|i| i.mips.as_slice())
+        .unwrap_or_default();
+    let mut out = Vec::new();
+    let (mut w, mut h) = (width, height);
+    for mip in stored.iter().skip(1) {
+        let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
+        match mip_to_rgba8(tex, mip) {
+            Ok(img) if (img.width, img.height) == (nw, nh) => out.push(img.pixels),
+            _ => break,
+        }
+        (w, h) = (nw, nh);
+    }
+    if out.is_empty() && stored.len() <= 1 {
+        let mut prev = level0.to_vec();
+        while w > 1 || h > 1 {
+            let next = box_halve(&prev, w, h);
+            (w, h) = ((w / 2).max(1), (h / 2).max(1));
+            out.push(next.clone());
+            prev = next;
+        }
+    }
+    out
+}
+
+/// One 2×2 box-filter mip step of tightly packed RGBA8.
+fn box_halve(src: &[u8], w: u32, h: u32) -> Vec<u8> {
+    let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
+    let (w, h) = (w as usize, h as usize);
+    let mut out = Vec::with_capacity(nw as usize * nh as usize * 4);
+    for y in 0..nh as usize {
+        for x in 0..nw as usize {
+            for c in 0..4 {
+                let mut sum = 0u32;
+                for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                    let sx = (2 * x + dx).min(w - 1);
+                    let sy = (2 * y + dy).min(h - 1);
+                    sum += u32::from(src.get((sy * w + sx) * 4 + c).copied().unwrap_or(0));
+                }
+                out.push(((sum + 2) / 4) as u8);
+            }
+        }
+    }
+    out
 }
 
 fn unsupported(what: &'static str, value: &str) -> Error {
@@ -1053,6 +1106,13 @@ fn lookup<'v>(map: &'v serde_json::Map<String, Value>, key: &str) -> Option<&'v 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn box_halving_averages_and_handles_odd_sizes() {
+        let src = [0, 0, 0, 255, 100, 100, 100, 255, 200, 200, 200, 255];
+        // 3×1 → 1×1 averages the first 2×2 block (clamped at the edges).
+        assert_eq!(box_halve(&src, 3, 1), vec![50, 50, 50, 255]);
+    }
 
     #[test]
     fn alignment_moves_the_quad_off_its_anchor() {

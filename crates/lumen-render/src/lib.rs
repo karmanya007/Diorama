@@ -96,8 +96,26 @@ pub fn uv_transform(
 /// `mode`, so it can be downscaled once on the CPU before upload (sharp
 /// sampling without mipmaps, and less VRAM — P12).
 pub fn display_size(mode: FitMode, image: (u32, u32), targets: &[(u32, u32)]) -> (u32, u32) {
+    scaled(image, fit_factor(mode, image, targets).min(1.0))
+}
+
+/// Size to render a scene at so that it covers its largest on-screen use
+/// exactly (WE renders straight into its swapchain): may be larger than
+/// the scene's own size, never larger than `max_dim` on either side.
+pub fn render_size(
+    mode: FitMode,
+    scene: (u32, u32),
+    targets: &[(u32, u32)],
+    max_dim: u32,
+) -> (u32, u32) {
+    let (w, h) = (scene.0.max(1) as f32, scene.1.max(1) as f32);
+    let limit = max_dim as f32 / w.max(h);
+    scaled(scene, fit_factor(mode, scene, targets).min(limit))
+}
+
+fn fit_factor(mode: FitMode, image: (u32, u32), targets: &[(u32, u32)]) -> f32 {
     let (iw, ih) = (image.0.max(1) as f32, image.1.max(1) as f32);
-    let factor = targets
+    targets
         .iter()
         .map(|&(tw, th)| {
             let (sx, sy) = (tw as f32 / iw, th as f32 / ih);
@@ -108,13 +126,15 @@ pub fn display_size(mode: FitMode, image: (u32, u32), targets: &[(u32, u32)]) ->
             }
         })
         .fold(0.0_f32, f32::max)
-        .min(1.0);
+}
+
+fn scaled(image: (u32, u32), factor: f32) -> (u32, u32) {
     if factor <= 0.0 {
         return image;
     }
     (
-        ((iw * factor).round() as u32).max(1),
-        ((ih * factor).round() as u32).max(1),
+        ((image.0 as f32 * factor).round() as u32).max(1),
+        ((image.1 as f32 * factor).round() as u32).max(1),
     )
 }
 
@@ -452,6 +472,26 @@ mod tests {
         let canvas_left = op[0];
         let canvas_right = om[0] + sm[0];
         assert!(((canvas_right - canvas_left) - 3375.0 / 3840.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn render_size_follows_outputs_both_ways() {
+        // 4K scene on this machine's 1080p + portrait monitors (per output):
+        // the portrait one needs 1920 px of height → 3413×1920.
+        let outputs = [(1920, 1080), (1080, 1920)];
+        assert_eq!(
+            render_size(FitMode::Fill, (3840, 2160), &outputs, 8192),
+            (3413, 1920)
+        );
+        // 1080p scene on a 4K monitor is rendered at 4K, capped by the device.
+        assert_eq!(
+            render_size(FitMode::Fill, (1920, 1080), &[(3840, 2160)], 8192),
+            (3840, 2160)
+        );
+        assert_eq!(
+            render_size(FitMode::Fill, (1920, 1080), &[(3840, 2160)], 2048),
+            (2048, 1152)
+        );
     }
 
     #[test]

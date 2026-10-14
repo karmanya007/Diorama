@@ -61,7 +61,7 @@ pub fn render_to_png(
     let gpu = Gpu::new(gpu_options)?;
     let compiler = shader_compiler()?;
     let started = Instant::now();
-    let mut renderer = SceneRenderer::new(&gpu, &scene, &compiler)?;
+    let mut renderer = SceneRenderer::new(&gpu, &scene, &compiler, None)?;
     tracing::info!(ms = started.elapsed().as_millis(), "scene renderer built");
     renderer.render(
         &gpu,

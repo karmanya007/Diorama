@@ -281,14 +281,20 @@ enum Source {
 }
 
 impl SceneRenderer {
+    /// `output` is the size of the composited image (default: the scene's
+    /// own size); layer targets keep their layer sizes either way.
     pub fn new(
         gpu: &Gpu,
         scene: &ir::Scene,
         compiler: &ShaderCompiler,
+        output: Option<[u32; 2]>,
     ) -> Result<Self, SceneError> {
         if scene.width == 0 || scene.height == 0 {
             return Err(SceneError::Empty);
         }
+        let output = output
+            .unwrap_or([scene.width, scene.height])
+            .map(|v| v.max(1));
         let device = &gpu.device;
         let format = if scene.hdr { HDR_FORMAT } else { FORMAT };
         let samplers: Vec<wgpu::Sampler> = SAMPLERS
@@ -300,6 +306,11 @@ impl SceneRenderer {
                     address_mode_v: *address,
                     mag_filter: *filter,
                     min_filter: *filter,
+                    // Trilinear for minified textures (WE ships mip chains).
+                    mipmap_filter: match filter {
+                        wgpu::FilterMode::Linear => wgpu::MipmapFilterMode::Linear,
+                        wgpu::FilterMode::Nearest => wgpu::MipmapFilterMode::Nearest,
+                    },
                     ..Default::default()
                 })
             })
@@ -315,6 +326,7 @@ impl SceneRenderer {
                 image_width: 1,
                 image_height: 1,
                 rgba: vec![255; 4],
+                mips: Vec::new(),
                 clamp: true,
                 nearest: false,
             },
@@ -361,8 +373,8 @@ impl SceneRenderer {
                 a: f64::from(scene.clear_color[3]),
             },
             targets: vec![
-                create_target(device, "scene", [scene.width, scene.height], format),
-                create_target(device, "framebuffer", [scene.width, scene.height], format),
+                create_target(device, "scene", output, format),
+                create_target(device, "framebuffer", output, format),
             ],
             programs,
             layers: Vec::new(),
@@ -387,11 +399,12 @@ impl SceneRenderer {
         Ok(renderer)
     }
 
+    /// Size of [`SceneRenderer::output`].
     pub fn size(&self) -> [u32; 2] {
-        self.size
+        self.targets[SCENE].size
     }
 
-    /// The composited scene (scene-sized, [`FORMAT`]); sample it to display.
+    /// The composited scene ([`FORMAT`] or [`HDR_FORMAT`]); sample it to display.
     pub fn output(&self) -> &wgpu::TextureView {
         &self.targets[SCENE].view
     }
@@ -919,9 +932,10 @@ impl SceneRenderer {
                     scene_pass(&mut encoder, &self.targets[SCENE].view, scene_load, "clear");
                     scene_load = wgpu::LoadOp::Load;
                 }
+                let [width, height] = self.targets[SCENE].size;
                 let size = wgpu::Extent3d {
-                    width: self.size[0],
-                    height: self.size[1],
+                    width,
+                    height,
                     depth_or_array_layers: 1,
                 };
                 encoder.copy_texture_to_texture(
@@ -1189,6 +1203,7 @@ fn upload(gpu: &Gpu, t: &ir::Texture) -> AssetTexture {
                 image_width: 1,
                 image_height: 1,
                 rgba: vec![255; 4],
+                mips: Vec::new(),
                 clamp: true,
                 nearest: false,
             },
@@ -1199,12 +1214,24 @@ fn upload(gpu: &Gpu, t: &ir::Texture) -> AssetTexture {
         height: t.height.max(1),
         depth_or_array_layers: 1,
     };
+    // Keep the mip levels whose sizes follow the halving chain exactly.
+    let mut data = t.rgba.clone();
+    let mut levels = 1;
+    let (mut w, mut h) = (u64::from(t.width), u64::from(t.height));
+    for mip in &t.mips {
+        (w, h) = ((w / 2).max(1), (h / 2).max(1));
+        if mip.len() as u64 != w * h * 4 {
+            break;
+        }
+        data.extend_from_slice(mip);
+        levels += 1;
+    }
     let texture = gpu.device.create_texture_with_data(
         &gpu.queue,
         &wgpu::TextureDescriptor {
             label: Some(&t.name),
             size,
-            mip_level_count: 1,
+            mip_level_count: levels,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8Unorm,
@@ -1212,7 +1239,7 @@ fn upload(gpu: &Gpu, t: &ir::Texture) -> AssetTexture {
             view_formats: &[],
         },
         wgpu::util::TextureDataOrder::LayerMajor,
-        &t.rgba,
+        &data,
     );
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     AssetTexture {
