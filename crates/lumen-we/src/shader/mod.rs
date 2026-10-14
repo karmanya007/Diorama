@@ -30,14 +30,44 @@ pub fn engine_defines() -> Vec<(String, String)> {
 /// the engine-provided library.
 pub const REQUIRE_MARKER: &str = "lumen-require:";
 
-/// Code WE's engine generates for `#require LightingV1`: a loop over the
-/// scene's point/spot/tube/directional lights (strings in `wallpaper64.exe`).
-/// Lumen has no dynamic lights yet, so lit materials get ambient only.
-const LIGHTING_V1: &str = "vec3 PerformLighting_V1(vec3 worldPos, vec3 color, vec3 normal, \
-    vec3 viewVector, vec3 specularTint, vec3 ambient, float roughness, float metallic) \
-    { vec3 light = CAST3(0.0); return light; }\n";
+/// Scene facts the engine bakes into generated shader code.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct EngineContext {
+    /// Point lights in the scene (`g_LPoint_*` array length).
+    pub point_lights: usize,
+}
 
-fn splice_requires(text: &str) -> String {
+/// `#require LightingV1`: WE's engine generates `PerformLighting_V1` per
+/// scene as one unrolled block per light (string fragments in
+/// `wallpaper64.exe`). Lumen emits point lights; shadows, cookies, spot,
+/// tube and directional lights are not generated yet.
+fn lighting_v1(engine: &EngineContext) -> String {
+    let n = engine.point_lights;
+    let mut out = String::new();
+    if n > 0 {
+        out.push_str(&format!(
+            "uniform vec4 g_LPoint_Origin[{n}];\nuniform vec4 g_LPoint_Color[{n}];\n"
+        ));
+    }
+    out.push_str(
+        "vec3 PerformLighting_V1(vec3 worldPos, vec3 color, vec3 normal, vec3 viewVector, \
+         vec3 specularTint, vec3 ambient, float roughness, float metallic)\n{\n\
+         \tvec3 light = CAST3(0.0);\n",
+    );
+    for i in 0..n {
+        out.push_str(&format!(
+            "\t{{\n\tconst uint i = {i};\n\
+             \tvec3 lightDelta = g_LPoint_Origin[i].xyz - worldPos;\n\
+             \tlight += ComputePBRLightShadow(normal, lightDelta, viewVector, color, \
+             g_LPoint_Color[i].rgb, g_LPoint_Color[i].w, g_LPoint_Origin[i].w, specularTint, \
+             ambient, roughness, metallic, 1.0);\n\t}}\n"
+        ));
+    }
+    out.push_str("\treturn light;\n}\n");
+    out
+}
+
+fn splice_requires(text: &str, engine: &EngineContext) -> String {
     let mut out = String::with_capacity(text.len());
     for line in text.split_inclusive('\n') {
         match line
@@ -45,7 +75,7 @@ fn splice_requires(text: &str) -> String {
             .strip_prefix("// ")
             .and_then(|l| l.strip_prefix(REQUIRE_MARKER))
         {
-            Some("LightingV1") => out.push_str(LIGHTING_V1),
+            Some("LightingV1") => out.push_str(&lighting_v1(engine)),
             Some(_) => out.push('\n'),
             None => out.push_str(line),
         }
@@ -83,6 +113,7 @@ pub fn prepare_pair(
     resolve: &dyn Fn(&str) -> Option<String>,
     base_defines: &[(String, String)],
     overrides: &BTreeMap<String, i64>,
+    engine: &EngineContext,
 ) -> Result<PreparedPair> {
     let vs = preprocess::expand_includes(vertex, resolve)?;
     let fs = preprocess::expand_includes(fragment, resolve)?;
@@ -116,7 +147,7 @@ pub fn prepare_pair(
         combos,
         defines,
         requires,
-        vertex: splice_requires(&vs.text),
-        fragment: splice_requires(&fs.text),
+        vertex: splice_requires(&vs.text, engine),
+        fragment: splice_requires(&fs.text, engine),
     })
 }

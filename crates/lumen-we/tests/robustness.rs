@@ -146,6 +146,7 @@ fn mutated_shaders_never_panic() {
                 &resolve,
                 &shader::engine_defines(),
                 &BTreeMap::new(),
+                &shader::EngineContext::default(),
             ) else {
                 continue;
             };

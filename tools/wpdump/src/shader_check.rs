@@ -185,6 +185,7 @@ fn check_one(
         &resolve,
         &shader::engine_defines(),
         &overrides,
+        &shader::EngineContext::default(),
     ) {
         Ok(p) => p,
         Err(e) => return (fail("prepare", e.to_string()), Vec::new()),

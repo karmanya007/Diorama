@@ -29,12 +29,25 @@ pub struct Scene {
     /// `g_LightAmbientColor` / `g_LightSkylightColor` for lit materials.
     pub ambient_color: [f32; 3],
     pub skylight_color: [f32; 3],
+    /// Dynamic lights, in the order shaders index them (`g_LPoint_*[i]`).
+    pub point_lights: Vec<PointLight>,
     /// Back to front.
     pub layers: Vec<ImageLayer>,
     pub textures: Vec<Texture>,
     pub programs: Vec<ShaderProgram>,
     /// Things the importer could not represent yet (shown in logs/reports).
     pub skipped: Vec<String>,
+}
+
+/// A point light in scene space (`g_LPoint_Origin` / `g_LPoint_Color`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PointLight {
+    pub origin: [f32; 3],
+    /// Colour already multiplied by intensity.
+    pub color: [f32; 3],
+    pub radius: f32,
+    /// Falloff exponent.
+    pub exponent: f32,
 }
 
 /// A decoded texture (mip 0 only for now).

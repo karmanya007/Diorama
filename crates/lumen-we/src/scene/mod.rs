@@ -41,10 +41,16 @@ pub fn import_from(vfs: &Vfs, limits: &Limits) -> Result<Scene> {
         textures: HashMap::new(),
         programs: HashMap::new(),
         program_uniforms: HashMap::new(),
+        engine: shader::EngineContext::default(),
     };
     importer.scene_header(&json);
     let objects: Vec<&Value> = json["objects"].as_array().into_iter().flatten().collect();
     let graph = SceneGraph::new(&objects);
+    // Lights first: lit shaders are generated for the scene's light count.
+    for object in &objects {
+        importer.light(object, &graph);
+    }
+    importer.engine.point_lights = importer.scene.point_lights.len();
     for object in objects {
         importer.object(object, &graph);
     }
@@ -117,6 +123,7 @@ struct Importer<'a> {
     programs: HashMap<(String, BTreeMap<String, i64>), ProgramId>,
     /// Uniform declarations (with annotations) of each program, both stages.
     program_uniforms: HashMap<ProgramId, Vec<Decl>>,
+    engine: shader::EngineContext,
 }
 
 /// One material pass after applying scene-level overrides.
@@ -157,9 +164,44 @@ impl Importer<'_> {
         }
     }
 
+    fn light(&mut self, object: &Value, graph: &SceneGraph) {
+        let Some(kind) = object.get("light").and_then(Value::as_str) else {
+            return;
+        };
+        let (transform, visible) = graph.world(object);
+        if !visible {
+            return;
+        }
+        if kind != "lpoint" {
+            self.skip(format!("{kind} lights"));
+            return;
+        }
+        let z = vec_n(object.get("origin"), [0.0; 3])[2];
+        let color = vec_n(object.get("color"), [1.0; 3]);
+        let intensity = object
+            .get("intensity")
+            .and_then(floats)
+            .and_then(|v| v.first().copied())
+            .unwrap_or(1.0);
+        self.scene.point_lights.push(lumen_scene::PointLight {
+            origin: [transform[4], transform[5], z],
+            color: color.map(|c| c * intensity),
+            radius: object
+                .get("radius")
+                .and_then(floats)
+                .and_then(|v| v.first().copied())
+                .unwrap_or(1000.0),
+            exponent: object
+                .get("exponent")
+                .and_then(floats)
+                .and_then(|v| v.first().copied())
+                .unwrap_or(1.0),
+        });
+    }
+
     fn object(&mut self, object: &Value, graph: &SceneGraph) {
         let name = object["name"].as_str().unwrap_or("").to_owned();
-        let kind = ["particle", "text", "model", "sound", "light"]
+        let kind = ["particle", "text", "model", "sound"]
             .into_iter()
             .find(|k| object.get(*k).is_some_and(|v| !v.is_null()));
         match (object.get("image").and_then(Value::as_str), kind) {
@@ -196,6 +238,14 @@ impl Importer<'_> {
         }
         let mut spec = self.pass_spec(&material, None)?;
         spec.constants.push(&object_constants);
+        // Lit layers rendered into their own target light themselves with
+        // the scene placement (g_AltModelMatrix) instead of the target MVP.
+        let has_effects = object["effects"]
+            .as_array()
+            .is_some_and(|e| e.iter().any(|e| boolean(e.get("visible"), true)));
+        if has_effects && !fullscreen {
+            spec.combos.insert("PRELIGHTING".to_owned(), 1);
+        }
         let composite_blend = spec.blend;
         let albedo = self.pass(&spec, None)?;
 
@@ -509,6 +559,7 @@ impl Importer<'_> {
             &resolve,
             &shader::engine_defines(),
             combos,
+            &self.engine,
         )?;
         for r in &prepared.requires {
             match r.as_str() {

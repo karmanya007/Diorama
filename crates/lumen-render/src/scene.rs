@@ -114,6 +114,8 @@ const FRAMEBUFFER: usize = 1;
 
 pub struct SceneRenderer {
     size: [u32; 2],
+    /// Scene pixels → clip space.
+    camera: Rows,
     clear: wgpu::Color,
     targets: Vec<Target>,
     programs: Vec<Option<Program>>,
@@ -177,6 +179,23 @@ fn ortho_rows(w: f32, h: f32) -> Rows {
         [0.0, 2.0 / h, 0.0, 0.0],
         [0.0, 0.0, 0.0005, 0.0],
         [-1.0, -1.0, 0.5, 1.0],
+    ]
+}
+
+/// The scene camera: ortho over the whole scene. (`general.zoom` is not a
+/// plain ortho zoom: applying it either way lowers SSIM on capture 914.)
+fn camera_rows(scene: &ir::Scene) -> Rows {
+    ortho_rows(scene.width as f32, scene.height as f32)
+}
+
+/// Centred `-w/2..w/2 × -h/2..h/2` → clip space (layer targets of lit
+/// layers in capture 914; equivalent to the `0..w` form of capture 289).
+fn centred_ortho_rows(w: f32, h: f32) -> Rows {
+    [
+        [2.0 / w, 0.0, 0.0, 0.0],
+        [0.0, 2.0 / h, 0.0, 0.0],
+        [0.0, 0.0, 0.0005, 0.0],
+        [0.0, 0.0, 0.5, 1.0],
     ]
 }
 
@@ -304,6 +323,7 @@ impl SceneRenderer {
         let composite = CompositeShared::new(device);
         let mut renderer = Self {
             size: [scene.width, scene.height],
+            camera: camera_rows(scene),
             clear: wgpu::Color {
                 r: f64::from(scene.clear_color[0]),
                 g: f64::from(scene.clear_color[1]),
@@ -405,7 +425,10 @@ impl SceneRenderer {
             target: ping,
             geometry: match layer.kind {
                 LayerKind::Fullscreen => Geometry::Fullscreen,
-                LayerKind::Image => Geometry::LayerTarget(layer.size),
+                LayerKind::Image => Geometry::LayerTarget {
+                    size: layer.size,
+                    transform: layer.transform,
+                },
                 // Placed in the scene for its frame-buffer lookup; the shader
                 // itself fills the target from texcoords.
                 LayerKind::Compose => Geometry::Direct {
@@ -473,7 +496,7 @@ impl SceneRenderer {
         });
         let composite_vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("composite quad"),
-            contents: bytemuck::cast_slice(&composite_quad(layer, self.size)),
+            contents: bytemuck::cast_slice(&composite_quad(layer, self.camera)),
             usage: wgpu::BufferUsages::VERTEX,
         });
         Some(GpuLayer {
@@ -570,12 +593,12 @@ impl SceneRenderer {
         ];
         // Lit shaders use model and view-projection separately; keep them
         // consistent with the combined matrix.
+        let scene_ortho = self.camera;
         let (model, view_projection) = match plan.geometry {
-            Geometry::LayerTarget([w, h]) => (IDENTITY_ROWS, ortho_rows(w as f32, h as f32)),
-            Geometry::Direct { transform, .. } => (
-                model_rows(transform),
-                ortho_rows(self.size[0] as f32, self.size[1] as f32),
-            ),
+            Geometry::LayerTarget { size: [w, h], .. } => {
+                (IDENTITY_ROWS, centred_ortho_rows(w as f32, h as f32))
+            }
+            Geometry::Direct { transform, .. } => (model_rows(transform), self.camera),
             Geometry::Effect | Geometry::Fullscreen => (IDENTITY_ROWS, EFFECT_ROWS),
         };
         let mvp = upload_matrix(mat_mul(model, view_projection));
@@ -606,6 +629,32 @@ impl SceneRenderer {
                 "g_ViewProjectionMatrix",
                 &upload_matrix(view_projection),
             );
+            // Scene placement for lighting while drawing into a layer target.
+            let alt_model = match plan.geometry {
+                Geometry::LayerTarget { transform, .. } | Geometry::Direct { transform, .. } => {
+                    model_rows(transform)
+                }
+                Geometry::Effect | Geometry::Fullscreen => IDENTITY_ROWS,
+            };
+            layout.write(buf, "g_AltModelMatrix", &upload_matrix(alt_model));
+            layout.write(
+                buf,
+                "g_AltViewProjectionMatrix",
+                &upload_matrix(scene_ortho),
+            );
+            // Observed in capture 914: eye above the scene centre at z = 2000.
+            layout.write(buf, "g_EyePosition", &[sw / 2.0, sh / 2.0, 2000.0]);
+            let lights = &ctx.scene.point_lights;
+            let origins: Vec<f32> = lights
+                .iter()
+                .flat_map(|l| [l.origin[0], l.origin[1], l.origin[2], l.exponent])
+                .collect();
+            let colors: Vec<f32> = lights
+                .iter()
+                .flat_map(|l| [l.color[0], l.color[1], l.color[2], l.radius])
+                .collect();
+            layout.write(buf, "g_LPoint_Origin", &origins);
+            layout.write(buf, "g_LPoint_Color", &colors);
             for (slot, res) in &resolutions {
                 layout.write(buf, &format!("g_Texture{slot}Resolution"), res);
             }
@@ -647,7 +696,7 @@ impl SceneRenderer {
         // Albedo UVs stop at the image inside a padded texture.
         let albedo = matches!(
             plan.geometry,
-            Geometry::LayerTarget(_) | Geometry::Direct { .. }
+            Geometry::LayerTarget { .. } | Geometry::Direct { .. }
         );
         let uv_max = match (albedo, plan.pass.textures.get(&0)) {
             (true, Some(TextureBinding::Asset(id))) => {
@@ -866,8 +915,10 @@ struct PassPlan<'a> {
 
 #[derive(Debug, Clone, Copy)]
 enum Geometry {
-    /// Albedo into the layer's own target: `0..w × 0..h`, layer ortho MVP.
-    LayerTarget([u32; 2]),
+    /// Albedo into the layer's own target: centred quad through a centred
+    /// ortho MVP; `transform` places it in the scene for lighting
+    /// (`g_AltModelMatrix`, WE's PRELIGHTING path).
+    LayerTarget { size: [u32; 2], transform: [f32; 6] },
     /// Albedo placed in the scene by `transform`: centred quad.
     Direct { size: [u32; 2], transform: [f32; 6] },
     /// Effect pass: clip-space quad.
@@ -881,8 +932,7 @@ fn pass_quad(attributes: &[ir::Attribute], geometry: Geometry, uv_max: [f32; 2])
     let mut out = Vec::new();
     for (x, y) in [(0.0f32, 0.0f32), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)] {
         let position = match geometry {
-            Geometry::LayerTarget([w, h]) => [x * w as f32, y * h as f32, 0.0, 1.0],
-            Geometry::Direct { size: [w, h], .. } => {
+            Geometry::LayerTarget { size: [w, h], .. } | Geometry::Direct { size: [w, h], .. } => {
                 [(x - 0.5) * w as f32, (y - 0.5) * h as f32, 0.0, 1.0]
             }
             Geometry::Effect | Geometry::Fullscreen => [x * 2.0 - 1.0, y * 2.0 - 1.0, 0.0, 1.0],
@@ -904,8 +954,7 @@ fn pass_quad(attributes: &[ir::Attribute], geometry: Geometry, uv_max: [f32; 2])
 }
 
 /// Layer quad in the scene's clip space: pos.xy + uv per vertex (strip order).
-fn composite_quad(layer: &ir::ImageLayer, scene: [u32; 2]) -> [f32; 16] {
-    let [sw, sh] = scene.map(|v| v as f32);
+fn composite_quad(layer: &ir::ImageLayer, camera: Rows) -> [f32; 16] {
     let half = layer.size.map(|v| v as f32 * 0.5);
     let t = layer.transform;
     let mut out = [0.0; 16];
@@ -917,8 +966,8 @@ fn composite_quad(layer: &ir::ImageLayer, scene: [u32; 2]) -> [f32; 16] {
         let px = t[0] * lx + t[2] * ly + t[4];
         let py = t[1] * lx + t[3] * ly + t[5];
         out[i * 4..i * 4 + 4].copy_from_slice(&[
-            px / sw * 2.0 - 1.0,
-            py / sh * 2.0 - 1.0,
+            px * camera[0][0] + py * camera[1][0] + camera[3][0],
+            px * camera[0][1] + py * camera[1][1] + camera[3][1],
             (x + 1.0) * 0.5,
             (1.0 - y) * 0.5,
         ]);
@@ -1232,11 +1281,18 @@ mod tests {
                 components: 2,
             },
         ];
-        let q = pass_quad(&attrs, Geometry::LayerTarget([100, 50]), [0.5, 1.0]);
+        let q = pass_quad(
+            &attrs,
+            Geometry::LayerTarget {
+                size: [100, 50],
+                transform: lumen_scene::IDENTITY_AFFINE,
+            },
+            [0.5, 1.0],
+        );
         assert_eq!(q.len(), 4 * 5);
         // Bottom-left vertex samples the bottom of the image (v = 1).
-        assert_eq!(&q[0..5], &[0.0, 0.0, 0.0, 0.0, 1.0]);
-        // Top-right: (w, h), uv (u_max, 0).
-        assert_eq!(&q[15..20], &[100.0, 50.0, 0.0, 0.5, 0.0]);
+        assert_eq!(&q[0..5], &[-50.0, -25.0, 0.0, 0.0, 1.0]);
+        // Top-right: (w/2, h/2), uv (u_max, 0).
+        assert_eq!(&q[15..20], &[50.0, 25.0, 0.0, 0.5, 0.0]);
     }
 }
