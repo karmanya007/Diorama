@@ -23,6 +23,7 @@ use clap::{Parser, ValueEnum};
 use lumen_gpu::{Backend, Gpu, GpuOptions};
 use lumen_ipc::MediaKind;
 use lumen_ipc::{ContentStatus, Fit, Layout, OutputStatus, Request, Response, Status};
+use lumen_media::AudioPlayer;
 use lumen_platform::{Coverage, DesktopEvent, Platform};
 
 use crate::clock::VideoClock;
@@ -73,6 +74,9 @@ struct Args {
     /// so the desktop is not blank when Lumen is not running (P14). Changes your OS wallpaper setting.
     #[arg(long)]
     os_fallback: bool,
+    /// Video soundtrack volume 0–100 (default: last used, else 0 = muted; no audio device opened).
+    #[arg(long, value_parser = clap::value_parser!(u8).range(0..=100))]
+    volume: Option<u8>,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -98,6 +102,7 @@ enum BackendArg {
 const COVERAGE_INTERVAL: Duration = Duration::from_millis(500);
 const BATTERY_INTERVAL: Duration = Duration::from_secs(5);
 const REBUILD_RETRY: Duration = Duration::from_secs(1);
+const AUDIO_CHECK_INTERVAL: Duration = Duration::from_secs(2);
 
 type Job = (Request, SyncSender<Response>);
 
@@ -186,6 +191,10 @@ fn main() -> Result<()> {
         config_dir: config_dir.clone(),
         os_fallback: args.os_fallback,
         fallback_pending: false,
+        volume: 0,
+        audio: None,
+        audio_loop: None,
+        next_audio_check: Instant::now() + AUDIO_CHECK_INTERVAL,
         clock: VideoClock::default(),
         next_coverage: Instant::now(),
         next_battery: Instant::now() + BATTERY_INTERVAL,
@@ -205,10 +214,9 @@ fn main() -> Result<()> {
         },
     };
     // Start-up content: command line, else the wallpaper from last time.
-    let saved = config_dir
-        .as_deref()
-        .map(state::load)
-        .and_then(|s| s.wallpaper);
+    let saved_state = config_dir.as_deref().map(state::load).unwrap_or_default();
+    daemon.volume = args.volume.unwrap_or(saved_state.volume).min(100);
+    let saved = saved_state.wallpaper;
     let initial = match (args.image.as_ref().or(args.video.as_ref()), saved) {
         (Some(path), _) => Some((path.clone(), None, look)),
         (None, Some(s)) => Some((
@@ -295,6 +303,12 @@ struct Daemon<'p> {
     os_fallback: bool,
     /// Video fallback snapshot still to be taken from the next shown frame.
     fallback_pending: bool,
+    /// Soundtrack volume 0–100; 0 means no audio player at all.
+    volume: u8,
+    audio: Option<AudioPlayer>,
+    /// Video loop index the audio was last synced to; `None` = not started yet.
+    audio_loop: Option<u32>,
+    next_audio_check: Instant,
 }
 
 impl Daemon<'_> {
@@ -344,8 +358,11 @@ impl Daemon<'_> {
             self.next_coverage = Instant::now() + COVERAGE_INTERVAL;
             let resumed = update_pauses(self.platform, session, self.policy, self.conditions);
             if let Some(Content::Video(_)) = self.wallpaper.as_ref().map(|w| &w.content) {
-                self.clock
-                    .set_paused(session.outputs.iter().all(|o| o.paused));
+                let all_paused = session.outputs.iter().all(|o| o.paused);
+                self.clock.set_paused(all_paused);
+                if let (Some(audio), Some(_)) = (&self.audio, self.audio_loop) {
+                    audio.set_paused(all_paused);
+                }
                 // Freshly resumed outputs still show an old frame: present the current one now.
                 if resumed {
                     session.present_all(&self.gpu)?;
@@ -357,13 +374,48 @@ impl Daemon<'_> {
             && !self.clock.is_paused()
             && let Some(frame) = self.clock.due_frame(player)
         {
+            let loop_index = frame.loop_index;
             session.show_video_frame(&self.gpu, frame)?;
             if self.fallback_pending {
                 self.fallback_pending = false;
                 self.video_fallback();
             }
+            // Audio starts with the first frame and restarts whenever the video wraps.
+            if let Some(audio) = &self.audio {
+                match self.audio_loop {
+                    None => audio.set_paused(false),
+                    Some(prev) if prev != loop_index => audio.restart(),
+                    Some(_) => {}
+                }
+                self.audio_loop = Some(loop_index);
+            }
+        }
+
+        if Instant::now() >= self.next_audio_check {
+            self.next_audio_check = Instant::now() + AUDIO_CHECK_INTERVAL;
+            if self.audio.as_ref().is_some_and(AudioPlayer::needs_reopen) {
+                tracing::info!("audio device changed; reopening");
+                self.start_audio();
+            }
         }
         Ok(())
+    }
+
+    /// (Re)creates the soundtrack player for the current video, if volume > 0.
+    /// Errors only mean silence; video is unaffected (P10).
+    fn start_audio(&mut self) {
+        self.audio = None;
+        self.audio_loop = None;
+        let Some(w) = self.wallpaper.as_ref() else {
+            return;
+        };
+        if self.volume == 0 || w.kind != MediaKind::Video {
+            return;
+        }
+        match AudioPlayer::spawn(&w.path, f32::from(self.volume) / 100.0) {
+            Ok(a) => self.audio = Some(a),
+            Err(e) => tracing::info!("no video audio: {e}"),
+        }
     }
 
     /// Remembers the wallpaper for the next start.
@@ -378,6 +430,7 @@ impl Daemon<'_> {
                 fit: w.look.fit,
                 layout: w.look.layout,
             }),
+            volume: self.volume,
             ..state::State::default()
         };
         if let Err(e) = state::save(dir, &state) {
@@ -432,6 +485,7 @@ impl Daemon<'_> {
 
     fn set_wallpaper(&mut self, wallpaper: Wallpaper) -> Result<()> {
         self.session = None;
+        self.audio = None;
         self.clock = VideoClock::default();
         self.persist(&wallpaper);
         if self.os_fallback {
@@ -444,6 +498,7 @@ impl Daemon<'_> {
             }
         }
         self.wallpaper = Some(wallpaper);
+        self.start_audio();
         self.rebuild();
         if self.needs_rebuild {
             anyhow::bail!(
@@ -477,6 +532,21 @@ impl Daemon<'_> {
                         .unwrap_or(Layout::PerOutput),
                 };
                 ok_or_error(Wallpaper::load(&path, kind, look).and_then(|w| self.set_wallpaper(w)))
+            }
+            Request::Volume { percent } => {
+                self.volume = percent.min(100);
+                match (&self.audio, self.volume) {
+                    (_, 0) => {
+                        self.audio = None;
+                        self.audio_loop = None;
+                    }
+                    (Some(audio), v) => audio.set_volume(f32::from(v) / 100.0),
+                    (None, _) => self.start_audio(),
+                }
+                if let Some(w) = self.wallpaper.as_ref() {
+                    self.persist(w);
+                }
+                Response::Ok
             }
             Request::Pause | Request::Resume => {
                 self.conditions.user_paused = matches!(request, Request::Pause);
@@ -515,6 +585,7 @@ impl Daemon<'_> {
                 layout: w.look.layout,
             }),
             user_paused: self.conditions.user_paused,
+            volume: self.volume,
             outputs: outputs
                 .into_iter()
                 .map(|(info, paused, coverage)| OutputStatus {

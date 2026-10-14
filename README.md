@@ -33,6 +33,7 @@ cargo build --release
 target/release/lumend                                   # starts empty; or --image/--video <file>
 target/release/lumen set <image-or-video> [--fit fill|fit|stretch] [--layout per-output|span]
 target/release/lumen status                             # what is playing, per-monitor state
+target/release/lumen volume 0-100                       # video soundtrack (0 = muted, default)
 target/release/lumen pause | resume | quit
 target/release/lumen autostart enable | disable | status   # start at sign-in (per user)
 ```

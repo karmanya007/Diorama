@@ -81,6 +81,10 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         layout: Option<Layout>,
     },
+    /// Video soundtrack volume, 0–100 (0 = muted, no audio device opened).
+    Volume {
+        percent: u8,
+    },
     /// Pause all outputs regardless of policy until `Resume`.
     Pause,
     Resume,
@@ -110,6 +114,9 @@ pub struct Status {
     pub daemon_version: String,
     pub content: Option<ContentStatus>,
     pub user_paused: bool,
+    /// Video soundtrack volume, 0–100.
+    #[serde(default)]
+    pub volume: u8,
     pub outputs: Vec<OutputStatus>,
 }
 

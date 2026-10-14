@@ -34,6 +34,7 @@ lumen-render = { path = "crates/lumen-render", version = "0.0.1" }
 # external
 anyhow = "1"
 bytemuck = { version = "1.25", features = ["derive"] }
+cpal = "0.18.2"
 ctrlc = "3"
 # 2.4.5 is days old; stay on the previous release.
 interprocess = "=2.4.4"

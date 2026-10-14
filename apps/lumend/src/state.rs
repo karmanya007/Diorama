@@ -15,6 +15,9 @@ pub struct State {
     pub version: u32,
     #[serde(default)]
     pub wallpaper: Option<SavedWallpaper>,
+    /// Video soundtrack volume 0–100.
+    #[serde(default)]
+    pub volume: u8,
 }
 
 impl Default for State {
@@ -22,6 +25,7 @@ impl Default for State {
         Self {
             version: VERSION,
             wallpaper: None,
+            volume: 0,
         }
     }
 }
@@ -77,6 +81,7 @@ mod tests {
                 fit: Fit::Fill,
                 layout: Layout::Span,
             }),
+            volume: 40,
         };
         save(&dir, &state).unwrap();
         assert_eq!(load(&dir), state);

@@ -29,6 +29,11 @@ enum Command {
         #[arg(long, value_enum)]
         kind: Option<KindArg>,
     },
+    /// Video soundtrack volume, 0–100 (0 mutes and closes the audio device).
+    Volume {
+        #[arg(value_parser = clap::value_parser!(u8).range(0..=100))]
+        percent: u8,
+    },
     /// Pause every monitor until `lumen resume`.
     Pause,
     /// Undo `lumen pause` (automatic pause rules still apply).
@@ -128,6 +133,7 @@ fn run(cli: Cli) -> Result<()> {
                 LayoutArg::Span => Layout::Span,
             }),
         },
+        Command::Volume { percent } => Request::Volume { percent },
         Command::Pause => Request::Pause,
         Command::Resume => Request::Resume,
         Command::Quit => Request::Quit,
@@ -148,6 +154,7 @@ fn run(cli: Cli) -> Result<()> {
                 ),
                 None => println!("playing  nothing (use `lumen set <file>`)"),
             }
+            println!("volume   {}%", status.volume);
             if status.user_paused {
                 println!("paused   by `lumen pause`");
             }

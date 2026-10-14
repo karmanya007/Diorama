@@ -12,8 +12,14 @@ use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+mod resample;
 #[cfg(windows)]
 mod windows;
+
+#[cfg(not(windows))]
+pub use unsupported_audio::AudioPlayer;
+#[cfg(windows)]
+pub use windows::audio::AudioPlayer;
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
@@ -27,6 +33,10 @@ pub enum Error {
     NoVideo(PathBuf),
     #[error("decoder produced an invalid frame: {0}")]
     BadFrame(String),
+    #[error("no audio output device")]
+    NoAudioDevice,
+    #[error("audio: {0}")]
+    Audio(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -50,6 +60,8 @@ pub struct Nv12Frame {
     pub chroma_offset: usize,
     /// Presentation time from the start of playback (accumulates across loops).
     pub pts: Duration,
+    /// How many times the video has looped before this frame (to resync audio).
+    pub loop_index: u32,
 }
 
 impl Nv12Frame {
@@ -202,6 +214,7 @@ impl Drop for VideoPlayer {
 
 fn decode_loop(mut decoder: Box<dyn VideoDecoder>, tx: &SyncSender<Nv12Frame>, stop: &AtomicBool) {
     let mut loop_offset = Duration::ZERO;
+    let mut loop_index = 0u32;
     let mut last_pts = Duration::ZERO;
     let frame_period = decoder
         .info()
@@ -216,6 +229,7 @@ fn decode_loop(mut decoder: Box<dyn VideoDecoder>, tx: &SyncSender<Nv12Frame>, s
             Ok(Some(mut frame)) => {
                 last_pts = frame.pts;
                 frame.pts += loop_offset;
+                frame.loop_index = loop_index;
                 // Blocks while the queue is full (e.g. playback paused): no CPU spent.
                 // `VideoPlayer::drop` drains the queue so this returns on shutdown.
                 if tx.send(frame).is_err() {
@@ -225,6 +239,7 @@ fn decode_loop(mut decoder: Box<dyn VideoDecoder>, tx: &SyncSender<Nv12Frame>, s
             Ok(None) => {
                 // Loop: the next pass starts one frame after the last frame of this one.
                 loop_offset += last_pts + frame_period;
+                loop_index = loop_index.wrapping_add(1);
                 if let Err(e) = decoder.restart() {
                     tracing::error!("video restart failed: {e}");
                     return;
@@ -251,6 +266,7 @@ mod tests {
             data: vec![y, y, y, y, cb, cr],
             chroma_offset: 4,
             pts: Duration::ZERO,
+            loop_index: 0,
         }
     }
 
@@ -261,5 +277,37 @@ mod tests {
         // Pure red in BT.709 limited range ≈ (63, 102, 240).
         let red = frame(63, 102, 240).to_rgba();
         assert!(red[0] > 240 && red[1] < 15 && red[2] < 15, "{red:?}");
+    }
+}
+
+#[cfg(not(windows))]
+mod unsupported_audio {
+    use std::path::Path;
+
+    use crate::{Error, Result};
+
+    /// Uninhabited until a non-Windows audio backend exists.
+    #[derive(Debug)]
+    pub enum AudioPlayer {}
+
+    impl AudioPlayer {
+        pub fn spawn(_path: &Path, _volume: f32) -> Result<Self> {
+            Err(Error::Unsupported)
+        }
+        pub fn path(&self) -> &Path {
+            match *self {}
+        }
+        pub fn set_volume(&self, _volume: f32) {
+            match *self {}
+        }
+        pub fn set_paused(&self, _paused: bool) {
+            match *self {}
+        }
+        pub fn restart(&self) {
+            match *self {}
+        }
+        pub fn needs_reopen(&self) -> bool {
+            match *self {}
+        }
     }
 }

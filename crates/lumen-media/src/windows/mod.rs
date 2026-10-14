@@ -5,6 +5,8 @@
 //! playback never depends on an audio device (pain point P10: WE's video
 //! pipeline failed with MF_E_NO_AUDIO_PLAYBACK_DEVICE when no device existed).
 
+pub(crate) mod audio;
+
 use std::path::Path;
 use std::time::Duration;
 
@@ -321,6 +323,7 @@ fn nv12_from_buffer(
         chroma_offset: stride_us * padded_rows.max(info.height as usize),
         data,
         pts,
+        loop_index: 0,
     })
 }
 

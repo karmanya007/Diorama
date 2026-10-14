@@ -11,6 +11,7 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [target.'cfg(windows)'.dependencies]
+cpal.workspace = true
 windows.workspace = true
 
 [dev-dependencies]
