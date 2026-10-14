@@ -35,6 +35,18 @@ enum Command {
     Resume,
     /// Stop the daemon.
     Quit,
+    /// Start lumend automatically when you sign in (per user, no admin rights).
+    Autostart {
+        #[arg(value_enum)]
+        action: AutostartAction,
+    },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum AutostartAction {
+    Enable,
+    Disable,
+    Status,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -66,6 +78,31 @@ fn main() -> ExitCode {
     }
 }
 
+/// Registers `lumend --background` from the same folder as this `lumen` executable.
+fn autostart(action: AutostartAction) -> Result<()> {
+    match action {
+        AutostartAction::Enable => {
+            let daemon = std::env::current_exe()?
+                .with_file_name(format!("lumend{}", std::env::consts::EXE_SUFFIX));
+            if !daemon.is_file() {
+                bail!("{} not found next to lumen", daemon.display());
+            }
+            let command = format!("\"{}\" --background", daemon.display());
+            lumen_platform::set_autostart(Some(&command))?;
+            println!("autostart enabled: {command}");
+        }
+        AutostartAction::Disable => {
+            lumen_platform::set_autostart(None)?;
+            println!("autostart disabled");
+        }
+        AutostartAction::Status => match lumen_platform::autostart()? {
+            Some(cmd) => println!("autostart enabled: {cmd}"),
+            None => println!("autostart disabled"),
+        },
+    }
+    Ok(())
+}
+
 fn run(cli: Cli) -> Result<()> {
     let request = match cli.command {
         Command::Status => Request::Status,
@@ -94,6 +131,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::Pause => Request::Pause,
         Command::Resume => Request::Resume,
         Command::Quit => Request::Quit,
+        Command::Autostart { action } => return autostart(action),
     };
 
     match lumen_ipc::call(&request)? {

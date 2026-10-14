@@ -60,6 +60,42 @@ impl Nv12Frame {
     pub fn chroma(&self) -> &[u8] {
         &self.data[self.chroma_offset.min(self.data.len())..]
     }
+
+    /// CPU conversion to tightly packed RGBA8 (BT.709 limited range, same as the
+    /// GPU shader). For snapshots, not per-frame playback.
+    pub fn to_rgba(&self) -> Vec<u8> {
+        let (w, h, stride) = (
+            self.width as usize,
+            self.height as usize,
+            self.stride as usize,
+        );
+        let (luma, chroma) = (self.luma(), self.chroma());
+        let mut out = vec![0u8; w * h * 4];
+        for y in 0..h {
+            for x in 0..w {
+                let yy = f32::from(luma.get(y * stride + x).copied().unwrap_or(16));
+                let ci = (y / 2) * stride + (x / 2) * 2;
+                let cb = f32::from(chroma.get(ci).copied().unwrap_or(128));
+                let cr = f32::from(chroma.get(ci + 1).copied().unwrap_or(128));
+                let yn = (yy - 16.0) * (255.0 / 219.0);
+                let (u, v) = (
+                    (cb - 128.0) * (255.0 / 224.0),
+                    (cr - 128.0) * (255.0 / 224.0),
+                );
+                let rgb = [
+                    yn + 1.5748 * v,
+                    yn - 0.1873 * u - 0.4681 * v,
+                    yn + 1.8556 * u,
+                ];
+                let o = (y * w + x) * 4;
+                for (i, c) in rgb.iter().enumerate() {
+                    out[o + i] = c.round().clamp(0.0, 255.0) as u8;
+                }
+                out[o + 3] = 255;
+            }
+        }
+        out
+    }
 }
 
 /// A decoder for one file. Implementations live in the per-OS modules.
@@ -199,5 +235,31 @@ fn decode_loop(mut decoder: Box<dyn VideoDecoder>, tx: &SyncSender<Nv12Frame>, s
                 return;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frame(y: u8, cb: u8, cr: u8) -> Nv12Frame {
+        // 2×2 frame: 4 luma bytes + one interleaved CbCr pair (stride 2).
+        Nv12Frame {
+            width: 2,
+            height: 2,
+            stride: 2,
+            data: vec![y, y, y, y, cb, cr],
+            chroma_offset: 4,
+            pts: Duration::ZERO,
+        }
+    }
+
+    #[test]
+    fn bt709_limited_range_extremes() {
+        assert_eq!(&frame(16, 128, 128).to_rgba()[..4], &[0, 0, 0, 255]);
+        assert_eq!(&frame(235, 128, 128).to_rgba()[..4], &[255, 255, 255, 255]);
+        // Pure red in BT.709 limited range ≈ (63, 102, 240).
+        let red = frame(63, 102, 240).to_rgba();
+        assert!(red[0] > 240 && red[1] < 15 && red[2] < 15, "{red:?}");
     }
 }

@@ -34,9 +34,10 @@ target/release/lumend                                   # starts empty; or --ima
 target/release/lumen set <image-or-video> [--fit fill|fit|stretch] [--layout per-output|span]
 target/release/lumen status                             # what is playing, per-monitor state
 target/release/lumen pause | resume | quit
+target/release/lumen autostart enable | disable | status   # start at sign-in (per user)
 ```
 
-`lumend --help` lists pause rules (`--on-fullscreen`, `--on-maximized`, `--on-battery`, `--on-lock`).
+`lumend --help` lists pause rules (`--on-fullscreen`, `--on-maximized`, `--on-battery`, `--on-lock`). The last wallpaper is remembered in `%APPDATA%\Lumen\state.json`. `--background` detaches from the console and logs to `%APPDATA%\Lumen\lumend.log`. `--os-fallback` also sets each wallpaper (a snapshot for videos) as the Windows background, so the desktop isn't blank when Lumen isn't running — this changes your Windows wallpaper setting.
 
 Developer tools:
 

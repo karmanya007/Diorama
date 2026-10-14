@@ -2,7 +2,10 @@
 
 mod desktop;
 mod outputs;
+mod system;
 mod windows_list;
+
+pub use system::{autostart, config_dir, detach_console, set_autostart, set_os_wallpaper};
 
 use std::cell::{Cell, RefCell};
 use std::mem::size_of;

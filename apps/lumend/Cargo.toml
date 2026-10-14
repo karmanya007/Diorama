@@ -16,6 +16,8 @@ lumen-ipc.workspace = true
 lumen-media.workspace = true
 lumen-platform.workspace = true
 lumen-render.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 

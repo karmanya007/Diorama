@@ -40,6 +40,28 @@ impl Platform {
     }
 }
 
+/// `$XDG_CONFIG_HOME/lumen` or `~/.config/lumen`.
+pub fn config_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))
+        .map(|d| d.join("lumen"))
+}
+
+pub fn set_autostart(_command: Option<&str>) -> Result<()> {
+    Err(Error::Unsupported)
+}
+
+pub fn autostart() -> Result<Option<String>> {
+    Err(Error::Unsupported)
+}
+
+pub fn detach_console() {}
+
+pub fn set_os_wallpaper(_image: &std::path::Path, _span: bool) -> Result<()> {
+    Err(Error::Unsupported)
+}
+
 #[derive(Debug, Clone)]
 pub struct Waker;
 

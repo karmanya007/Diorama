@@ -10,6 +10,7 @@
 mod clock;
 mod policy;
 mod session;
+mod state;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -20,6 +21,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use lumen_gpu::{Backend, Gpu, GpuOptions};
+use lumen_ipc::MediaKind;
 use lumen_ipc::{ContentStatus, Fit, Layout, OutputStatus, Request, Response, Status};
 use lumen_platform::{Coverage, DesktopEvent, Platform};
 
@@ -64,6 +66,13 @@ struct Args {
     /// While the session is locked.
     #[arg(long, value_enum, default_value = "pause")]
     on_lock: Action,
+    /// Run without a console (used by autostart); logs go to `lumend.log` in the config folder.
+    #[arg(long)]
+    background: bool,
+    /// Also set each new wallpaper (a snapshot, for videos) as the Windows desktop background,
+    /// so the desktop is not blank when Lumen is not running (P14). Changes your OS wallpaper setting.
+    #[arg(long)]
+    os_fallback: bool,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -93,13 +102,9 @@ const REBUILD_RETRY: Duration = Duration::from_secs(1);
 type Job = (Request, SyncSender<Response>);
 
 fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
     let args = Args::parse();
+    let config_dir = lumen_platform::config_dir();
+    init_logging(args.background, config_dir.as_deref());
     let platform = Platform::new().context("platform init")?;
 
     if args.list_outputs {
@@ -178,6 +183,9 @@ fn main() -> Result<()> {
         },
         wallpaper: None,
         session: None,
+        config_dir: config_dir.clone(),
+        os_fallback: args.os_fallback,
+        fallback_pending: false,
         clock: VideoClock::default(),
         next_coverage: Instant::now(),
         next_battery: Instant::now() + BATTERY_INTERVAL,
@@ -196,11 +204,33 @@ fn main() -> Result<()> {
             LayoutArg::Span => Layout::Span,
         },
     };
-    if let Some(path) = args.image.as_ref().or(args.video.as_ref()) {
-        let wallpaper = Wallpaper::load(path, None, look)?;
-        daemon.set_wallpaper(wallpaper)?;
-    } else {
-        tracing::info!("no wallpaper yet; waiting for `lumen set <file>`");
+    // Start-up content: command line, else the wallpaper from last time.
+    let saved = config_dir
+        .as_deref()
+        .map(state::load)
+        .and_then(|s| s.wallpaper);
+    let initial = match (args.image.as_ref().or(args.video.as_ref()), saved) {
+        (Some(path), _) => Some((path.clone(), None, look)),
+        (None, Some(s)) => Some((
+            s.path,
+            Some(s.kind),
+            Look {
+                fit: s.fit,
+                layout: s.layout,
+            },
+        )),
+        (None, None) => None,
+    };
+    match initial {
+        Some((path, kind, look)) => match Wallpaper::load(&path, kind, look) {
+            Ok(w) => {
+                if let Err(e) = daemon.set_wallpaper(w) {
+                    tracing::warn!("{e:#}");
+                }
+            }
+            Err(e) => tracing::error!("start-up wallpaper: {e:#}"),
+        },
+        None => tracing::info!("no wallpaper yet; waiting for `lumen set <file>`"),
     }
 
     while !stop.load(Ordering::SeqCst)
@@ -212,6 +242,39 @@ fn main() -> Result<()> {
     drop(daemon);
     tracing::info!("exiting");
     Ok(())
+}
+
+fn set_fallback(image: &std::path::Path, span: bool) {
+    match lumen_platform::set_os_wallpaper(image, span) {
+        Ok(()) => tracing::info!(path = %image.display(), "OS fallback wallpaper set"),
+        Err(e) => tracing::warn!("could not set OS fallback wallpaper: {e}"),
+    }
+}
+
+/// Console logging normally; with `--background`, detach from the console and
+/// append to `<config dir>/lumend.log` instead.
+fn init_logging(background: bool, config_dir: Option<&std::path::Path>) {
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    let file = background.then_some(config_dir).flatten().and_then(|dir| {
+        std::fs::create_dir_all(dir).ok()?;
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("lumend.log"))
+            .ok()
+    });
+    if background {
+        lumen_platform::detach_console();
+    }
+    match file {
+        Some(f) => tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_ansi(false)
+            .with_writer(std::sync::Mutex::new(f))
+            .init(),
+        None => tracing_subscriber::fmt().with_env_filter(filter).init(),
+    }
 }
 
 struct Daemon<'p> {
@@ -228,6 +291,10 @@ struct Daemon<'p> {
     /// A rebuild failed (e.g. Explorer still starting); retry on the next tick.
     needs_rebuild: bool,
     quit: bool,
+    config_dir: Option<PathBuf>,
+    os_fallback: bool,
+    /// Video fallback snapshot still to be taken from the next shown frame.
+    fallback_pending: bool,
 }
 
 impl Daemon<'_> {
@@ -291,8 +358,50 @@ impl Daemon<'_> {
             && let Some(frame) = self.clock.due_frame(player)
         {
             session.show_video_frame(&self.gpu, frame)?;
+            if self.fallback_pending {
+                self.fallback_pending = false;
+                self.video_fallback();
+            }
         }
         Ok(())
+    }
+
+    /// Remembers the wallpaper for the next start.
+    fn persist(&self, w: &Wallpaper) {
+        let Some(dir) = self.config_dir.as_deref() else {
+            return;
+        };
+        let state = state::State {
+            wallpaper: Some(state::SavedWallpaper {
+                path: w.path.clone(),
+                kind: w.kind,
+                fit: w.look.fit,
+                layout: w.look.layout,
+            }),
+            ..state::State::default()
+        };
+        if let Err(e) = state::save(dir, &state) {
+            tracing::warn!("could not save state: {e}");
+        }
+    }
+
+    /// Saves the current video frame as a PNG and makes it the OS wallpaper.
+    fn video_fallback(&self) {
+        let (Some(dir), Some(frame), Some(w)) = (
+            self.config_dir.as_deref(),
+            self.clock.current.as_ref(),
+            self.wallpaper.as_ref(),
+        ) else {
+            return;
+        };
+        let path = dir.join("fallback.png");
+        let saved = image::RgbaImage::from_raw(frame.width, frame.height, frame.to_rgba())
+            .map(|img| img.save(&path));
+        match saved {
+            Some(Ok(())) => set_fallback(&path, w.look.layout == Layout::Span),
+            Some(Err(e)) => tracing::warn!("fallback snapshot not saved: {e}"),
+            None => tracing::warn!("fallback snapshot has wrong size"),
+        }
     }
 
     /// Recreates windows/surfaces for the current wallpaper. Failures are retried next tick.
@@ -324,6 +433,16 @@ impl Daemon<'_> {
     fn set_wallpaper(&mut self, wallpaper: Wallpaper) -> Result<()> {
         self.session = None;
         self.clock = VideoClock::default();
+        self.persist(&wallpaper);
+        if self.os_fallback {
+            match wallpaper.kind {
+                // Images are their own snapshot.
+                MediaKind::Image => {
+                    set_fallback(&wallpaper.path, wallpaper.look.layout == Layout::Span);
+                }
+                MediaKind::Video => self.fallback_pending = true,
+            }
+        }
         self.wallpaper = Some(wallpaper);
         self.rebuild();
         if self.needs_rebuild {
