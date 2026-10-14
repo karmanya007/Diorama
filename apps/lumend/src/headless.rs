@@ -53,6 +53,7 @@ pub fn render_to_png(
     assets: Option<&Path>,
     gpu_options: GpuOptions,
     time: f32,
+    pointer: [f32; 2],
     out: &PathBuf,
     dump_targets: bool,
 ) -> Result<()> {
@@ -66,6 +67,7 @@ pub fn render_to_png(
         &gpu,
         &FrameInputs {
             time,
+            pointer,
             ..FrameInputs::default()
         },
     );

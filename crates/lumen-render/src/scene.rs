@@ -94,6 +94,9 @@ struct GpuPass {
     vs_data: Vec<u8>,
     fs_data: Vec<u8>,
     target: usize,
+    /// Scene placement of a pass drawn straight into the scene (moved by
+    /// parallax each frame); `None` for passes into layer targets.
+    placement: Option<[f32; 6]>,
 }
 
 struct GpuLayer {
@@ -105,6 +108,11 @@ struct GpuLayer {
     blend: Blend,
     /// Samples `_rt_FullFrameBuffer`: snapshot the scene before running.
     needs_framebuffer: bool,
+    size: [u32; 2],
+    transform: [f32; 6],
+    parallax_depth: [f32; 2],
+    /// Parallax offset currently baked into uniforms / vertices.
+    offset: [f32; 2],
 }
 
 /// `targets[SCENE]` is the composited scene, `targets[FRAMEBUFFER]` its
@@ -114,6 +122,10 @@ const FRAMEBUFFER: usize = 1;
 
 pub struct SceneRenderer {
     size: [u32; 2],
+    parallax: Option<ir::Parallax>,
+    /// Smoothed cursor used for parallax, and the time it was last updated.
+    parallax_pointer: [f32; 2],
+    last_time: Option<f32>,
     /// Scene pixels → clip space.
     camera: Rows,
     clear: wgpu::Color,
@@ -323,6 +335,9 @@ impl SceneRenderer {
         let composite = CompositeShared::new(device);
         let mut renderer = Self {
             size: [scene.width, scene.height],
+            parallax: scene.parallax,
+            parallax_pointer: [0.5, 0.5],
+            last_time: None,
             camera: camera_rows(scene),
             clear: wgpu::Color {
                 r: f64::from(scene.clear_color[0]),
@@ -403,6 +418,10 @@ impl SceneRenderer {
                 composite: None,
                 blend: layer.blend,
                 needs_framebuffer,
+                size: layer.size,
+                transform: layer.transform,
+                parallax_depth: layer.parallax_depth,
+                offset: [0.0, 0.0],
             });
         }
 
@@ -502,6 +521,10 @@ impl SceneRenderer {
                     composite: None,
                     blend: layer.blend,
                     needs_framebuffer,
+                    size: layer.size,
+                    transform: layer.transform,
+                    parallax_depth: layer.parallax_depth,
+                    offset: [0.0, 0.0],
                 });
             }
         }
@@ -522,14 +545,22 @@ impl SceneRenderer {
         });
         let composite_vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("composite quad"),
-            contents: bytemuck::cast_slice(&composite_quad(layer, self.camera)),
-            usage: wgpu::BufferUsages::VERTEX,
+            contents: bytemuck::cast_slice(&composite_quad(
+                layer.size,
+                layer.transform,
+                self.camera,
+            )),
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
         Some(GpuLayer {
             passes,
             composite: Some((composite, composite_vertices)),
             blend: layer.blend,
             needs_framebuffer,
+            size: layer.size,
+            transform: layer.transform,
+            parallax_depth: layer.parallax_depth,
+            offset: [0.0, 0.0],
         })
     }
 
@@ -753,6 +784,10 @@ impl SceneRenderer {
             vs_data,
             fs_data,
             target: plan.target,
+            placement: match plan.geometry {
+                Geometry::Direct { transform, .. } if plan.target == SCENE => Some(transform),
+                _ => None,
+            },
         })
     }
 
@@ -828,9 +863,24 @@ impl SceneRenderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("scene"),
             });
+        let shift = self.parallax_shift(inputs);
         // The scene target is cleared by whichever pass touches it first.
         let mut scene_load = wgpu::LoadOp::Clear(self.clear);
         for layer in &mut self.layers {
+            let offset = [
+                shift[0] * layer.parallax_depth[0],
+                shift[1] * layer.parallax_depth[1],
+            ];
+            let moved = offset != layer.offset;
+            if moved {
+                layer.offset = offset;
+                if let Some((_, vertices)) = &layer.composite {
+                    let t = offset_transform(layer.transform, offset);
+                    let quad = composite_quad(layer.size, t, self.camera);
+                    gpu.queue
+                        .write_buffer(vertices, 0, bytemuck::cast_slice(&quad));
+                }
+            }
             if layer.needs_framebuffer {
                 if let wgpu::LoadOp::Clear(_) = scene_load {
                     scene_pass(&mut encoder, &self.targets[SCENE].view, scene_load, "clear");
@@ -856,6 +906,12 @@ impl SceneRenderer {
                     (&program.fs_uniforms, &mut pass.fs_data, &pass.fs_buffer),
                 ] {
                     let mut dirty = layout.write(buf, "g_Time", &[inputs.time]);
+                    if let (true, Some(base)) = (moved, pass.placement) {
+                        let model = model_rows(offset_transform(base, offset));
+                        let mvp = upload_matrix(mat_mul(model, self.camera));
+                        dirty |= layout.write(buf, "g_ModelViewProjectionMatrix", &mvp);
+                        dirty |= layout.write(buf, "g_ModelMatrix", &upload_matrix(model));
+                    }
                     dirty |= layout.write(buf, "g_Daytime", &[inputs.daytime]);
                     dirty |= layout.write(buf, "g_PointerPosition", &inputs.pointer);
                     dirty |= layout.write(buf, "g_PointerPositionLast", &inputs.pointer);
@@ -896,6 +952,39 @@ impl SceneRenderer {
         }
         gpu.queue.submit([encoder.finish()]);
     }
+}
+
+impl SceneRenderer {
+    /// Scene-space parallax shift for depth 1 this frame (smoothed cursor).
+    fn parallax_shift(&mut self, inputs: &FrameInputs) -> [f32; 2] {
+        let Some(p) = self.parallax else {
+            return [0.0, 0.0];
+        };
+        let dt = self
+            .last_time
+            .map_or(f32::INFINITY, |t| (inputs.time - t).max(0.0));
+        self.last_time = Some(inputs.time);
+        let follow = if p.delay > 0.0 {
+            1.0 - (-dt / p.delay).exp()
+        } else {
+            1.0
+        };
+        for (s, target) in self.parallax_pointer.iter_mut().zip(inputs.pointer) {
+            *s += (target - *s) * follow;
+        }
+        let k = p.amount * p.mouse_influence;
+        let [px, py] = self.parallax_pointer;
+        [
+            k * self.size[0] as f32 * (0.5 - px),
+            k * self.size[1] as f32 * (py - 0.5),
+        ]
+    }
+}
+
+fn offset_transform(mut t: [f32; 6], offset: [f32; 2]) -> [f32; 6] {
+    t[4] += offset[0];
+    t[5] += offset[1];
+    t
 }
 
 fn scene_pass<'e>(
@@ -981,9 +1070,8 @@ fn pass_quad(attributes: &[ir::Attribute], geometry: Geometry, uv_max: [f32; 2])
 }
 
 /// Layer quad in the scene's clip space: pos.xy + uv per vertex (strip order).
-fn composite_quad(layer: &ir::ImageLayer, camera: Rows) -> [f32; 16] {
-    let half = layer.size.map(|v| v as f32 * 0.5);
-    let t = layer.transform;
+fn composite_quad(size: [u32; 2], t: [f32; 6], camera: Rows) -> [f32; 16] {
+    let half = size.map(|v| v as f32 * 0.5);
     let mut out = [0.0; 16];
     for (i, (x, y)) in [(-1.0f32, -1.0f32), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)]
         .into_iter()

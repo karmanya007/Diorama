@@ -55,6 +55,9 @@ struct Args {
     /// Scene time in seconds for `--frame-out`.
     #[arg(long, default_value_t = 0.0)]
     time: f32,
+    /// With `--frame-out`: cursor position as fractions of the output (x right, y down).
+    #[arg(long, value_parser = parse_pointer, default_value = "0.5,0.5")]
+    pointer: [f32; 2],
     /// With `--frame-out`: also save every intermediate render target beside it.
     #[arg(long, requires = "frame_out")]
     dump_targets: bool,
@@ -118,6 +121,12 @@ enum BackendArg {
     Vulkan,
 }
 
+fn parse_pointer(s: &str) -> std::result::Result<[f32; 2], String> {
+    let (x, y) = s.split_once(',').ok_or("expected x,y")?;
+    let parse = |v: &str| v.trim().parse::<f32>().map_err(|e| e.to_string());
+    Ok([parse(x)?, parse(y)?])
+}
+
 fn gpu_options(args: &Args) -> GpuOptions {
     GpuOptions {
         backend: match args.backend {
@@ -149,6 +158,7 @@ fn main() -> Result<()> {
             assets,
             gpu_options(&args),
             args.time,
+            args.pointer,
             out,
             args.dump_targets,
         );
@@ -233,6 +243,7 @@ fn main() -> Result<()> {
         clock: VideoClock::default(),
         fps: args.fps,
         scene_clock: SceneClock::new(args.fps),
+        pointer: [0.5, 0.5],
         we_assets: args.we_assets.is_dir().then(|| args.we_assets.clone()),
         next_coverage: Instant::now(),
         next_battery: Instant::now() + BATTERY_INTERVAL,
@@ -355,6 +366,8 @@ struct Daemon<'p> {
     clock: VideoClock,
     fps: u32,
     scene_clock: SceneClock,
+    /// Last cursor position over the scene (kept while it is elsewhere).
+    pointer: [f32; 2],
     /// `<WE install>/assets` for scene built-ins, if present.
     we_assets: Option<PathBuf>,
     next_coverage: Instant,
@@ -443,7 +456,14 @@ impl Daemon<'_> {
         if let Some(Content::Scene(_)) = self.wallpaper.as_ref().map(|w| &w.content)
             && self.scene_clock.frame_due()
         {
-            session.show_scene_frame(&self.gpu, self.scene_clock.time())?;
+            if let Some(p) = self
+                .platform
+                .cursor_position()
+                .and_then(|c| session.pointer(c))
+            {
+                self.pointer = p;
+            }
+            session.show_scene_frame(&self.gpu, self.scene_clock.time(), self.pointer)?;
             if self.fallback_pending {
                 self.fallback_pending = false;
                 let span = self

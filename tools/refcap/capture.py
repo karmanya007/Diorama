@@ -7,6 +7,10 @@ Configured through environment variables:
     REFCAP_WE_DIR    Wallpaper Engine install dir
     REFCAP_OUT_DIR   where .rdc captures and manifest.json go (keep out of git)
     REFCAP_SCENES    ';'-separated list of project.json paths
+    REFCAP_CURSORS   optional ';'-separated "x,y" desktop points: each scene is
+                     captured once per point with the mouse cursor moved there
+                     (parallax/pointer experiments). Every capture logs the
+                     cursor position either way.
 
 The script launches wallpaper64.exe injected with RenderDoc, switches wallpapers
 with WE's own `-control openWallpaper` command line, captures one frame per
@@ -14,6 +18,7 @@ scene, writes manifest.json, and exits. Captures contain Workshop content:
 never commit them.
 """
 
+import ctypes
 import json
 import os
 import subprocess
@@ -25,6 +30,12 @@ import renderdoc as rd
 WE_DIR = os.environ["REFCAP_WE_DIR"]
 OUT_DIR = os.environ["REFCAP_OUT_DIR"]
 SCENES = [s for s in os.environ["REFCAP_SCENES"].split(";") if s]
+CURSORS = [
+    tuple(int(v) for v in p.split(","))
+    for p in os.environ.get("REFCAP_CURSORS", "").split(";")
+    if p
+]
+CURSOR_SETTLE_S = 4
 LOG = os.path.join(OUT_DIR, "capture.log")
 
 STARTUP_WAIT_S = 20
@@ -50,6 +61,28 @@ def pump(target, seconds, want_capture=False):
     return None
 
 
+class POINT(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+
+def cursor():
+    pt = POINT()
+    ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+    return [pt.x, pt.y]
+
+
+def capture(target, scene, manifest):
+    target.TriggerCapture(1)
+    cap = pump(target, CAPTURE_TIMEOUT_S, want_capture=True)
+    pos = cursor()
+    if cap is None:
+        log("  no capture received")
+        manifest.append({"scene": scene, "capture": None, "cursor": pos})
+        return
+    log("  captured %s frame=%d cursor=%s" % (cap.path, cap.frameNumber, pos))
+    manifest.append({"scene": scene, "capture": cap.path, "frame": cap.frameNumber, "cursor": pos})
+
+
 def main():
     os.makedirs(OUT_DIR, exist_ok=True)
     exe = os.path.join(WE_DIR, "wallpaper64.exe")
@@ -73,14 +106,12 @@ def main():
         log("opening " + scene)
         subprocess.run([exe, "-control", "openWallpaper", "-file", scene, "-monitor", "0"], cwd=WE_DIR, timeout=30)
         pump(target, SCENE_SETTLE_S)
-        target.TriggerCapture(1)
-        cap = pump(target, CAPTURE_TIMEOUT_S, want_capture=True)
-        if cap is None:
-            log("  no capture received")
-            manifest.append({"scene": scene, "capture": None})
-            continue
-        log("  captured %s frame=%d" % (cap.path, cap.frameNumber))
-        manifest.append({"scene": scene, "capture": cap.path, "frame": cap.frameNumber})
+        if not CURSORS:
+            capture(target, scene, manifest)
+        for x, y in CURSORS:
+            ctypes.windll.user32.SetCursorPos(x, y)
+            pump(target, CURSOR_SETTLE_S)
+            capture(target, scene, manifest)
 
     with open(os.path.join(OUT_DIR, "manifest.json"), "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)

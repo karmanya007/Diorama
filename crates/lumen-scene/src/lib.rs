@@ -29,6 +29,8 @@ pub struct Scene {
     /// `g_LightAmbientColor` / `g_LightSkylightColor` for lit materials.
     pub ambient_color: [f32; 3],
     pub skylight_color: [f32; 3],
+    /// Mouse parallax (`general.cameraparallax`), if enabled.
+    pub parallax: Option<Parallax>,
     /// Dynamic lights, in the order shaders index them (`g_LPoint_*[i]`).
     pub point_lights: Vec<PointLight>,
     /// Back to front.
@@ -37,6 +39,17 @@ pub struct Scene {
     pub programs: Vec<ShaderProgram>,
     /// Things the importer could not represent yet (shown in logs/reports).
     pub skipped: Vec<String>,
+}
+
+/// Layers shift away from the cursor: offset = depth · amount · influence ·
+/// (W·(0.5 − px), H·(py − 0.5)), cursor (px, py) normalised over the output,
+/// y down. Measured on RenderDoc captures with the cursor at known points.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Parallax {
+    pub amount: f32,
+    pub mouse_influence: f32,
+    /// Smoothing time constant in seconds.
+    pub delay: f32,
 }
 
 /// A point light in scene space (`g_LPoint_Origin` / `g_LPoint_Color`).
@@ -88,6 +101,8 @@ pub struct ImageLayer {
     pub transform: [f32; 6],
     pub visible: bool,
     pub kind: LayerKind,
+    /// `parallaxDepth`: how strongly the layer follows the camera parallax.
+    pub parallax_depth: [f32; 2],
     /// Object colour and alpha (`g_Color4`; `g_Color`/`g_Alpha` for solid layers).
     pub color: [f32; 4],
     /// How the finished layer is composited onto the scene.

@@ -32,12 +32,12 @@ use windows::Win32::UI::HiDpi::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    GWLP_USERDATA, GetWindowLongPtrW, HWND_TOP, MA_NOACTIVATE, MSG, MsgWaitForMultipleObjects,
-    PM_REMOVE, PeekMessageW, PostMessageW, QS_ALLINPUT, RegisterClassExW, RegisterWindowMessageW,
-    SWP_NOACTIVATE, SWP_SHOWWINDOW, SetWindowLongPtrW, SetWindowPos, TranslateMessage, WM_APP,
-    WM_DESTROY, WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_MOUSEACTIVATE, WM_WTSSESSION_CHANGE,
-    WNDCLASSEXW, WS_CHILD, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
-    WS_VISIBLE, WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
+    GWLP_USERDATA, GetCursorPos, GetWindowLongPtrW, HWND_TOP, MA_NOACTIVATE, MSG,
+    MsgWaitForMultipleObjects, PM_REMOVE, PeekMessageW, PostMessageW, QS_ALLINPUT,
+    RegisterClassExW, RegisterWindowMessageW, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetWindowLongPtrW,
+    SetWindowPos, TranslateMessage, WM_APP, WM_DESTROY, WM_DISPLAYCHANGE, WM_ERASEBKGND,
+    WM_MOUSEACTIVATE, WM_WTSSESSION_CHANGE, WNDCLASSEXW, WS_CHILD, WS_CLIPSIBLINGS,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE, WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
 };
 use windows::core::{PCWSTR, w};
 
@@ -133,6 +133,14 @@ impl Platform {
         Waker {
             control: self.control.0 as isize,
         }
+    }
+
+    /// Cursor position in virtual-desktop pixels (same space as outputs).
+    pub fn cursor_position(&self) -> Option<(i32, i32)> {
+        let mut pt = POINT::default();
+        // SAFETY: out-param is a valid local.
+        unsafe { GetCursorPos(&mut pt) }.ok()?;
+        Some((pt.x, pt.y))
     }
 
     /// True when running on battery power.

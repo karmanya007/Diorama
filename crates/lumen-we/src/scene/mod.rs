@@ -166,10 +166,22 @@ impl Importer<'_> {
         self.scene.clear_color = [r, g, b, 1.0];
         self.scene.ambient_color = vec_n(general.get("ambientcolor"), [0.2; 3]);
         self.scene.skylight_color = vec_n(general.get("skylightcolor"), [0.3; 3]);
-        for flag in ["cameraparallax", "camerashake"] {
-            if boolean(general.get(flag), false) {
-                self.skip(format!("general.{flag}"));
-            }
+        if boolean(general.get("cameraparallax"), false) {
+            let num = |k: &str, d: f32| {
+                general
+                    .get(k)
+                    .and_then(floats)
+                    .and_then(|v| v.first().copied())
+                    .unwrap_or(d)
+            };
+            self.scene.parallax = Some(lumen_scene::Parallax {
+                amount: num("cameraparallaxamount", 0.5),
+                mouse_influence: num("cameraparallaxmouseinfluence", 0.5),
+                delay: num("cameraparallaxdelay", 0.1).max(0.0),
+            });
+        }
+        if boolean(general.get("camerashake"), false) {
+            self.skip("general.camerashake".into());
         }
     }
 
@@ -273,6 +285,7 @@ impl Importer<'_> {
             size: [self.scene.width, self.scene.height],
             transform: lumen_scene::affine(centre, 0.0, [1.0, 1.0]),
             visible: true,
+            parallax_depth: [0.0, 0.0],
             kind: LayerKind::Fullscreen,
             color: [1.0; 4],
             blend: Blend::Opaque,
@@ -422,6 +435,7 @@ impl Importer<'_> {
             size,
             transform,
             visible,
+            parallax_depth: vec_n(object.get("parallaxDepth"), [1.0, 1.0]),
             kind: if fullscreen {
                 LayerKind::Fullscreen
             } else if passthrough {

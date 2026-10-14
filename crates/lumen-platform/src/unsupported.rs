@@ -33,6 +33,10 @@ impl Platform {
         false
     }
 
+    pub fn cursor_position(&self) -> Option<(i32, i32)> {
+        None
+    }
+
     pub fn lower_priority(&self) {}
 
     pub fn waker(&self) -> Waker {

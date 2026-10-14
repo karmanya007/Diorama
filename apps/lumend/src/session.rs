@@ -219,13 +219,33 @@ impl Session {
         self.present_all(gpu)
     }
 
+    /// Cursor as a fraction of what the scene covers (x right, y down): the
+    /// span canvas, or the monitor under the cursor in per-output layout.
+    /// `None` when the cursor is not over any output.
+    pub fn pointer(&self, cursor: (i32, i32)) -> Option<[f32; 2]> {
+        let area = match self.look.layout {
+            Layout::Span => self.canvas,
+            Layout::PerOutput => self.outputs.iter().map(|o| rect_of(&o.info)).find(|r| {
+                cursor.0 >= r.x
+                    && cursor.1 >= r.y
+                    && i64::from(cursor.0) < i64::from(r.x) + i64::from(r.width)
+                    && i64::from(cursor.1) < i64::from(r.y) + i64::from(r.height)
+            })?,
+        };
+        Some([
+            (cursor.0 - area.x) as f32 / area.width.max(1) as f32,
+            (cursor.1 - area.y) as f32 / area.height.max(1) as f32,
+        ])
+    }
+
     /// Renders the scene at `time` and presents it (no-op for other content).
-    pub fn show_scene_frame(&mut self, gpu: &Gpu, time: f32) -> Result<()> {
+    pub fn show_scene_frame(&mut self, gpu: &Gpu, time: f32, pointer: [f32; 2]) -> Result<()> {
         if let Renderer::Scene { scene, .. } = &mut self.renderer {
             scene.render(
                 gpu,
                 &FrameInputs {
                     time,
+                    pointer,
                     ..FrameInputs::default()
                 },
             );
