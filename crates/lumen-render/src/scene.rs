@@ -127,6 +127,7 @@ const FRAMEBUFFER: usize = 1;
 
 pub struct SceneRenderer {
     size: [u32; 2],
+    shake: Option<ir::Shake>,
     format: wgpu::TextureFormat,
     parallax: Option<ir::Parallax>,
     /// Smoothed cursor used for parallax, and the time it was last updated.
@@ -347,6 +348,7 @@ impl SceneRenderer {
         let composite = CompositeShared::new(device, format);
         let mut renderer = Self {
             size: [scene.width, scene.height],
+            shake: scene.shake,
             format,
             parallax: scene.parallax,
             parallax_pointer: [0.5, 0.5],
@@ -894,12 +896,13 @@ impl SceneRenderer {
                 label: Some("scene"),
             });
         let shift = self.parallax_shift(inputs);
+        let shake = self.shake_offset(inputs.time);
         // The scene target is cleared by whichever pass touches it first.
         let mut scene_load = wgpu::LoadOp::Clear(self.clear);
         for layer in &mut self.layers {
             let offset = [
-                shift[0] * layer.parallax_depth[0],
-                shift[1] * layer.parallax_depth[1],
+                shift[0] * layer.parallax_depth[0] + shake[0],
+                shift[1] * layer.parallax_depth[1] + shake[1],
             ];
             let moved = offset != layer.offset;
             if moved {
@@ -1024,6 +1027,43 @@ fn f16_to_f32(h: u16) -> f32 {
         31 => f32::NAN,
         e => sign * (1.0 + frac / 1024.0) * (2.0f32).powi(e - 15),
     }
+}
+
+impl SceneRenderer {
+    /// Camera shake in scene pixels at `time` (same for every layer).
+    fn shake_offset(&self, time: f32) -> [f32; 2] {
+        let Some(s) = self.shake else {
+            return [0.0, 0.0];
+        };
+        // ≈1 % of the height peak to peak at amplitude 1 (captures 3347344353,
+        // 3195058405); noise in -1..1, so half of that per unit.
+        let scale = s.amplitude * 0.005 * self.size[1] as f32;
+        let t = time * s.speed * 0.4;
+        [
+            scale * drift(t, 0x9e37, s.roughness),
+            scale * drift(t, 0x85eb, s.roughness),
+        ]
+    }
+}
+
+/// Smooth 1-D value noise in -1..1 with a rougher second octave.
+fn drift(t: f32, seed: u32, roughness: f32) -> f32 {
+    let octave = |t: f32, seed: u32| {
+        let i = t.floor();
+        let f = t - i;
+        let hash = |n: f32| {
+            let mut x =
+                (n as i64 as u32).wrapping_mul(0x2c1b_3c6d) ^ seed.wrapping_mul(0x297a_2d39);
+            x ^= x >> 15;
+            x = x.wrapping_mul(0x8525_7f6b);
+            x ^= x >> 13;
+            (x as f32 / u32::MAX as f32) * 2.0 - 1.0
+        };
+        let smooth = f * f * (3.0 - 2.0 * f);
+        hash(i) + (hash(i + 1.0) - hash(i)) * smooth
+    };
+    let rough = roughness.clamp(0.0, 2.0) * 0.3;
+    (octave(t, seed) + rough * octave(t * 2.7 + 13.0, seed ^ 0x5bd1)) / (1.0 + rough)
 }
 
 fn offset_transform(mut t: [f32; 6], offset: [f32; 2]) -> [f32; 6] {
@@ -1430,6 +1470,17 @@ impl CompositeShared {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drift_is_smooth_and_bounded() {
+        let mut prev = drift(0.0, 7, 1.0);
+        for i in 1..2000 {
+            let v = drift(i as f32 * 0.005, 7, 1.0);
+            assert!((-1.0..=1.0).contains(&v));
+            assert!((v - prev).abs() < 0.05, "jump at {i}");
+            prev = v;
+        }
+    }
 
     #[test]
     fn half_floats_decode() {

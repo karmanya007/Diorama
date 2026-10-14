@@ -54,6 +54,7 @@ pub fn import_with(vfs: &Vfs, limits: &Limits, properties: &Properties) -> Resul
         programs: HashMap::new(),
         program_uniforms: HashMap::new(),
         engine: shader::EngineContext::default(),
+        zoom: 1.0,
     };
     importer.scene_header(&json);
     let objects: Vec<&Value> = json["objects"].as_array().into_iter().flatten().collect();
@@ -139,6 +140,8 @@ struct Importer<'a> {
     /// Uniform declarations (with annotations) of each program, both stages.
     program_uniforms: HashMap<ProgramId, Vec<Decl>>,
     engine: shader::EngineContext,
+    /// `general.zoom`.
+    zoom: f32,
 }
 
 /// A synthetic pass of an engine post-processing chain (bloom).
@@ -188,6 +191,12 @@ impl Importer<'_> {
         self.scene.clear_color = [r, g, b, 1.0];
         self.scene.ambient_color = vec_n(general.get("ambientcolor"), [0.2; 3]);
         self.scene.skylight_color = vec_n(general.get("skylightcolor"), [0.3; 3]);
+        self.zoom = general
+            .get("zoom")
+            .and_then(floats)
+            .and_then(|z| z.first().copied())
+            .filter(|z| *z > 0.01)
+            .unwrap_or(1.0);
         if boolean(general.get("cameraparallax"), false) {
             let num = |k: &str, d: f32| {
                 general
@@ -202,8 +211,21 @@ impl Importer<'_> {
                 delay: num("cameraparallaxdelay", 0.1).max(0.0),
             });
         }
-        if boolean(general.get("camerashake"), false) {
-            self.skip("general.camerashake".into());
+        // Shake only showed up in captures of scenes that also enable camera
+        // parallax (2176097362 has shake on, parallax off, and no motion).
+        if boolean(general.get("camerashake"), false) && self.scene.parallax.is_some() {
+            let num = |k: &str, d: f32| {
+                general
+                    .get(k)
+                    .and_then(floats)
+                    .and_then(|v| v.first().copied())
+                    .unwrap_or(d)
+            };
+            self.scene.shake = Some(lumen_scene::Shake {
+                amplitude: num("camerashakeamplitude", 0.5),
+                speed: num("camerashakespeed", 3.0),
+                roughness: num("camerashakeroughness", 1.0),
+            });
         }
     }
 
@@ -569,8 +591,11 @@ impl Importer<'_> {
             // `origin` is the anchor named by `alignment`; children hang off
             // the anchor too, so only the layer's own quad moves.
             let anchor = alignment_offset(object["alignment"].as_str(), size);
+            // `general.zoom` scales every layer about its own origin (capture
+            // of 3195058405: zoom 1.05 → layers drawn at 1.0496×, origins kept).
+            let zoom = [self.zoom, self.zoom];
             (
-                lumen_scene::compose(world, lumen_scene::affine(anchor, 0.0, [1.0, 1.0])),
+                lumen_scene::compose(world, lumen_scene::affine(anchor, 0.0, zoom)),
                 visible,
             )
         };

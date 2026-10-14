@@ -31,6 +31,8 @@ pub struct Scene {
     /// `g_LightAmbientColor` / `g_LightSkylightColor` for lit materials.
     pub ambient_color: [f32; 3],
     pub skylight_color: [f32; 3],
+    /// Camera shake (`general.camerashake`), if enabled.
+    pub shake: Option<Shake>,
     /// Mouse parallax (`general.cameraparallax`), if enabled.
     pub parallax: Option<Parallax>,
     /// Dynamic lights, in the order shaders index them (`g_LPoint_*[i]`).
@@ -52,6 +54,16 @@ pub struct Parallax {
     pub mouse_influence: f32,
     /// Smoothing time constant in seconds.
     pub delay: f32,
+}
+
+/// Smooth random camera drift. Multi-frame captures show a slow,
+/// camera-level offset (same for every layer) of about 1 % of the screen
+/// height peak to peak at amplitude 1; WE's exact noise is not recovered.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Shake {
+    pub amplitude: f32,
+    pub speed: f32,
+    pub roughness: f32,
 }
 
 /// A point light in scene space (`g_LPoint_Origin` / `g_LPoint_Color`).

@@ -11,6 +11,8 @@ Configured through environment variables:
                      captured once per point with the mouse cursor moved there
                      (parallax/pointer experiments). Every capture logs the
                      cursor position either way.
+    REFCAP_FRAMES    optional number of captures per scene/cursor (default 1),
+                     REFCAP_FRAME_GAP_S apart (default 0.25): animation studies.
 
 The script launches wallpaper64.exe injected with RenderDoc, switches wallpapers
 with WE's own `-control openWallpaper` command line, captures one frame per
@@ -36,6 +38,8 @@ CURSORS = [
     if p
 ]
 CURSOR_SETTLE_S = 4
+FRAMES = int(os.environ.get("REFCAP_FRAMES", "1"))
+FRAME_GAP_S = float(os.environ.get("REFCAP_FRAME_GAP_S", "0.25"))
 LOG = os.path.join(OUT_DIR, "capture.log")
 
 STARTUP_WAIT_S = 20
@@ -106,12 +110,14 @@ def main():
         log("opening " + scene)
         subprocess.run([exe, "-control", "openWallpaper", "-file", scene, "-monitor", "0"], cwd=WE_DIR, timeout=30)
         pump(target, SCENE_SETTLE_S)
-        if not CURSORS:
-            capture(target, scene, manifest)
-        for x, y in CURSORS:
-            ctypes.windll.user32.SetCursorPos(x, y)
-            pump(target, CURSOR_SETTLE_S)
-            capture(target, scene, manifest)
+        for point in CURSORS or [None]:
+            if point is not None:
+                ctypes.windll.user32.SetCursorPos(*point)
+                pump(target, CURSOR_SETTLE_S)
+            for i in range(FRAMES):
+                if i:
+                    pump(target, FRAME_GAP_S)
+                capture(target, scene, manifest)
 
     with open(os.path.join(OUT_DIR, "manifest.json"), "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
