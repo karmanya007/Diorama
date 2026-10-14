@@ -163,8 +163,7 @@ impl Gpu {
             format,
             width: width.max(1),
             height: height.max(1),
-            // Vsync; each output paces itself (P7).
-            present_mode: wgpu::PresentMode::Fifo,
+            present_mode: pick_present_mode(&caps.present_modes),
             // Fewest buffers in flight: lower latency and memory (P3).
             desired_maximum_frame_latency: 1,
             alpha_mode: caps
@@ -178,7 +177,20 @@ impl Gpu {
                 .ok_or(Error::NoSurfaceFormat)?
         };
         surface.configure(&self.device, &config);
+        tracing::debug!(present_mode = ?config.present_mode, modes = ?caps.present_modes, "surface configured");
         Ok(OutputSurface { surface, config })
+    }
+}
+
+/// Mailbox when available: vsynced without tearing, and a present never
+/// waits for that monitor's vblank, so outputs with different refresh rates
+/// cannot stall each other through the shared render loop (P7). FIFO
+/// otherwise (still vsynced; only blocks when content outruns a monitor).
+fn pick_present_mode(modes: &[wgpu::PresentMode]) -> wgpu::PresentMode {
+    if modes.contains(&wgpu::PresentMode::Mailbox) {
+        wgpu::PresentMode::Mailbox
+    } else {
+        wgpu::PresentMode::Fifo
     }
 }
 
@@ -242,6 +254,13 @@ impl OutputSurface {
 mod tests {
     use super::*;
     use wgpu::TextureFormat::*;
+
+    #[test]
+    fn prefers_mailbox_then_fifo() {
+        use wgpu::PresentMode::{Fifo, Immediate, Mailbox};
+        assert_eq!(pick_present_mode(&[Fifo, Mailbox, Immediate]), Mailbox);
+        assert_eq!(pick_present_mode(&[Fifo, Immediate]), Fifo);
+    }
 
     #[test]
     fn prefers_non_srgb_bgra() {
