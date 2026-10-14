@@ -14,6 +14,9 @@ struct Args {
     /// Cover-fit the candidate to the reference size first (scene vs presented frame).
     #[arg(long)]
     cover: bool,
+    /// Stretch the candidate to the reference size instead (WE "stretch" alignment).
+    #[arg(long, conflicts_with = "cover")]
+    stretch: bool,
     /// Write |reference − candidate| × 4 here.
     #[arg(long)]
     diff: Option<PathBuf>,
@@ -48,7 +51,9 @@ fn main() -> Result<()> {
         }
     }
     let (w, h) = reference.dimensions();
-    if args.cover || candidate.dimensions() != (w, h) {
+    if args.stretch {
+        candidate = imageops::resize(&candidate, w, h, imageops::FilterType::Triangle);
+    } else if args.cover || candidate.dimensions() != (w, h) {
         candidate = imgdiff::cover(&candidate, w, h);
     }
     println!(

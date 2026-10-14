@@ -422,7 +422,14 @@ impl Importer<'_> {
                 graph.world(object).1,
             )
         } else {
-            graph.world(object)
+            let (world, visible) = graph.world(object);
+            // `origin` is the anchor named by `alignment`; children hang off
+            // the anchor too, so only the layer's own quad moves.
+            let anchor = alignment_offset(object["alignment"].as_str(), size);
+            (
+                lumen_scene::compose(world, lumen_scene::affine(anchor, 0.0, [1.0, 1.0])),
+                visible,
+            )
         };
         let [r, g, b] = vec_n(object.get("color"), [1.0; 3]);
         let alpha = object
@@ -830,6 +837,27 @@ fn unsupported(what: &'static str, value: &str) -> Error {
     }
 }
 
+/// Offset from the anchor point to the quad centre (layer pixels, y up).
+fn alignment_offset(alignment: Option<&str>, size: [u32; 2]) -> [f32; 2] {
+    let (hw, hh) = (size[0] as f32 / 2.0, size[1] as f32 / 2.0);
+    let a = alignment.unwrap_or("center");
+    let x = if a.contains("left") {
+        hw
+    } else if a.contains("right") {
+        -hw
+    } else {
+        0.0
+    };
+    let y = if a.contains("top") {
+        -hh
+    } else if a.contains("bottom") {
+        hh
+    } else {
+        0.0
+    };
+    [x, y]
+}
+
 /// `g_Texture7` → 7.
 fn texture_slot(name: &str) -> Option<u32> {
     name.strip_prefix("g_Texture")?.parse().ok()
@@ -852,4 +880,20 @@ fn lookup<'v>(map: &'v serde_json::Map<String, Value>, key: &str) -> Option<&'v 
             .find(|(k, _)| k.eq_ignore_ascii_case(key))
             .map(|(_, v)| v)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn alignment_moves_the_quad_off_its_anchor() {
+        assert_eq!(alignment_offset(None, [100, 40]), [0.0, 0.0]);
+        assert_eq!(alignment_offset(Some("topleft"), [100, 40]), [50.0, -20.0]);
+        assert_eq!(
+            alignment_offset(Some("bottomright"), [100, 40]),
+            [-50.0, 20.0]
+        );
+        assert_eq!(alignment_offset(Some("left"), [100, 40]), [50.0, 0.0]);
+    }
 }
