@@ -246,7 +246,7 @@ impl Session {
                 &FrameInputs {
                     time,
                     pointer,
-                    ..FrameInputs::default()
+                    daytime: lumen_platform::day_fraction(),
                 },
             );
             self.present_all(gpu)?;

@@ -6,7 +6,7 @@ mod system;
 mod windows_list;
 
 pub use system::{
-    autostart, cache_dir, config_dir, detach_console, set_autostart, set_os_wallpaper,
+    autostart, cache_dir, config_dir, day_fraction, detach_console, set_autostart, set_os_wallpaper,
 };
 
 use std::cell::{Cell, RefCell};

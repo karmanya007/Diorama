@@ -94,3 +94,11 @@ pub fn cache_dir() -> Option<std::path::PathBuf> {
         .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".cache")))
         .map(|d| d.join("lumen"))
 }
+
+/// Fraction of the day elapsed (UTC until the Linux backend reads the time zone).
+pub fn day_fraction() -> f32 {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    (secs % 86_400) as f32 / 86_400.0
+}

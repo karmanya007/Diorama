@@ -32,6 +32,17 @@ pub fn config_dir() -> Option<PathBuf> {
     std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("Lumen"))
 }
 
+/// Fraction of the local day elapsed, 0..1 (`g_Daytime`).
+pub fn day_fraction() -> f32 {
+    // SAFETY: plain query of the local wall-clock time.
+    let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
+    let seconds = f32::from(t.wHour) * 3600.0
+        + f32::from(t.wMinute) * 60.0
+        + f32::from(t.wSecond)
+        + f32::from(t.wMilliseconds) / 1000.0;
+    seconds / 86_400.0
+}
+
 /// `%LOCALAPPDATA%\Lumen\cache`: machine-local, safe to delete (shader cache, thumbnails).
 pub fn cache_dir() -> Option<PathBuf> {
     std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("Lumen").join("cache"))
