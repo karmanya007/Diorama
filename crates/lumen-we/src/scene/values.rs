@@ -2,8 +2,9 @@
 //!
 //! WE writes vectors as space-separated strings (`"1920.000 1080.000 0.000"`),
 //! scalars as numbers or strings, and wraps user-bindable values as
-//! `{"user": "...", "value": ...}` (sometimes with `"animation"`). Phase 2
-//! uses the embedded default `value`; property bindings arrive in Phase 3.
+//! `{"user": "...", "value": ...}` (sometimes with `"animation"`/`"script"`).
+//! User bindings are resolved beforehand ([`super::properties`]); scripted
+//! and animated values fall back to their embedded `value` until Phase 3.
 
 use serde_json::Value;
 

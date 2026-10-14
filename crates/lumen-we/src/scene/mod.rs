@@ -5,6 +5,7 @@
 //! shader translation to HLSL and texture decoding. See
 //! `docs/re-notes/renderdoc-captures.md` for the pass structure this mirrors.
 
+pub mod properties;
 pub mod values;
 pub mod vfs;
 
@@ -22,6 +23,7 @@ use crate::error::{Error, Result};
 use crate::shader::{self, Decl, Qualifier};
 use crate::tex::{Tex, TexFlags};
 use crate::tex_decode::mip_to_rgba8;
+pub use properties::Properties;
 use values::{boolean, floats, integer, unwrap_value, vec_n};
 pub use vfs::Vfs;
 
@@ -33,7 +35,17 @@ pub fn import(project_dir: &Path, assets_dir: Option<&Path>, limits: &Limits) ->
 }
 
 pub fn import_from(vfs: &Vfs, limits: &Limits) -> Result<Scene> {
-    let json = vfs.read_json("scene.json")?;
+    let properties = vfs
+        .read_json("project.json")
+        .map(|p| Properties::from_project(&p))
+        .unwrap_or_default();
+    import_with(vfs, limits, &properties)
+}
+
+/// Imports with explicit user-property values (see [`Properties`]).
+pub fn import_with(vfs: &Vfs, limits: &Limits, properties: &Properties) -> Result<Scene> {
+    let mut json = vfs.read_json("scene.json")?;
+    properties.resolve(&mut json);
     let mut importer = Importer {
         vfs,
         limits,
