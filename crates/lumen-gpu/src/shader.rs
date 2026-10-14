@@ -50,7 +50,7 @@ impl Stage {
     }
 }
 
-/// Bumped whenever flags change so stale cache entries are never reused.
+/// Part of the cache key, so changed flags never reuse stale entries.
 const FLAGS: [&str; 5] = [
     "-spirv",
     "-HV",
@@ -72,13 +72,25 @@ const SPV_OPTIONS: naga::front::spv::Options = naga::front::spv::Options {
 pub struct ShaderCompiler {
     dxc: PathBuf,
     cache_dir: Option<PathBuf>,
+    /// `dxc --version` output: part of every cache key so a compiler upgrade
+    /// never reuses SPIR-V from another version (ADR-003).
+    version: String,
 }
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 impl ShaderCompiler {
     pub fn new(dxc: PathBuf, cache_dir: Option<PathBuf>) -> Self {
-        Self { dxc, cache_dir }
+        let version = Command::new(&dxc)
+            .arg("--version")
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+            .unwrap_or_default();
+        Self {
+            dxc,
+            cache_dir,
+            version,
+        }
     }
 
     /// Finds DXC (see module docs).
@@ -119,7 +131,7 @@ impl ShaderCompiler {
     }
 
     fn spirv(&self, source: &str, entry: &str, stage: Stage) -> Result<Vec<u8>, ShaderError> {
-        let key = cache_key(source, entry, stage);
+        let key = cache_key(&self.version, source, entry, stage);
         let cached = self
             .cache_dir
             .as_ref()
@@ -169,12 +181,12 @@ impl ShaderCompiler {
 }
 
 /// FNV-1a 64 over everything that affects the output.
-fn cache_key(source: &str, entry: &str, stage: Stage) -> u64 {
+fn cache_key(version: &str, source: &str, entry: &str, stage: Stage) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     let parts = FLAGS
         .iter()
         .copied()
-        .chain([stage.profile(), entry, source]);
+        .chain([version, stage.profile(), entry, source]);
     for part in parts {
         for b in part.bytes().chain([0]) {
             h ^= u64::from(b);
@@ -335,11 +347,12 @@ mod tests {
 
     #[test]
     fn cache_key_depends_on_every_input() {
-        let a = cache_key("x", "main", Stage::Vertex);
-        assert_ne!(a, cache_key("y", "main", Stage::Vertex));
-        assert_ne!(a, cache_key("x", "main2", Stage::Vertex));
-        assert_ne!(a, cache_key("x", "main", Stage::Fragment));
-        assert_eq!(a, cache_key("x", "main", Stage::Vertex));
+        let a = cache_key("1.9", "x", "main", Stage::Vertex);
+        assert_ne!(a, cache_key("1.9", "y", "main", Stage::Vertex));
+        assert_ne!(a, cache_key("1.9", "x", "main2", Stage::Vertex));
+        assert_ne!(a, cache_key("1.9", "x", "main", Stage::Fragment));
+        assert_ne!(a, cache_key("1.10", "x", "main", Stage::Vertex));
+        assert_eq!(a, cache_key("1.9", "x", "main", Stage::Vertex));
     }
 
     #[test]

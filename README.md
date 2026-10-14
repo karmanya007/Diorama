@@ -28,15 +28,20 @@ Planned crates (added when their phase starts): `lumen-scene`, `lumen-assets`, `
 
 Run the daemon, then control it (Windows):
 
+Wallpaper Engine scenes need the DirectX Shader Compiler: run `scripts/fetch-dxc.ps1` once (pinned, hash-checked, into `.tools/dxc`) and set `LUMEN_DXC` to its `dxc.exe` (or put `dxc.exe` + `dxcompiler.dll` beside `lumend.exe`). Compiled shaders are cached in `%LOCALAPPDATA%\Lumen\cache\shaders`.
+
 ```sh
 cargo build --release
-target/release/lumend                                   # starts empty; or --image/--video <file>
-target/release/lumen set <image-or-video> [--fit fill|fit|stretch] [--layout per-output|span]
+$env:LUMEN_DXC = "$PWD\.tools\dxc\dxc.exe"           # PowerShell; needed for scenes
+target/release/lumend                                   # starts empty; or --image/--video/--scene <path>
+target/release/lumen set <image|video|scene folder> [--fit fill|fit|stretch] [--layout per-output|span]
 target/release/lumen status                             # what is playing, per-monitor state
 target/release/lumen volume 0-100                       # video soundtrack (0 = muted, default)
 target/release/lumen pause | resume | quit
 target/release/lumen autostart enable | disable | status   # start at sign-in (per user)
 ```
+
+Scenes play at `--fps` (default 30), follow the cursor for parallax, and default to the fit chosen for that wallpaper in Wallpaper Engine (if any). `--we-assets` points at Wallpaper Engine's `assets` folder (built-in shaders and effects); the default is the Steam install path. `lumend --list-outputs` shows monitors.
 
 `lumend --help` lists pause rules (`--on-fullscreen`, `--on-maximized`, `--on-battery`, `--on-lock`). The last wallpaper is remembered in `%APPDATA%\Lumen\state.json`. `--background` detaches from the console and logs to `%APPDATA%\Lumen\lumend.log`. `--os-fallback` also sets each wallpaper (a snapshot for videos) as the Windows background, so the desktop isn't blank when Lumen isn't running — this changes your Windows wallpaper setting.
 
@@ -50,6 +55,9 @@ cargo run -p wpdump -- tex-info "<file>.tex"                       # or: <scene.
 cargo run -p wpdump -- tex2png  "<file>.tex" out.png --crop
 cargo run -p wpdump -- survey --out docs/re-notes/corpus-survey.md   # aggregate feature usage
 cargo run -p wpdump -- shader-check --backend hlsl --dxc <path>/dxc.exe   # shader translation pass rate
+target/release/lumend --scene <dir> --frame-out out.png --time 10 [--pointer 0.5,0.5] [--dump-targets]   # one offscreen frame
+target/release/imgdiff reference.png candidate.png --cover --side-by-side sbs.png   # SSIM/PSNR
+CAPTURES=scratch/captures tools/refcap/golden.sh      # score local RenderDoc captures of WE (see tools/refcap)
 ```
 
 `shader-check --backend hlsl` needs DXC from the [DirectXShaderCompiler releases](https://github.com/microsoft/DirectXShaderCompiler/releases); see [ADR-003](docs/adr/0003-shader-toolchain.md).

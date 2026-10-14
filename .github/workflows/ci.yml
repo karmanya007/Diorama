@@ -32,6 +32,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # Pinned, hash-checked DXC for the shader runtime and scene golden tests
+      # (they skip themselves when DXC or a GPU adapter is missing).
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./scripts/fetch-dxc.ps1
+          "LUMEN_DXC=$PWD\.tools\dxc\dxc.exe" >> $env:GITHUB_ENV
       - run: cargo test --workspace
 
   build-macos:
