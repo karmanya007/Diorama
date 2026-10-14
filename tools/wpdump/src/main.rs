@@ -186,7 +186,14 @@ fn run(cli: Cli) -> Result<()> {
             let bytes = read_input(&input, entry.as_deref(), &limits)?;
             let tex = Tex::parse(&bytes, &limits)?;
             let mip = tex.first_mip().context("texture has no mips")?;
-            let rgba = mip_to_rgba8(&tex, mip)?;
+            let mut rgba = mip_to_rgba8(&tex, mip)?;
+            if tex.header.format == lumen_we::TexFormat::R8 {
+                // Shaders see (r, 0, 0, 1); a grey preview is easier to read.
+                for p in rgba.pixels.as_chunks_mut::<4>().0 {
+                    p[1] = p[0];
+                    p[2] = p[0];
+                }
+            }
             let mut img = image::RgbaImage::from_raw(rgba.width, rgba.height, rgba.pixels)
                 .context("pixel buffer size mismatch")?;
             if crop {

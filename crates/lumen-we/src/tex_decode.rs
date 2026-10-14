@@ -58,12 +58,15 @@ pub fn mip_to_rgba8(tex: &Tex, mip: &TexMip) -> Result<Rgba8Image> {
 
     let pixels = match format {
         TexFormat::Rgba8888 => data.to_vec(),
-        TexFormat::R8 => data.iter().flat_map(|&v| [v, v, v, 255]).collect(),
+        // D3D R8_UNORM samples as (r, 0, 0, 1) in WE's shaders.
+        TexFormat::R8 => data.iter().flat_map(|&v| [v, 0, 0, 255]).collect(),
+        // WE uploads RG88 as D3D R8G8_UNORM, which samples as (r, g, 0, 1):
+        // flow and normal maps read `.rg` (not luminance + alpha).
         TexFormat::Rg88 => data
             .as_chunks::<2>()
             .0
             .iter()
-            .flat_map(|&[l, a]| [l, l, l, a])
+            .flat_map(|&[r, g]| [r, g, 0, 255])
             .collect(),
         TexFormat::Dxt1 => decode_bc(data, w, h, BcKind::Bc1),
         TexFormat::Dxt3 => decode_bc(data, w, h, BcKind::Bc2),
@@ -206,6 +209,40 @@ fn bc3_alpha(block: &[u8]) -> [u8; 16] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_and_two_channel_formats_sample_like_d3d() {
+        let tex = |format, data: Vec<u8>| {
+            let t = Tex {
+                header: crate::tex::TexHeader {
+                    format,
+                    flags: crate::tex::TexFlags(0),
+                    texture_width: 1,
+                    texture_height: 1,
+                    image_width: 1,
+                    image_height: 1,
+                    extra: None,
+                    unknown: 0,
+                },
+                container_version: 1,
+                image_format: None,
+                is_video: false,
+                images: Vec::new(),
+                sprite_sheet: None,
+            };
+            let mip = TexMip {
+                width: 1,
+                height: 1,
+                depth: None,
+                data,
+            };
+            (t, mip)
+        };
+        let (t, m) = tex(TexFormat::R8, vec![200]);
+        assert_eq!(mip_to_rgba8(&t, &m).unwrap().pixels, [200, 0, 0, 255]);
+        let (t, m) = tex(TexFormat::Rg88, vec![10, 20]);
+        assert_eq!(mip_to_rgba8(&t, &m).unwrap().pixels, [10, 20, 0, 255]);
+    }
 
     #[test]
     fn rgb565_expands_to_full_range() {
