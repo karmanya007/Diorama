@@ -39,6 +39,12 @@ pub enum Fit {
     Fill,
     Fit,
     Stretch,
+    /// Wallpaper Engine custom alignment: pan x/y and zoom in percent.
+    Custom {
+        x: i32,
+        y: i32,
+        zoom: i32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -22,7 +22,13 @@ pub enum Alignment {
 /// Alignment WE uses for `wallpaper` (its `scene.pkg`, `project.json` folder
 /// or video file) on monitor `monitor`, if `config.json` mentions it.
 pub fn alignment(we_install: &Path, wallpaper: &Path, monitor: usize) -> Option<Alignment> {
-    let text = std::fs::read_to_string(we_install.join("config.json")).ok()?;
+    alignment_from_file(&we_install.join("config.json"), wallpaper, monitor)
+}
+
+/// Like [`alignment`] for an explicit `config.json` (e.g. one saved with
+/// reference captures).
+pub fn alignment_from_file(config: &Path, wallpaper: &Path, monitor: usize) -> Option<Alignment> {
+    let text = std::fs::read_to_string(config).ok()?;
     let config: Value = serde_json::from_str(&text).ok()?;
     alignment_in(&config, wallpaper, monitor)
 }

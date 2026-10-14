@@ -23,6 +23,7 @@ impl Look {
             Fit::Fill => FitMode::Fill,
             Fit::Fit => FitMode::Fit,
             Fit::Stretch => FitMode::Stretch,
+            Fit::Custom { x, y, zoom } => FitMode::Custom { x, y, zoom },
         }
     }
 }

@@ -18,6 +18,31 @@ pub enum FitMode {
     Fit,
     /// Ignore aspect ratio.
     Stretch,
+    /// Wallpaper Engine's custom alignment (percent values as WE stores
+    /// them): absolute zoom and a pan that can move the image fully off the
+    /// canvas. See [`custom_scale`] and [`custom_offset`].
+    Custom { x: i32, y: i32, zoom: i32 },
+}
+
+/// Canvas pixels per image pixel for WE custom alignment: `(z/100)^3.9`,
+/// fitted to RenderDoc captures at z = 97, 99 and 100 (1:1 at 100).
+pub fn custom_scale(zoom: i32) -> f32 {
+    (zoom.max(1) as f32 / 100.0).powf(3.9)
+}
+
+/// Offset of the image centre from the canvas centre in canvas pixels
+/// (y down): `(p − 50)/50 · (image·scale + canvas)/2` per axis, so 0 and 100
+/// push the image just off either side (verified on captures for x and y).
+pub fn custom_offset(
+    x: i32,
+    y: i32,
+    scale: f32,
+    image: (u32, u32),
+    canvas: (u32, u32),
+) -> [f32; 2] {
+    let axis =
+        |p: i32, i: u32, c: u32| (p as f32 - 50.0) / 50.0 * (i as f32 * scale + c as f32) / 2.0;
+    [axis(x, image.0, canvas.0), axis(y, image.1, canvas.1)]
 }
 
 /// Target-UV → image-UV scale around the centre for `mode`.
@@ -30,6 +55,13 @@ pub fn uv_scale(mode: FitMode, image: (u32, u32), target: (u32, u32)) -> [f32; 2
         FitMode::Fill => [at / ai, 1.0],
         FitMode::Fit if at > ai => [at / ai, 1.0],
         FitMode::Fit => [1.0, ai / at],
+        FitMode::Custom { zoom, .. } => {
+            let s = custom_scale(zoom);
+            [
+                target.0 as f32 / (image.0.max(1) as f32 * s),
+                target.1 as f32 / (image.1.max(1) as f32 * s),
+            ]
+        }
     }
 }
 
@@ -86,10 +118,75 @@ pub fn uv_transform(
         (target.y - canvas.y) as f32 / ch,
     ];
     let frac = [target.width as f32 / cw, target.height as f32 / ch];
+    // Image centre relative to the canvas centre, in canvas fractions.
+    let shift = match mode {
+        FitMode::Custom { x, y, zoom } => {
+            let [ox, oy] = custom_offset(x, y, custom_scale(zoom), image, canvas.size());
+            [ox / cw, oy / ch]
+        }
+        _ => [0.0, 0.0],
+    };
     (
         [s[0] * frac[0], s[1] * frac[1]],
-        [(rel[0] - 0.5) * s[0] + 0.5, (rel[1] - 0.5) * s[1] + 0.5],
+        [
+            (rel[0] - 0.5 - shift[0]) * s[0] + 0.5,
+            (rel[1] - 0.5 - shift[1]) * s[1] + 0.5,
+        ],
     )
+}
+
+/// Blocking readback of an 8-bit RGBA/BGRA texture (mip 0) as tightly packed
+/// RGBA8 (headless frames and tests; not for the frame loop).
+pub fn read_rgba8(gpu: &Gpu, texture: &wgpu::Texture) -> Option<Vec<u8>> {
+    let (w, h) = (texture.width(), texture.height());
+    let bgra = match texture.format() {
+        wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb => false,
+        wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb => true,
+        _ => return None,
+    };
+    let row = 4 * w;
+    let padded =
+        row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+    let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("rgba8 readback"),
+        size: u64::from(padded) * u64::from(h),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    encoder.copy_texture_to_buffer(
+        texture.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded),
+                rows_per_image: Some(h),
+            },
+        },
+        wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
+    );
+    gpu.queue.submit([encoder.finish()]);
+    let slice = buffer.slice(..);
+    slice.map_async(wgpu::MapMode::Read, |_| {});
+    gpu.device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
+    let mapped = slice.get_mapped_range().ok()?;
+    let mut out = Vec::with_capacity((row * h) as usize);
+    for r in mapped.chunks_exact(padded as usize) {
+        out.extend_from_slice(&r[..row as usize]);
+    }
+    if bgra {
+        for p in out.as_chunks_mut::<4>().0 {
+            p.swap(0, 2);
+        }
+    }
+    Some(out)
 }
 
 /// Largest on-screen size the image is ever drawn at across `targets` under
@@ -123,6 +220,9 @@ fn fit_factor(mode: FitMode, image: (u32, u32), targets: &[(u32, u32)]) -> f32 {
                 FitMode::Fill => sx.max(sy),
                 FitMode::Fit => sx.min(sy),
                 FitMode::Stretch => sx.max(sy),
+                // Custom zoom is absolute in the image's own pixels, so the
+                // image must keep its native size for the blit to apply it.
+                FitMode::Custom { .. } => 1.0,
             }
         })
         .fold(0.0_f32, f32::max)
@@ -472,6 +572,42 @@ mod tests {
         let canvas_left = op[0];
         let canvas_right = om[0] + sm[0];
         assert!(((canvas_right - canvas_left) - 3375.0 / 3840.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn custom_alignment_matches_captures() {
+        // 2347484937: z 97, x 49 on a 3000-wide canvas, 3840-wide scene →
+        // scale 0.888 and a −64.1 px shift (RenderDoc).
+        let s = custom_scale(97);
+        assert!((s - 0.888).abs() < 0.002, "{s}");
+        let [ox, _] = custom_offset(49, 50, s, (3840, 2160), (3000, 1920));
+        assert!((ox + 64.1).abs() < 0.5, "{ox}");
+        // 2980001176: z 99, x 54, y 56, 3440×1440 scene → +252.2 / +198.2 px.
+        let s = custom_scale(99);
+        assert!((s - 0.9615).abs() < 0.001, "{s}");
+        let [ox, oy] = custom_offset(54, 56, s, (3440, 1440), (3000, 1920));
+        assert!(
+            (ox - 252.2).abs() < 1.0 && (oy - 198.2).abs() < 1.0,
+            "{ox} {oy}"
+        );
+        assert_eq!(custom_scale(100), 1.0);
+    }
+
+    #[test]
+    fn custom_keeps_native_size() {
+        let mode = FitMode::Custom {
+            x: 50,
+            y: 50,
+            zoom: 97,
+        };
+        assert_eq!(
+            render_size(mode, (3840, 2160), &[(3000, 1920)], 8192),
+            (3840, 2160)
+        );
+        assert_eq!(
+            display_size(mode, (3840, 2160), &[(3000, 1920)]),
+            (3840, 2160)
+        );
     }
 
     #[test]

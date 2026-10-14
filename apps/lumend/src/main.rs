@@ -58,6 +58,14 @@ struct Args {
     /// With `--frame-out`: cursor position as fractions of the output (x right, y down).
     #[arg(long, value_parser = parse_pointer, default_value = "0.5,0.5")]
     pointer: [f32; 2],
+    /// With `--frame-out`: present into a frame of this size (e.g. `3000x1920`)
+    /// with the wallpaper's fit, instead of saving the raw scene.
+    #[arg(long, value_parser = parse_size, requires = "frame_out")]
+    frame_size: Option<[u32; 2]>,
+    /// Wallpaper Engine `config.json` to read per-wallpaper fit from
+    /// (default: the one next to `--we-assets`).
+    #[arg(long)]
+    we_config: Option<PathBuf>,
     /// With `--frame-out`: also save every intermediate render target beside it.
     #[arg(long, requires = "frame_out")]
     dump_targets: bool,
@@ -122,10 +130,47 @@ enum BackendArg {
     Vulkan,
 }
 
+fn parse_size(s: &str) -> std::result::Result<[u32; 2], String> {
+    let (w, h) = s.split_once(['x', 'X']).ok_or("expected WxH")?;
+    let parse = |v: &str| v.trim().parse::<u32>().map_err(|e| e.to_string());
+    Ok([parse(w)?.max(1), parse(h)?.max(1)])
+}
+
+/// The fit Wallpaper Engine uses for `wallpaper` on the first monitor.
+fn we_fit(config: &std::path::Path, wallpaper: &std::path::Path) -> Option<Fit> {
+    use lumen_we::config::{Alignment, alignment_from_file};
+    Some(match alignment_from_file(config, wallpaper, 0)? {
+        Alignment::Stretch => Fit::Stretch,
+        Alignment::Custom { x, y, zoom } => Fit::Custom {
+            x: x.round() as i32,
+            y: y.round() as i32,
+            zoom: zoom.round() as i32,
+        },
+        Alignment::Cover | Alignment::Other(_) => Fit::Fill,
+    })
+}
+
 fn parse_pointer(s: &str) -> std::result::Result<[f32; 2], String> {
     let (x, y) = s.split_once(',').ok_or("expected x,y")?;
     let parse = |v: &str| v.trim().parse::<f32>().map_err(|e| e.to_string());
     Ok([parse(x)?, parse(y)?])
+}
+
+fn we_config_path(args: &Args) -> Option<PathBuf> {
+    args.we_config
+        .clone()
+        .or_else(|| args.we_assets.parent().map(|p| p.join("config.json")))
+        .filter(|p| p.is_file())
+}
+
+fn fit_mode(fit: Fit) -> lumen_render::FitMode {
+    use lumen_render::FitMode;
+    match fit {
+        Fit::Fill => FitMode::Fill,
+        Fit::Fit => FitMode::Fit,
+        Fit::Stretch => FitMode::Stretch,
+        Fit::Custom { x, y, zoom } => FitMode::Custom { x, y, zoom },
+    }
 }
 
 fn gpu_options(args: &Args) -> GpuOptions {
@@ -154,15 +199,24 @@ fn main() -> Result<()> {
 
     if let (Some(scene), Some(out)) = (&args.scene, &args.frame_out) {
         let assets = args.we_assets.is_dir().then_some(args.we_assets.as_path());
-        return headless::render_to_png(
-            scene,
-            assets,
-            gpu_options(&args),
-            args.time,
-            args.pointer,
+        let request = headless::FrameRequest {
+            time: args.time,
+            pointer: args.pointer,
             out,
-            args.dump_targets,
-        );
+            dump_targets: args.dump_targets,
+            present: args.frame_size.map(|size| {
+                let fit = match args.fit {
+                    Some(FitArg::Fill) => Fit::Fill,
+                    Some(FitArg::Fit) => Fit::Fit,
+                    Some(FitArg::Stretch) => Fit::Stretch,
+                    None => we_config_path(&args)
+                        .and_then(|c| we_fit(&c, scene))
+                        .unwrap_or(Fit::Fill),
+                };
+                (size, fit_mode(fit))
+            }),
+        };
+        return headless::render_to_png(scene, assets, gpu_options(&args), &request);
     }
 
     if args.list_outputs {
@@ -244,6 +298,7 @@ fn main() -> Result<()> {
         clock: VideoClock::default(),
         fps: args.fps,
         scene_clock: SceneClock::new(args.fps),
+        we_config: we_config_path(&args),
         pointer: [0.5, 0.5],
         we_assets: args.we_assets.is_dir().then(|| args.we_assets.clone()),
         next_coverage: Instant::now(),
@@ -372,6 +427,8 @@ struct Daemon<'p> {
     session: Option<Session>,
     clock: VideoClock,
     fps: u32,
+    /// Wallpaper Engine's `config.json` (per-wallpaper fit), if present.
+    we_config: Option<PathBuf>,
     scene_clock: SceneClock,
     /// Last cursor position over the scene (kept while it is elsewhere).
     pointer: [f32; 2],
@@ -623,12 +680,7 @@ impl Daemon<'_> {
     /// The fit Wallpaper Engine uses for this wallpaper on the first monitor,
     /// so Lumen starts from the user's existing choice.
     fn we_fit(&self, path: &std::path::Path) -> Option<Fit> {
-        let install = self.we_assets.as_deref()?.parent()?;
-        match lumen_we::config::alignment(install, path, 0)? {
-            lumen_we::config::Alignment::Stretch => Some(Fit::Stretch),
-            // Custom zoom/pan is not reproduced yet; cover is its closest neighbour.
-            _ => Some(Fit::Fill),
-        }
+        we_fit(self.we_config.as_deref()?, path)
     }
 
     fn default_fit(&self, path: &std::path::Path) -> Fit {

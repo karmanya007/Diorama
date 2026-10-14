@@ -7,8 +7,10 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use lumen_core::Limits;
 use lumen_gpu::shader::ShaderCompiler;
+use lumen_gpu::wgpu;
 use lumen_gpu::{Gpu, GpuOptions};
 use lumen_render::scene::{FrameInputs, SceneRenderer};
+use lumen_render::{FitMode, ImageBlit, Rect, read_rgba8, render_size};
 
 /// Default `<WE install>/assets` (built-in shaders, effects, `util/*`).
 pub const DEFAULT_WE_ASSETS: &str =
@@ -48,20 +50,40 @@ pub fn load_scene(dir: &Path, assets: Option<&Path>) -> Result<lumen_scene::Scen
     Ok(scene)
 }
 
+/// What `--frame-out` renders.
+pub struct FrameRequest<'a> {
+    pub time: f32,
+    pub pointer: [f32; 2],
+    pub out: &'a PathBuf,
+    pub dump_targets: bool,
+    /// Present into a frame of this size with this fit (else the raw scene).
+    pub present: Option<([u32; 2], FitMode)>,
+}
+
 pub fn render_to_png(
     scene_dir: &Path,
     assets: Option<&Path>,
     gpu_options: GpuOptions,
-    time: f32,
-    pointer: [f32; 2],
-    out: &PathBuf,
-    dump_targets: bool,
+    request: &FrameRequest<'_>,
 ) -> Result<()> {
+    let FrameRequest {
+        time,
+        pointer,
+        out,
+        dump_targets,
+        present,
+    } = *request;
     let scene = load_scene(scene_dir, assets)?;
     let gpu = Gpu::new(gpu_options)?;
     let compiler = shader_compiler()?;
     let started = Instant::now();
-    let mut renderer = SceneRenderer::new(&gpu, &scene, &compiler, None)?;
+    // Like live playback: render at the size the frame needs.
+    let output = present.map(|([w, h], mode)| {
+        let max = gpu.device.limits().max_texture_dimension_2d;
+        let (rw, rh) = render_size(mode, (scene.width, scene.height), &[(w, h)], max);
+        [rw, rh]
+    });
+    let mut renderer = SceneRenderer::new(&gpu, &scene, &compiler, output)?;
     tracing::info!(ms = started.elapsed().as_millis(), "scene renderer built");
     renderer.render(
         &gpu,
@@ -78,10 +100,49 @@ pub fn render_to_png(
             println!("target {i} {label:?} → {}", path.display());
         }
     }
-    let [w, h] = renderer.size();
-    let rgba = renderer
-        .read_output(&gpu)
-        .context("reading back the frame")?;
+    let ([w, h], rgba) = match present {
+        // The frame as a monitor of that size shows it (fit applied).
+        Some(([fw, fh], mode)) => {
+            let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("presented frame"),
+                size: wgpu::Extent3d {
+                    width: fw,
+                    height: fh,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let [sw, sh] = renderer.size();
+            let blit = ImageBlit::from_view(
+                &gpu,
+                wgpu::TextureFormat::Rgba8Unorm,
+                renderer.output(),
+                sw,
+                sh,
+            );
+            let rect = Rect {
+                x: 0,
+                y: 0,
+                width: fw,
+                height: fh,
+            };
+            let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+            blit.draw(&gpu, &view, rect, rect, mode, [0.0, 0.0, 0.0, 1.0]);
+            let rgba = read_rgba8(&gpu, &target).context("reading back the frame")?;
+            ([fw, fh], rgba)
+        }
+        None => (
+            renderer.size(),
+            renderer
+                .read_output(&gpu)
+                .context("reading back the frame")?,
+        ),
+    };
     image::save_buffer(out, &rgba, w, h, image::ExtendedColorType::Rgba8)
         .with_context(|| format!("writing {}", out.display()))?;
     println!("wrote {} ({w}×{h}, t = {time} s)", out.display());
