@@ -26,6 +26,9 @@ pub struct Scene {
     pub width: u32,
     pub height: u32,
     pub clear_color: [f32; 4],
+    /// `g_LightAmbientColor` / `g_LightSkylightColor` for lit materials.
+    pub ambient_color: [f32; 3],
+    pub skylight_color: [f32; 3],
     /// Back to front.
     pub layers: Vec<ImageLayer>,
     pub textures: Vec<Texture>,
@@ -64,19 +67,35 @@ pub enum Blend {
 #[derive(Debug, Clone)]
 pub struct ImageLayer {
     pub name: String,
-    /// Centre of the layer in scene pixels (y up).
-    pub origin: [f32; 3],
     /// Unscaled size in scene pixels; also the size of its render targets.
     pub size: [u32; 2],
-    pub scale: [f32; 3],
-    /// Euler angles in radians.
-    pub angles: [f32; 3],
+    /// Layer-local pixels (centred, y up) → scene pixels (origin bottom-left,
+    /// y up), parents already applied: `x' = m0·x + m2·y + m4`,
+    /// `y' = m1·x + m3·y + m5`.
+    pub transform: [f32; 6],
     pub visible: bool,
+    pub kind: LayerKind,
+    /// Object colour and alpha (`g_Color4`; `g_Color`/`g_Alpha` for solid layers).
+    pub color: [f32; 4],
     /// How the finished layer is composited onto the scene.
     pub blend: Blend,
     /// Draws the layer's own image into its first target.
     pub albedo: Pass,
     pub effects: Vec<Effect>,
+}
+
+/// How a layer's albedo pass is drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LayerKind {
+    /// A textured quad placed by `transform`.
+    #[default]
+    Image,
+    /// Covers the scene; the albedo is a clip-space quad over what is below
+    /// (WE fullscreen/post-processing layers).
+    Fullscreen,
+    /// Fills its own target from texcoords while sampling the frame buffer
+    /// under its scene placement (WE `composelayer`).
+    Compose,
 }
 
 #[derive(Debug, Clone)]
@@ -100,6 +119,8 @@ pub enum TextureBinding {
     Previous,
     /// A named effect FBO.
     Fbo(String),
+    /// Everything composited below this layer so far (`_rt_FullFrameBuffer`).
+    FrameBuffer,
 }
 
 #[derive(Debug, Clone)]
@@ -132,10 +153,54 @@ pub struct ShaderProgram {
     pub texture_bindings: BTreeMap<u32, u32>,
 }
 
+/// `[m0..m5]` for translate · rotate(z) · scale, see [`ImageLayer::transform`].
+pub fn affine(origin: [f32; 2], angle: f32, scale: [f32; 2]) -> [f32; 6] {
+    let (sin, cos) = angle.sin_cos();
+    [
+        cos * scale[0],
+        sin * scale[0],
+        -sin * scale[1],
+        cos * scale[1],
+        origin[0],
+        origin[1],
+    ]
+}
+
+/// `parent ∘ child`.
+pub fn compose(parent: [f32; 6], child: [f32; 6]) -> [f32; 6] {
+    let [a, b, c, d, e, f] = parent;
+    let [p, q, r, s, t, u] = child;
+    [
+        a * p + c * q,
+        b * p + d * q,
+        a * r + c * s,
+        b * r + d * s,
+        a * t + c * u + e,
+        b * t + d * u + f,
+    ]
+}
+
+pub const IDENTITY_AFFINE: [f32; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Attribute {
     pub name: String,
     pub location: u32,
     /// Number of float components (2, 3 or 4).
     pub components: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn child_offsets_follow_parent_rotation() {
+        let parent = affine([100.0, 50.0], std::f32::consts::FRAC_PI_2, [2.0, 2.0]);
+        let child = affine([10.0, 0.0], 0.0, [1.0, 1.0]);
+        let world = compose(parent, child);
+        // (10, 0) rotated 90° and doubled → (0, 20), plus parent origin.
+        assert!((world[4] - 100.0).abs() < 1e-4 && (world[5] - 70.0).abs() < 1e-4);
+        assert_eq!(compose(IDENTITY_AFFINE, child), child);
+    }
 }

@@ -30,6 +30,18 @@ pub fn load_scene(dir: &Path, assets: Option<&Path>) -> Result<lumen_scene::Scen
         ms = started.elapsed().as_millis(),
         "scene imported"
     );
+    for l in &scene.layers {
+        tracing::debug!(
+            name = %l.name,
+            size = ?l.size,
+            transform = ?l.transform,
+            visible = l.visible,
+            color = ?l.color,
+            blend = ?l.blend,
+            effects = ?l.effects.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
+            "layer"
+        );
+    }
     for s in &scene.skipped {
         tracing::warn!("not yet supported: {s}");
     }

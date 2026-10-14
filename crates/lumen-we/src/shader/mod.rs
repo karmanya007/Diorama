@@ -26,6 +26,33 @@ pub fn engine_defines() -> Vec<(String, String)> {
     ]
 }
 
+/// Comment left where a `#require` stood; [`prepare_pair`] replaces it with
+/// the engine-provided library.
+pub const REQUIRE_MARKER: &str = "lumen-require:";
+
+/// Code WE's engine generates for `#require LightingV1`: a loop over the
+/// scene's point/spot/tube/directional lights (strings in `wallpaper64.exe`).
+/// Lumen has no dynamic lights yet, so lit materials get ambient only.
+const LIGHTING_V1: &str = "vec3 PerformLighting_V1(vec3 worldPos, vec3 color, vec3 normal, \
+    vec3 viewVector, vec3 specularTint, vec3 ambient, float roughness, float metallic) \
+    { vec3 light = CAST3(0.0); return light; }\n";
+
+fn splice_requires(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for line in text.split_inclusive('\n') {
+        match line
+            .trim()
+            .strip_prefix("// ")
+            .and_then(|l| l.strip_prefix(REQUIRE_MARKER))
+        {
+            Some("LightingV1") => out.push_str(LIGHTING_V1),
+            Some(_) => out.push('\n'),
+            None => out.push_str(line),
+        }
+    }
+    out
+}
+
 /// A preprocessed vertex/fragment pair, ready for a backend translator.
 #[derive(Debug, Clone)]
 pub struct PreparedPair {
@@ -89,7 +116,7 @@ pub fn prepare_pair(
         combos,
         defines,
         requires,
-        vertex: vs.text,
-        fragment: fs.text,
+        vertex: splice_requires(&vs.text),
+        fragment: splice_requires(&fs.text),
     })
 }

@@ -13,8 +13,8 @@ use std::path::Path;
 
 use lumen_core::Limits;
 use lumen_scene::{
-    Attribute, Blend, Effect, Fbo, ImageLayer, Pass, ProgramId, Scene, ShaderProgram, Texture,
-    TextureBinding, TextureId,
+    Attribute, Blend, Effect, Fbo, ImageLayer, LayerKind, Pass, ProgramId, Scene, ShaderProgram,
+    Texture, TextureBinding, TextureId,
 };
 use serde_json::Value;
 
@@ -43,10 +43,68 @@ pub fn import_from(vfs: &Vfs, limits: &Limits) -> Result<Scene> {
         program_uniforms: HashMap::new(),
     };
     importer.scene_header(&json);
-    for object in json["objects"].as_array().into_iter().flatten() {
-        importer.object(object);
+    let objects: Vec<&Value> = json["objects"].as_array().into_iter().flatten().collect();
+    let graph = SceneGraph::new(&objects);
+    for object in objects {
+        importer.object(object, &graph);
     }
     Ok(importer.scene)
+}
+
+/// Object hierarchy: children store origin/scale/angles relative to `parent`.
+struct SceneGraph {
+    /// id → (local transform, own visibility, parent id).
+    nodes: HashMap<i64, ([f32; 6], bool, Option<i64>)>,
+}
+
+impl SceneGraph {
+    fn new(objects: &[&Value]) -> Self {
+        let nodes = objects
+            .iter()
+            .filter_map(|o| {
+                let id = integer(o.get("id"))?;
+                Some((
+                    id,
+                    (
+                        local_transform(o),
+                        boolean(o.get("visible"), true),
+                        integer(o.get("parent")),
+                    ),
+                ))
+            })
+            .collect();
+        Self { nodes }
+    }
+
+    /// World transform and effective visibility (hidden parents hide children).
+    fn world(&self, object: &Value) -> ([f32; 6], bool) {
+        let mut transform = local_transform(object);
+        let mut visible = boolean(object.get("visible"), true);
+        let mut parent = integer(object.get("parent"));
+        // Depth cap guards against cycles in malformed content.
+        for _ in 0..64 {
+            let Some((local, vis, next)) = parent.and_then(|p| self.nodes.get(&p)) else {
+                break;
+            };
+            transform = lumen_scene::compose(*local, transform);
+            visible &= vis;
+            parent = *next;
+        }
+        (transform, visible)
+    }
+}
+
+/// Origin · rotation(z) · scale. Rotations of π about x/y (mirroring in an
+/// orthographic view) fold into the scale; angles are radians.
+fn local_transform(object: &Value) -> [f32; 6] {
+    let origin = vec_n(object.get("origin"), [0.0; 3]);
+    let scale = vec_n(object.get("scale"), [1.0; 3]);
+    let angles = vec_n(object.get("angles"), [0.0; 3]);
+    lumen_scene::affine(
+        [origin[0], origin[1]],
+        angles[2],
+        [scale[0] * angles[1].cos(), scale[1] * angles[0].cos()],
+    )
 }
 
 struct Importer<'a> {
@@ -84,6 +142,8 @@ impl Importer<'_> {
             .unwrap_or(1080);
         let [r, g, b] = vec_n(general.get("clearcolor"), [0.0, 0.0, 0.0]);
         self.scene.clear_color = [r, g, b, 1.0];
+        self.scene.ambient_color = vec_n(general.get("ambientcolor"), [0.2; 3]);
+        self.scene.skylight_color = vec_n(general.get("skylightcolor"), [0.3; 3]);
         for flag in ["bloom", "cameraparallax", "camerashake"] {
             if boolean(general.get(flag), false) {
                 self.skip(format!("general.{flag}"));
@@ -97,14 +157,14 @@ impl Importer<'_> {
         }
     }
 
-    fn object(&mut self, object: &Value) {
+    fn object(&mut self, object: &Value, graph: &SceneGraph) {
         let name = object["name"].as_str().unwrap_or("").to_owned();
         let kind = ["particle", "text", "model", "sound", "light"]
             .into_iter()
             .find(|k| object.get(*k).is_some_and(|v| !v.is_null()));
         match (object.get("image").and_then(Value::as_str), kind) {
             (Some(model), _) => {
-                if let Err(e) = self.image_layer(object, model, &name) {
+                if let Err(e) = self.image_layer(object, model, &name, graph) {
                     self.skip(format!("image layer {name:?}: {e}"));
                 }
             }
@@ -113,8 +173,17 @@ impl Importer<'_> {
         }
     }
 
-    fn image_layer(&mut self, object: &Value, model_path: &str, name: &str) -> Result<()> {
+    fn image_layer(
+        &mut self,
+        object: &Value,
+        model_path: &str,
+        name: &str,
+        graph: &SceneGraph,
+    ) -> Result<()> {
         let model = self.vfs.read_json(model_path)?;
+        // Fullscreen (post-processing) layers cover the scene and start from what is below.
+        let fullscreen = boolean(model.get("fullscreen"), false);
+        let passthrough = boolean(model.get("passthrough"), false);
         let material_path = model["material"]
             .as_str()
             .ok_or_else(|| unsupported("model without material", model_path))?;
@@ -122,10 +191,8 @@ impl Importer<'_> {
 
         // Object-level values the albedo material reads by key.
         let mut object_constants = serde_json::Map::new();
-        for key in ["alpha", "brightness", "color"] {
-            if let Some(v) = object.get(key) {
-                object_constants.insert(key.to_owned(), unwrap_value(v).clone());
-            }
+        if let Some(v) = object.get("brightness") {
+            object_constants.insert("brightness".to_owned(), unwrap_value(v).clone());
         }
         let mut spec = self.pass_spec(&material, None)?;
         spec.constants.push(&object_constants);
@@ -133,6 +200,7 @@ impl Importer<'_> {
         let albedo = self.pass(&spec, None)?;
 
         let size = match object.get("size").and_then(floats) {
+            _ if fullscreen => [self.scene.width, self.scene.height],
             Some(s) if s.len() >= 2 => [s[0].max(1.0) as u32, s[1].max(1.0) as u32],
             _ => match albedo.textures.get(&0) {
                 Some(TextureBinding::Asset(id)) => {
@@ -151,22 +219,41 @@ impl Importer<'_> {
             });
         }
 
-        let angles = vec_n(object.get("angles"), [0.0; 3]);
+        let (transform, visible) = if fullscreen {
+            let centre = [
+                self.scene.width as f32 / 2.0,
+                self.scene.height as f32 / 2.0,
+            ];
+            (
+                lumen_scene::affine(centre, 0.0, [1.0, 1.0]),
+                graph.world(object).1,
+            )
+        } else {
+            graph.world(object)
+        };
+        let [r, g, b] = vec_n(object.get("color"), [1.0; 3]);
+        let alpha = object
+            .get("alpha")
+            .and_then(floats)
+            .and_then(|a| a.first().copied())
+            .unwrap_or(1.0);
         let mut layer = ImageLayer {
             name: name.to_owned(),
-            origin: vec_n(object.get("origin"), [0.0; 3]),
             size,
-            scale: vec_n(object.get("scale"), [1.0; 3]),
-            angles: angles.map(f32::to_radians),
-            visible: boolean(object.get("visible"), true),
+            transform,
+            visible,
+            kind: if fullscreen {
+                LayerKind::Fullscreen
+            } else if passthrough {
+                LayerKind::Compose
+            } else {
+                LayerKind::Image
+            },
+            color: [r, g, b, alpha],
             blend: composite_blend,
             albedo,
             effects: Vec::new(),
         };
-        if angles.iter().any(|a| *a != 0.0) {
-            // WE stores degrees in the editor but radians in some exports; verify on a capture.
-            self.skip("rotated layers (unverified angle units)".into());
-        }
         if integer(object.get("colorBlendMode")).unwrap_or(0) != 0 {
             self.skip("layer colorBlendMode".into());
         }
@@ -181,7 +268,10 @@ impl Importer<'_> {
                 Err(e) => self.skip(format!("effect {file}: {e}")),
             }
         }
-        self.scene.layers.push(layer);
+        // A passthrough layer without effects redraws what is already there.
+        if !(passthrough && layer.effects.is_empty()) {
+            self.scene.layers.push(layer);
+        }
         Ok(())
     }
 
@@ -386,6 +476,14 @@ impl Importer<'_> {
         if fbos.iter().any(|f| f.name == name) {
             return TextureBinding::Fbo(name.to_owned());
         }
+        if name == "_rt_FullFrameBuffer" {
+            return TextureBinding::FrameBuffer;
+        }
+        if name == "_rt_MipMappedFrameBuffer" {
+            // Same image; WE samples its mips for blur (we have none yet).
+            self.skip("render target _rt_MipMappedFrameBuffer (no mips)".into());
+            return TextureBinding::FrameBuffer;
+        }
         if name != "previous" && !name.starts_with("_rt_imageLayerComposite_") {
             self.skip(format!("render target {name}"));
         }
@@ -413,7 +511,12 @@ impl Importer<'_> {
             combos,
         )?;
         for r in &prepared.requires {
-            self.skip(format!("#require {r}"));
+            match r.as_str() {
+                "LightingV1" => {
+                    self.skip("lit materials: ambient only (no scene lights yet)".into())
+                }
+                other => self.skip(format!("#require {other}")),
+            }
         }
         let hlsl = prepared.hlsl()?;
 

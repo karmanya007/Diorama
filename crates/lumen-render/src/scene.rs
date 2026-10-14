@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use lumen_gpu::shader::{ShaderCompiler, ShaderError, Stage, UniformLayout};
 use lumen_gpu::{Gpu, wgpu};
-use lumen_scene::{self as ir, Blend, TextureBinding};
+use lumen_scene::{self as ir, Blend, LayerKind, TextureBinding};
 use wgpu::util::DeviceExt as _;
 
 /// Every scene target uses WE's gamma-space RGBA8 (no sRGB conversion).
@@ -97,17 +97,25 @@ struct GpuPass {
 }
 
 struct GpuLayer {
+    /// Albedo then effect passes. A layer without effects has only its albedo
+    /// pass, drawn straight into the scene like WE does (no layer target).
     passes: Vec<GpuPass>,
-    composite: wgpu::BindGroup,
-    composite_vertices: wgpu::Buffer,
+    /// Final layer target → scene (layers with effects only).
+    composite: Option<(wgpu::BindGroup, wgpu::Buffer)>,
     blend: Blend,
+    /// Samples `_rt_FullFrameBuffer`: snapshot the scene before running.
+    needs_framebuffer: bool,
 }
+
+/// `targets[SCENE]` is the composited scene, `targets[FRAMEBUFFER]` its
+/// snapshot for layers that read what is below them.
+const SCENE: usize = 0;
+const FRAMEBUFFER: usize = 1;
 
 pub struct SceneRenderer {
     size: [u32; 2],
     clear: wgpu::Color,
     targets: Vec<Target>,
-    scene_target: Target,
     programs: Vec<Option<Program>>,
     layers: Vec<GpuLayer>,
     composite_pipelines: HashMap<Blend, wgpu::RenderPipeline>,
@@ -137,28 +145,47 @@ fn upload_matrix(rows: [[f32; 4]; 4]) -> [f32; 16] {
     std::array::from_fn(|i| rows[i % 4][i / 4])
 }
 
-/// Layer-local ortho: `0..w × 0..h` → clip space (as captured).
-fn layer_mvp(w: f32, h: f32) -> [f32; 16] {
-    upload_matrix([
+type Rows = [[f32; 4]; 4];
+
+/// Row-vector product: `mul(mul(v, a), b) == mul(v, mat_mul(a, b))`.
+fn mat_mul(a: Rows, b: Rows) -> Rows {
+    std::array::from_fn(|r| std::array::from_fn(|c| (0..4).map(|k| a[r][k] * b[k][c]).sum()))
+}
+
+const IDENTITY_ROWS: Rows = [
+    [1.0, 0.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0],
+    [0.0, 0.0, 0.0, 1.0],
+];
+
+/// Layer world transform (layer-local pixels, centred → scene pixels).
+fn model_rows(t: [f32; 6]) -> Rows {
+    [
+        [t[0], t[1], 0.0, 0.0],
+        [t[2], t[3], 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [t[4], t[5], 0.0, 1.0],
+    ]
+}
+
+/// Orthographic `0..w × 0..h` → clip space with D3D depth, as captured for
+/// both the scene camera and layer targets.
+fn ortho_rows(w: f32, h: f32) -> Rows {
+    [
         [2.0 / w, 0.0, 0.0, 0.0],
         [0.0, 2.0 / h, 0.0, 0.0],
         [0.0, 0.0, 0.0005, 0.0],
         [-1.0, -1.0, 0.5, 1.0],
-    ])
+    ]
 }
 
-/// Effect passes draw a clip-space quad through this near-identity MVP.
-fn effect_mvp() -> [f32; 16] {
-    upload_matrix([
-        [1.0, 0.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0, 0.0],
-        [0.0, 0.0, 0.0005, 0.0],
-        [0.0, 0.0, 0.5, 1.0],
-    ])
-}
-
-const IDENTITY: [f32; 16] = [
-    1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+/// Effect passes draw a clip-space quad through this near-identity matrix.
+const EFFECT_ROWS: Rows = [
+    [1.0, 0.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0, 0.0],
+    [0.0, 0.0, 0.0005, 0.0],
+    [0.0, 0.0, 0.5, 1.0],
 ];
 
 fn blend_state(blend: Blend) -> Option<wgpu::BlendState> {
@@ -190,7 +217,8 @@ fn create_target(device: &wgpu::Device, label: &str, size: [u32; 2]) -> Target {
         format: FORMAT,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT
             | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_SRC,
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -282,8 +310,10 @@ impl SceneRenderer {
                 b: f64::from(scene.clear_color[2]),
                 a: f64::from(scene.clear_color[3]),
             },
-            targets: Vec::new(),
-            scene_target: create_target(device, "scene", [scene.width, scene.height]),
+            targets: vec![
+                create_target(device, "scene", [scene.width, scene.height]),
+                create_target(device, "framebuffer", [scene.width, scene.height]),
+            ],
             programs,
             layers: Vec::new(),
             composite_pipelines: composite.pipelines,
@@ -313,7 +343,7 @@ impl SceneRenderer {
 
     /// The composited scene (scene-sized, [`FORMAT`]); sample it to display.
     pub fn output(&self) -> &wgpu::TextureView {
-        &self.scene_target.view
+        &self.targets[SCENE].view
     }
 
     fn build_layer(
@@ -323,17 +353,46 @@ impl SceneRenderer {
         composite_layout: &wgpu::BindGroupLayout,
     ) -> Option<GpuLayer> {
         let device = &ctx.gpu.device;
+        let needs_framebuffer = std::iter::once(&layer.albedo)
+            .chain(layer.effects.iter().flat_map(|e| &e.passes))
+            .any(|p| {
+                p.textures
+                    .values()
+                    .any(|t| *t == TextureBinding::FrameBuffer)
+            });
+
+        if layer.effects.is_empty() {
+            let plan = PassPlan {
+                pass: &layer.albedo,
+                blend: layer.blend,
+                previous: None,
+                fbos: &HashMap::new(),
+                target: SCENE,
+                geometry: match layer.kind {
+                    LayerKind::Fullscreen => Geometry::Fullscreen,
+                    LayerKind::Image | LayerKind::Compose => Geometry::Direct {
+                        size: layer.size,
+                        transform: layer.transform,
+                    },
+                },
+                color: layer.color,
+            };
+            return Some(GpuLayer {
+                passes: vec![self.build_pass(ctx, &plan)?],
+                composite: None,
+                blend: layer.blend,
+                needs_framebuffer,
+            });
+        }
+
         let ping = self.targets.len();
-        self.targets.push(create_target(
-            device,
-            &format!("{} a", layer.name),
-            layer.size,
-        ));
-        self.targets.push(create_target(
-            device,
-            &format!("{} b", layer.name),
-            layer.size,
-        ));
+        for suffix in ["a", "b"] {
+            self.targets.push(create_target(
+                device,
+                &format!("{} {suffix}", layer.name),
+                layer.size,
+            ));
+        }
         let mut current = ping;
 
         let mut passes = Vec::new();
@@ -344,7 +403,17 @@ impl SceneRenderer {
             previous: None,
             fbos: &HashMap::new(),
             target: ping,
-            albedo_size: Some(layer.size),
+            geometry: match layer.kind {
+                LayerKind::Fullscreen => Geometry::Fullscreen,
+                LayerKind::Image => Geometry::LayerTarget(layer.size),
+                // Placed in the scene for its frame-buffer lookup; the shader
+                // itself fills the target from texcoords.
+                LayerKind::Compose => Geometry::Direct {
+                    size: layer.size,
+                    transform: layer.transform,
+                },
+            },
+            color: layer.color,
         };
         passes.push(self.build_pass(ctx, &albedo)?);
 
@@ -376,7 +445,8 @@ impl SceneRenderer {
                     previous: Some(current),
                     fbos: &fbos,
                     target,
-                    albedo_size: None,
+                    geometry: Geometry::Effect,
+                    color: [1.0; 4],
                 };
                 if let Some(p) = self.build_pass(ctx, &plan) {
                     passes.push(p);
@@ -408,9 +478,9 @@ impl SceneRenderer {
         });
         Some(GpuLayer {
             passes,
-            composite,
-            composite_vertices,
+            composite: Some((composite, composite_vertices)),
             blend: layer.blend,
+            needs_framebuffer,
         })
     }
 
@@ -433,6 +503,7 @@ impl SceneRenderer {
                     .fbos
                     .get(name)
                     .map_or(Source::Placeholder, |t| Source::Target(*t)),
+                Some(TextureBinding::FrameBuffer) => Source::Target(FRAMEBUFFER),
                 None => Source::Placeholder,
             };
             let source = match source {
@@ -497,31 +568,53 @@ impl SceneRenderer {
             vec![0u8; program.vs_uniforms.size.max(16) as usize],
             vec![0u8; program.fs_uniforms.size.max(16) as usize],
         ];
-        let mvp = match plan.albedo_size {
-            Some([w, h]) => layer_mvp(w as f32, h as f32),
-            None => effect_mvp(),
+        // Lit shaders use model and view-projection separately; keep them
+        // consistent with the combined matrix.
+        let (model, view_projection) = match plan.geometry {
+            Geometry::LayerTarget([w, h]) => (IDENTITY_ROWS, ortho_rows(w as f32, h as f32)),
+            Geometry::Direct { transform, .. } => (
+                model_rows(transform),
+                ortho_rows(self.size[0] as f32, self.size[1] as f32),
+            ),
+            Geometry::Effect | Geometry::Fullscreen => (IDENTITY_ROWS, EFFECT_ROWS),
         };
+        let mvp = upload_matrix(mat_mul(model, view_projection));
         let [sw, sh] = self.size.map(|v| v as f32);
         let [tw, th] = target_size.map(|v| v as f32);
         for (layout, buf) in [&program.vs_uniforms, &program.fs_uniforms]
             .into_iter()
             .zip(data.iter_mut())
         {
-            for m in &layout.members {
-                if m.rows == 4 && m.columns == 4 {
-                    layout.write(buf, &m.name, &IDENTITY);
-                }
+            for m in layout
+                .members
+                .iter()
+                .filter(|m| m.rows == m.columns && m.rows > 1)
+            {
+                let n = m.rows as usize;
+                let identity: Vec<f32> = (0..n * n)
+                    .map(|i| if i % (n + 1) == 0 { 1.0 } else { 0.0 })
+                    .collect();
+                layout.write(buf, &m.name, &identity);
             }
             for (name, value) in &plan.pass.constants {
                 layout.write(buf, name, value);
             }
             layout.write(buf, "g_ModelViewProjectionMatrix", &mvp);
+            layout.write(buf, "g_ModelMatrix", &upload_matrix(model));
+            layout.write(
+                buf,
+                "g_ViewProjectionMatrix",
+                &upload_matrix(view_projection),
+            );
             for (slot, res) in &resolutions {
                 layout.write(buf, &format!("g_Texture{slot}Resolution"), res);
             }
-            layout.write(buf, "g_Color4", &[1.0; 4]);
-            layout.write(buf, "g_Color", &[1.0; 3]);
+            layout.write(buf, "g_Color4", &plan.color);
+            layout.write(buf, "g_Color", &plan.color[..3]);
+            layout.write(buf, "g_Alpha", &plan.color[3..]);
             layout.write(buf, "g_Screen", &[sw, sh, sw / sh]);
+            layout.write(buf, "g_LightAmbientColor", &ctx.scene.ambient_color);
+            layout.write(buf, "g_LightSkylightColor", &ctx.scene.skylight_color);
             layout.write(buf, "g_TexelSize", &[1.0 / tw, 1.0 / th]);
             layout.write(buf, "g_TexelSizeHalf", &[0.5 / tw, 0.5 / th]);
         }
@@ -552,8 +645,12 @@ impl SceneRenderer {
         });
 
         // Albedo UVs stop at the image inside a padded texture.
-        let uv_max = match (plan.albedo_size, plan.pass.textures.get(&0)) {
-            (Some(_), Some(TextureBinding::Asset(id))) => {
+        let albedo = matches!(
+            plan.geometry,
+            Geometry::LayerTarget(_) | Geometry::Direct { .. }
+        );
+        let uv_max = match (albedo, plan.pass.textures.get(&0)) {
+            (true, Some(TextureBinding::Asset(id))) => {
                 ctx.assets.get(id.0).map_or([1.0, 1.0], |a| {
                     [
                         a.resolution[2] / a.resolution[0],
@@ -565,11 +662,7 @@ impl SceneRenderer {
         };
         let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("pass quad"),
-            contents: bytemuck::cast_slice(&pass_quad(
-                &program.attributes,
-                plan.albedo_size,
-                uv_max,
-            )),
+            contents: bytemuck::cast_slice(&pass_quad(&program.attributes, plan.geometry, uv_max)),
             usage: wgpu::BufferUsages::VERTEX,
         });
 
@@ -590,13 +683,14 @@ impl SceneRenderer {
     /// Blocking readback of [`SceneRenderer::output`] as tightly packed RGBA8
     /// (headless capture and golden tests; not for the frame loop).
     pub fn read_output(&self, gpu: &Gpu) -> Option<Vec<u8>> {
-        read_target(gpu, &self.scene_target)
+        read_target(gpu, &self.targets[SCENE])
     }
 
     /// Every intermediate target as (label, size, RGBA8), for debugging passes.
     pub fn read_targets(&self, gpu: &Gpu) -> Vec<(String, [u32; 2], Vec<u8>)> {
         self.targets
             .iter()
+            .skip(FRAMEBUFFER + 1)
             .filter_map(|t| Some((t.label.clone(), t.size, read_target(gpu, t)?)))
             .collect()
     }
@@ -658,7 +752,25 @@ impl SceneRenderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("scene"),
             });
+        // The scene target is cleared by whichever pass touches it first.
+        let mut scene_load = wgpu::LoadOp::Clear(self.clear);
         for layer in &mut self.layers {
+            if layer.needs_framebuffer {
+                if let wgpu::LoadOp::Clear(_) = scene_load {
+                    scene_pass(&mut encoder, &self.targets[SCENE].view, scene_load, "clear");
+                    scene_load = wgpu::LoadOp::Load;
+                }
+                let size = wgpu::Extent3d {
+                    width: self.size[0],
+                    height: self.size[1],
+                    depth_or_array_layers: 1,
+                };
+                encoder.copy_texture_to_texture(
+                    self.targets[SCENE].texture.as_image_copy(),
+                    self.targets[FRAMEBUFFER].texture.as_image_copy(),
+                    size,
+                );
+            }
             for pass in &mut layer.passes {
                 let Some(Some(program)) = self.programs.get(pass.program) else {
                     continue;
@@ -675,58 +787,64 @@ impl SceneRenderer {
                         gpu.queue.write_buffer(gpu_buf, 0, buf);
                     }
                 }
-                let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some(&program.name),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &self.targets[pass.target].view,
-                        depth_slice: None,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    ..Default::default()
-                });
+                let load = if pass.target == SCENE {
+                    std::mem::replace(&mut scene_load, wgpu::LoadOp::Load)
+                } else {
+                    wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+                };
+                let mut rp = scene_pass(
+                    &mut encoder,
+                    &self.targets[pass.target].view,
+                    load,
+                    &program.name,
+                );
                 rp.set_pipeline(&pass.pipeline);
                 rp.set_bind_group(0, &pass.uniforms, &[]);
                 rp.set_bind_group(1, &pass.textures, &[]);
                 rp.set_vertex_buffer(0, pass.vertices.slice(..));
                 rp.draw(0..4, 0..1);
             }
-        }
-
-        {
-            let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("composite"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.scene_target.view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(self.clear),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                ..Default::default()
-            });
-            for layer in &self.layers {
-                let Some(pipeline) = self.composite_pipelines.get(&layer.blend) else {
-                    continue;
-                };
+            if let Some((bind_group, vertices)) = &layer.composite
+                && let Some(pipeline) = self.composite_pipelines.get(&layer.blend)
+            {
+                let load = std::mem::replace(&mut scene_load, wgpu::LoadOp::Load);
+                let mut rp = scene_pass(&mut encoder, &self.targets[SCENE].view, load, "composite");
                 rp.set_pipeline(pipeline);
-                rp.set_bind_group(0, &layer.composite, &[]);
-                rp.set_vertex_buffer(0, layer.composite_vertices.slice(..));
+                rp.set_bind_group(0, bind_group, &[]);
+                rp.set_vertex_buffer(0, vertices.slice(..));
                 rp.draw(0..4, 0..1);
             }
+        }
+        if let wgpu::LoadOp::Clear(_) = scene_load {
+            scene_pass(&mut encoder, &self.targets[SCENE].view, scene_load, "clear");
         }
         gpu.queue.submit([encoder.finish()]);
     }
 }
 
+fn scene_pass<'e>(
+    encoder: &'e mut wgpu::CommandEncoder,
+    view: &wgpu::TextureView,
+    load: wgpu::LoadOp<wgpu::Color>,
+    label: &str,
+) -> wgpu::RenderPass<'e> {
+    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some(label),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load,
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        ..Default::default()
+    })
+}
+
 struct BuildContext<'a> {
     gpu: &'a Gpu,
-    #[allow(dead_code, reason = "kept for upcoming per-scene engine uniforms")]
     scene: &'a ir::Scene,
     assets: &'a [AssetTexture],
     placeholder: &'a AssetTexture,
@@ -741,17 +859,33 @@ struct PassPlan<'a> {
     previous: Option<usize>,
     fbos: &'a HashMap<String, usize>,
     target: usize,
-    /// `Some(layer size)` for the albedo pass (layer-local quad and MVP).
-    albedo_size: Option<[u32; 2]>,
+    geometry: Geometry,
+    /// `g_Color4` (object colour + alpha) for albedo passes.
+    color: [f32; 4],
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Geometry {
+    /// Albedo into the layer's own target: `0..w × 0..h`, layer ortho MVP.
+    LayerTarget([u32; 2]),
+    /// Albedo placed in the scene by `transform`: centred quad.
+    Direct { size: [u32; 2], transform: [f32; 6] },
+    /// Effect pass: clip-space quad.
+    Effect,
+    /// Albedo of a fullscreen layer: clip-space quad, no padded-UV crop.
+    Fullscreen,
 }
 
 /// Triangle-strip quad (BL, BR, TL, TR) with each attribute filled by name.
-fn pass_quad(attributes: &[ir::Attribute], albedo: Option<[u32; 2]>, uv_max: [f32; 2]) -> Vec<f32> {
+fn pass_quad(attributes: &[ir::Attribute], geometry: Geometry, uv_max: [f32; 2]) -> Vec<f32> {
     let mut out = Vec::new();
     for (x, y) in [(0.0f32, 0.0f32), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)] {
-        let position = match albedo {
-            Some([w, h]) => [x * w as f32, y * h as f32, 0.0, 1.0],
-            None => [x * 2.0 - 1.0, y * 2.0 - 1.0, 0.0, 1.0],
+        let position = match geometry {
+            Geometry::LayerTarget([w, h]) => [x * w as f32, y * h as f32, 0.0, 1.0],
+            Geometry::Direct { size: [w, h], .. } => {
+                [(x - 0.5) * w as f32, (y - 0.5) * h as f32, 0.0, 1.0]
+            }
+            Geometry::Effect | Geometry::Fullscreen => [x * 2.0 - 1.0, y * 2.0 - 1.0, 0.0, 1.0],
         };
         // Texture v runs top-down; clip y runs bottom-up.
         let uv = [x * uv_max[0], (1.0 - y) * uv_max[1], 0.0, 0.0];
@@ -772,19 +906,16 @@ fn pass_quad(attributes: &[ir::Attribute], albedo: Option<[u32; 2]>, uv_max: [f3
 /// Layer quad in the scene's clip space: pos.xy + uv per vertex (strip order).
 fn composite_quad(layer: &ir::ImageLayer, scene: [u32; 2]) -> [f32; 16] {
     let [sw, sh] = scene.map(|v| v as f32);
-    let half = [
-        layer.size[0] as f32 * layer.scale[0] * 0.5,
-        layer.size[1] as f32 * layer.scale[1] * 0.5,
-    ];
-    let (sin, cos) = layer.angles[2].sin_cos();
+    let half = layer.size.map(|v| v as f32 * 0.5);
+    let t = layer.transform;
     let mut out = [0.0; 16];
     for (i, (x, y)) in [(-1.0f32, -1.0f32), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)]
         .into_iter()
         .enumerate()
     {
         let (lx, ly) = (x * half[0], y * half[1]);
-        let px = layer.origin[0] + lx * cos - ly * sin;
-        let py = layer.origin[1] + lx * sin + ly * cos;
+        let px = t[0] * lx + t[2] * ly + t[4];
+        let py = t[1] * lx + t[3] * ly + t[5];
         out[i * 4..i * 4 + 4].copy_from_slice(&[
             px / sw * 2.0 - 1.0,
             py / sh * 2.0 - 1.0,
@@ -1071,10 +1202,20 @@ mod tests {
 
     #[test]
     fn matrices_upload_as_columns() {
-        let m = layer_mvp(3840.0, 2160.0);
+        let m = upload_matrix(mat_mul(IDENTITY_ROWS, ortho_rows(3840.0, 2160.0)));
         // Column 0 = (2/w, 0, 0, -1): x' = 2x/w - 1.
         assert_eq!(&m[0..4], &[2.0 / 3840.0, 0.0, 0.0, -1.0]);
         assert_eq!(&m[12..16], &[0.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn direct_mvp_matches_capture() {
+        // Scene 3414847823, layer "static": origin (972, 530) in a 1920×1080 scene.
+        let model = model_rows(lumen_scene::affine([972.0, 530.0], 0.0, [1.0, 1.0]));
+        let rows = mat_mul(model, ortho_rows(1920.0, 1080.0));
+        assert!((rows[0][0] - 0.001042).abs() < 1e-6);
+        assert!((rows[3][0] - 0.0125).abs() < 1e-4);
+        assert!((rows[3][1] + 0.018519).abs() < 1e-4);
     }
 
     #[test]
@@ -1091,7 +1232,7 @@ mod tests {
                 components: 2,
             },
         ];
-        let q = pass_quad(&attrs, Some([100, 50]), [0.5, 1.0]);
+        let q = pass_quad(&attrs, Geometry::LayerTarget([100, 50]), [0.5, 1.0]);
         assert_eq!(q.len(), 4 * 5);
         // Bottom-left vertex samples the bottom of the image (v = 1).
         assert_eq!(&q[0..5], &[0.0, 0.0, 0.0, 0.0, 1.0]);

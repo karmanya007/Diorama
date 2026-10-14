@@ -154,6 +154,12 @@ pub fn evaluate_conditionals(
                     }
                     "require" if active => {
                         out.requires.push(first_word(rest).to_owned());
+                        // Marker where the engine library is spliced in (see `shader::REQUIRE_MARKER`).
+                        out.text.push_str(&format!(
+                            "// {}{}",
+                            super::REQUIRE_MARKER,
+                            first_word(rest)
+                        ));
                         false
                     }
                     // `#version` / `#extension` are replaced by the translator's header.
