@@ -61,8 +61,9 @@ struct Args {
     /// With `--frame-out`: also save every intermediate render target beside it.
     #[arg(long, requires = "frame_out")]
     dump_targets: bool,
-    #[arg(long, value_enum, default_value = "fill")]
-    fit: FitArg,
+    /// Default: the wallpaper's own Wallpaper Engine setting if it has one, else fill.
+    #[arg(long, value_enum)]
+    fit: Option<FitArg>,
     /// `per-output`: the whole picture on every monitor. `span`: one picture across all monitors.
     #[arg(long, value_enum, default_value = "per-output")]
     layout: LayoutArg,
@@ -251,11 +252,17 @@ fn main() -> Result<()> {
         quit: false,
     };
 
+    let start_path = args
+        .image
+        .as_ref()
+        .or(args.video.as_ref())
+        .or(args.scene.as_ref());
     let look = Look {
         fit: match args.fit {
-            FitArg::Fill => Fit::Fill,
-            FitArg::Fit => Fit::Fit,
-            FitArg::Stretch => Fit::Stretch,
+            Some(FitArg::Fill) => Fit::Fill,
+            Some(FitArg::Fit) => Fit::Fit,
+            Some(FitArg::Stretch) => Fit::Stretch,
+            None => start_path.map_or(Fit::Fill, |p| daemon.default_fit(p)),
         },
         layout: match args.layout {
             LayoutArg::PerOutput => Layout::PerOutput,
@@ -613,6 +620,21 @@ impl Daemon<'_> {
         Ok(())
     }
 
+    /// The fit Wallpaper Engine uses for this wallpaper on the first monitor,
+    /// so Lumen starts from the user's existing choice.
+    fn we_fit(&self, path: &std::path::Path) -> Option<Fit> {
+        let install = self.we_assets.as_deref()?.parent()?;
+        match lumen_we::config::alignment(install, path, 0)? {
+            lumen_we::config::Alignment::Stretch => Some(Fit::Stretch),
+            // Custom zoom/pan is not reproduced yet; cover is its closest neighbour.
+            _ => Some(Fit::Fill),
+        }
+    }
+
+    fn default_fit(&self, path: &std::path::Path) -> Fit {
+        self.we_fit(path).unwrap_or(Fit::Fill)
+    }
+
     fn handle(&mut self, request: Request) -> Response {
         tracing::info!(?request, "control request");
         let ok_or_error = |r: Result<()>| match r {
@@ -631,7 +653,10 @@ impl Daemon<'_> {
             } => {
                 let current = self.wallpaper.as_ref().map(|w| w.look);
                 let look = Look {
-                    fit: fit.or(current.map(|l| l.fit)).unwrap_or(Fit::Fill),
+                    fit: fit
+                        .or_else(|| self.we_fit(&path))
+                        .or(current.map(|l| l.fit))
+                        .unwrap_or(Fit::Fill),
                     layout: layout
                         .or(current.map(|l| l.layout))
                         .unwrap_or(Layout::PerOutput),
