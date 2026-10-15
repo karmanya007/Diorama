@@ -312,7 +312,11 @@ fn copy_background_starts_the_target_from_the_frame() {
     // Without the copy the gaps are transparent: red shows through.
     let img = render(&gpu, &compiler, &s, [0.5, 0.5]);
     assert_eq!(px(&img, 64, 16, 16), [255, 0, 0, 255], "gap without copy");
-    assert_eq!(px(&img, 64, 8, 16), [255, 0, 255, 255], "glyph without copy");
+    assert_eq!(
+        px(&img, 64, 8, 16),
+        [255, 0, 255, 255],
+        "glyph without copy"
+    );
     // With it the red background is part of the layer and gets inverted.
     s.layers[1].copy_background = true;
     let img = render(&gpu, &compiler, &s, [0.5, 0.5]);
