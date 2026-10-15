@@ -85,6 +85,10 @@ impl WallpaperWindow {
     pub fn size(&self) -> (u32, u32) {
         match *self {}
     }
+
+    pub fn keep_in_place(&self) -> bool {
+        match *self {}
+    }
 }
 
 /// `$XDG_CACHE_HOME/lumen` or `~/.cache/lumen`.

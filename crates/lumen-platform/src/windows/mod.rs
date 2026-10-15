@@ -17,7 +17,7 @@ use std::time::Duration;
 use raw_window_handle::{
     RawDisplayHandle, RawWindowHandle, Win32WindowHandle, WindowsDisplayHandle,
 };
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::MapWindowPoints;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
@@ -32,12 +32,13 @@ use windows::Win32::UI::HiDpi::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    GWLP_USERDATA, GetCursorPos, GetWindowLongPtrW, HWND_TOP, MA_NOACTIVATE, MSG,
-    MsgWaitForMultipleObjects, PM_REMOVE, PeekMessageW, PostMessageW, QS_ALLINPUT,
-    RegisterClassExW, RegisterWindowMessageW, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetWindowLongPtrW,
-    SetWindowPos, TranslateMessage, WM_APP, WM_DESTROY, WM_DISPLAYCHANGE, WM_ERASEBKGND,
-    WM_MOUSEACTIVATE, WM_WTSSESSION_CHANGE, WNDCLASSEXW, WS_CHILD, WS_CLIPSIBLINGS,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE, WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
+    GWLP_USERDATA, GetCursorPos, GetParent, GetWindowLongPtrW, GetWindowRect, HWND_TOP,
+    MA_NOACTIVATE, MSG, MsgWaitForMultipleObjects, PM_REMOVE, PeekMessageW, PostMessageW,
+    QS_ALLINPUT, RegisterClassExW, RegisterWindowMessageW, SWP_NOACTIVATE, SWP_NOZORDER,
+    SWP_SHOWWINDOW, SetWindowLongPtrW, SetWindowPos, TranslateMessage, WM_APP, WM_DESTROY,
+    WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_MOUSEACTIVATE, WM_WTSSESSION_CHANGE, WNDCLASSEXW, WS_CHILD,
+    WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE, WTS_SESSION_LOCK,
+    WTS_SESSION_UNLOCK,
 };
 use windows::core::{PCWSTR, w};
 
@@ -204,6 +205,8 @@ impl Platform {
             Ok(WallpaperWindow {
                 hwnd,
                 hinstance: self.hinstance,
+                x: output.x,
+                y: output.y,
                 width: output.width,
                 height: output.height,
             })
@@ -268,6 +271,9 @@ const WM_LUMEN_WAKE: u32 = WM_APP + 1;
 pub struct WallpaperWindow {
     hwnd: HWND,
     hinstance: HINSTANCE,
+    /// Where the window belongs, in screen (virtual-desktop) pixels.
+    x: i32,
+    y: i32,
     width: u32,
     height: u32,
 }
@@ -286,6 +292,46 @@ impl WallpaperWindow {
 
     pub fn size(&self) -> (u32, u32) {
         (self.width, self.height)
+    }
+
+    /// Moves the window back over its output if the host moved under it.
+    /// Explorer resizes the WorkerW to the new virtual desktop only after
+    /// `WM_DISPLAYCHANGE`, so windows placed during a topology change end
+    /// up offset by the old desktop origin. Returns true if it moved.
+    pub fn keep_in_place(&self) -> bool {
+        let mut rect = RECT::default();
+        // SAFETY: plain Win32 calls on our own window and its parent; out-params are locals.
+        unsafe {
+            if GetWindowRect(self.hwnd, &mut rect).is_err()
+                || (rect.left, rect.top) == (self.x, self.y)
+            {
+                return false;
+            }
+            let Ok(host) = GetParent(self.hwnd) else {
+                return false;
+            };
+            let mut origin = [POINT {
+                x: self.x,
+                y: self.y,
+            }];
+            MapWindowPoints(None, Some(host), &mut origin);
+            let moved = SetWindowPos(
+                self.hwnd,
+                None,
+                origin[0].x,
+                origin[0].y,
+                self.width as i32,
+                self.height as i32,
+                SWP_NOACTIVATE | SWP_NOZORDER,
+            );
+            tracing::info!(
+                from = ?(rect.left, rect.top),
+                to = ?(self.x, self.y),
+                ok = moved.is_ok(),
+                "wallpaper window re-anchored"
+            );
+            moved.is_ok()
+        }
     }
 }
 

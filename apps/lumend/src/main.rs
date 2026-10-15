@@ -187,6 +187,10 @@ fn gpu_options(args: &Args) -> GpuOptions {
 const COVERAGE_INTERVAL: Duration = Duration::from_millis(500);
 const BATTERY_INTERVAL: Duration = Duration::from_secs(5);
 const REBUILD_RETRY: Duration = Duration::from_secs(1);
+/// After device loss, how long to wait for the same GPU before settling for
+/// another one: during a TDR the discrete GPU disappears for a moment and the
+/// integrated one would otherwise take over for good.
+const SAME_ADAPTER_GRACE: Duration = Duration::from_secs(10);
 const AUDIO_CHECK_INTERVAL: Duration = Duration::from_secs(2);
 
 type Job = (Request, SyncSender<Response>);
@@ -281,7 +285,7 @@ fn main() -> Result<()> {
 
     let mut daemon = Daemon {
         platform: &platform,
-        gpu: Gpu::new(gpu_options).context("GPU init")?,
+        gpu: Some(Gpu::new(gpu_options).context("GPU init")?),
         gpu_options,
         policy: Policy {
             fullscreen: args.on_fullscreen,
@@ -311,6 +315,8 @@ fn main() -> Result<()> {
         next_coverage: Instant::now(),
         next_battery: Instant::now() + BATTERY_INTERVAL,
         needs_rebuild: false,
+        reset_gpu: false,
+        lost_adapter: None,
         quit: false,
     };
 
@@ -430,9 +436,18 @@ fn init_logging(background: bool, config_dir: Option<&std::path::Path>) {
     }
 }
 
+/// Identifies a physical GPU across device re-creation.
+type AdapterKey = (u32, u32, lumen_gpu::wgpu::Backend);
+
+fn adapter_key(gpu: &Gpu) -> AdapterKey {
+    let info = gpu.adapter.get_info();
+    (info.vendor, info.device, info.backend)
+}
+
 struct Daemon<'p> {
     platform: &'p Platform,
-    gpu: Gpu,
+    /// `None` between a device loss and a successful re-init.
+    gpu: Option<Gpu>,
     gpu_options: GpuOptions,
     policy: Policy,
     conditions: Conditions,
@@ -451,6 +466,11 @@ struct Daemon<'p> {
     next_battery: Instant,
     /// A rebuild failed (e.g. Explorer still starting); retry on the next tick.
     needs_rebuild: bool,
+    /// Recreate the GPU device: a frame failed (often the first sign of a
+    /// TDR, before the device-lost callback runs) or re-init failed earlier.
+    reset_gpu: bool,
+    /// The GPU that was lost and when (for [`SAME_ADAPTER_GRACE`]).
+    lost_adapter: Option<(AdapterKey, Instant)>,
     quit: bool,
     config_dir: Option<PathBuf>,
     os_fallback: bool,
@@ -476,7 +496,9 @@ impl Daemon<'_> {
         };
         let wait = content_wait.min(self.next_coverage.saturating_duration_since(Instant::now()));
         let events = self.platform.poll_events(wait);
-        self.gpu.maintain();
+        if let Some(gpu) = &self.gpu {
+            gpu.maintain();
+        }
 
         while let Ok((request, reply)) = jobs.try_recv() {
             let response = self.handle(request);
@@ -495,17 +517,53 @@ impl Daemon<'_> {
             self.next_battery = Instant::now() + BATTERY_INTERVAL;
         }
 
-        let device_lost = self.gpu.is_lost();
+        let device_lost = self.reset_gpu || self.gpu.as_ref().is_some_and(Gpu::is_lost);
         if device_lost {
+            // Everything holding the old device goes first: D3D12 hands back the
+            // same (removed) device for an adapter while one is still alive.
             self.session = None;
-            self.gpu = Gpu::new(self.gpu_options).context("GPU re-init after device loss")?;
+            if let Some(old) = self.gpu.take() {
+                self.lost_adapter = Some((adapter_key(&old), Instant::now()));
+            }
+            self.reset_gpu = false;
         }
-        if events.iter().any(|e| e.needs_rebuild()) || device_lost || self.needs_rebuild {
+        if self.gpu.is_none() {
+            // The adapter can be unavailable for a few seconds during a TDR.
+            match Gpu::new(self.gpu_options) {
+                Ok(gpu)
+                    if self.lost_adapter.is_some_and(|(key, since)| {
+                        adapter_key(&gpu) != key && since.elapsed() < SAME_ADAPTER_GRACE
+                    }) =>
+                {
+                    tracing::info!(
+                        found = %gpu.adapter.get_info().name,
+                        "previous GPU not back yet; waiting"
+                    );
+                    drop(gpu);
+                    std::thread::sleep(REBUILD_RETRY);
+                    return Ok(());
+                }
+                Ok(gpu) => {
+                    self.gpu = Some(gpu);
+                    self.lost_adapter = None;
+                    self.needs_rebuild = true;
+                }
+                Err(e) => {
+                    tracing::warn!("GPU re-init failed: {e:#}; retrying");
+                    std::thread::sleep(REBUILD_RETRY);
+                    return Ok(());
+                }
+            }
+        }
+        if events.iter().any(|e| e.needs_rebuild()) || self.needs_rebuild {
             tracing::info!(?events, device_lost, "rebuilding wallpaper");
             self.rebuild();
             return Ok(());
         }
 
+        let Some(gpu) = self.gpu.as_ref() else {
+            return Ok(());
+        };
         let Some(session) = self.session.as_mut() else {
             return Ok(());
         };
@@ -519,8 +577,10 @@ impl Daemon<'_> {
                     audio.set_paused(all_paused);
                 }
                 // Freshly resumed outputs still show an old frame: present the current one now.
-                if resumed {
-                    session.present_all(&self.gpu)?;
+                if resumed && let Err(e) = session.present_all(gpu) {
+                    tracing::warn!("present failed: {e:#}; resetting GPU");
+                    self.reset_gpu = true;
+                    return Ok(());
                 }
             }
             if let Some(Content::Scene(_)) = self.wallpaper.as_ref().map(|w| &w.content) {
@@ -540,14 +600,18 @@ impl Daemon<'_> {
             {
                 self.pointer = p;
             }
-            session.show_scene_frame(&self.gpu, self.scene_clock.time(), self.pointer)?;
+            if let Err(e) = session.show_scene_frame(gpu, self.scene_clock.time(), self.pointer) {
+                tracing::warn!("scene frame failed: {e:#}; resetting GPU");
+                self.reset_gpu = true;
+                return Ok(());
+            }
             if self.fallback_pending {
                 self.fallback_pending = false;
                 let span = self
                     .wallpaper
                     .as_ref()
                     .is_some_and(|w| w.look.layout == Layout::Span);
-                scene_fallback(self.config_dir.as_deref(), &self.gpu, session, span);
+                scene_fallback(self.config_dir.as_deref(), gpu, session, span);
             }
         }
 
@@ -556,7 +620,11 @@ impl Daemon<'_> {
             && let Some(frame) = self.clock.due_frame(player)
         {
             let loop_index = frame.loop_index;
-            session.show_video_frame(&self.gpu, frame)?;
+            if let Err(e) = session.show_video_frame(gpu, frame) {
+                tracing::warn!("video frame failed: {e:#}; resetting GPU");
+                self.reset_gpu = true;
+                return Ok(());
+            }
             if self.fallback_pending {
                 self.fallback_pending = false;
                 self.video_fallback();
@@ -643,13 +711,14 @@ impl Daemon<'_> {
         // Surfaces/windows go first; they reference the old device and old Explorer windows.
         self.session = None;
         self.needs_rebuild = false;
-        let Some(wallpaper) = self.wallpaper.as_ref() else {
+        // Without a device, the GPU re-init in `tick` asks for a rebuild later.
+        let (Some(wallpaper), Some(gpu)) = (self.wallpaper.as_ref(), self.gpu.as_ref()) else {
             return;
         };
-        match Session::build(self.platform, &self.gpu, wallpaper) {
+        match Session::build(self.platform, gpu, wallpaper) {
             Ok(mut session) => {
                 if let Some(frame) = self.clock.current.as_ref()
-                    && let Err(e) = session.show_video_frame(&self.gpu, frame)
+                    && let Err(e) = session.show_video_frame(gpu, frame)
                 {
                     tracing::warn!("re-showing current frame failed: {e:#}");
                 }

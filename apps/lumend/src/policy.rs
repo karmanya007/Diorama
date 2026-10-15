@@ -54,6 +54,8 @@ pub fn update_pauses(
     let coverage = platform.coverage(&infos);
     let mut resumed = false;
     for (out, cov) in session.outputs.iter_mut().zip(coverage) {
+        // Display changes can leave the window off its output (see `keep_in_place`).
+        resumed |= out.keep_in_place();
         let paused = policy.pauses(cov, c);
         if paused != out.paused || cov != out.coverage {
             tracing::info!(

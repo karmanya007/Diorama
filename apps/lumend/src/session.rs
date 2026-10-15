@@ -137,7 +137,14 @@ pub struct Output {
     pub paused: bool,
     pub coverage: Coverage,
     surface: OutputSurface,
-    _window: WallpaperWindow,
+    window: WallpaperWindow,
+}
+
+impl Output {
+    /// See [`WallpaperWindow::keep_in_place`]. True if the window moved.
+    pub fn keep_in_place(&self) -> bool {
+        self.window.keep_in_place()
+    }
 }
 
 pub struct Session {
@@ -178,7 +185,7 @@ impl Session {
                 paused: false,
                 coverage: Coverage::Visible,
                 surface,
-                _window: window,
+                window,
             });
         }
         let format = outputs[0].surface.format();
