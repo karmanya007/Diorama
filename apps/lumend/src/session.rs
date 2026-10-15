@@ -123,7 +123,7 @@ enum Renderer {
     Image(ImageBlit),
     Video(VideoBlit),
     Scene {
-        scene: SceneRenderer,
+        scene: Box<SceneRenderer>,
         blit: ImageBlit,
         /// Fills monitor areas the scene does not cover (fit/custom pan), as WE.
         clear: [f32; 4],
@@ -234,7 +234,7 @@ impl Session {
                 let [w, h] = renderer.size();
                 let blit = ImageBlit::from_view(gpu, format, renderer.output(), w, h);
                 Renderer::Scene {
-                    scene: renderer,
+                    scene: Box::new(renderer),
                     blit,
                     clear: scene_clear,
                 }

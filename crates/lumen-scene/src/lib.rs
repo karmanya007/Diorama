@@ -11,6 +11,7 @@
 //! - colours are gamma-encoded RGBA8 throughout (no sRGB conversion).
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 /// Index into [`Scene::textures`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -44,8 +45,152 @@ pub struct Scene {
     pub layers: Vec<ImageLayer>,
     pub textures: Vec<Texture>,
     pub programs: Vec<ShaderProgram>,
+    /// Every scene object's own placement (layers and invisible helpers),
+    /// so scripts can move objects at runtime.
+    pub nodes: Vec<Node>,
+    /// Font files used by text layers.
+    pub fonts: Vec<FontData>,
+    /// Scripted values, in scene order.
+    pub scripts: Vec<Script>,
+    /// Helper JavaScript the scripts expect (`None` without scripts).
+    pub script_library: Option<ScriptLibrary>,
+    /// User properties as `{"name": {"type", "value"}, …}` JSON (what
+    /// `engine.userProperties` exposes).
+    pub user_properties: String,
     /// Things the importer could not represent yet (shown in logs/reports).
     pub skipped: Vec<String>,
+}
+
+/// A scene object's placement relative to its parent.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Node {
+    pub name: String,
+    /// The object's id in its source format.
+    pub id: i64,
+    /// Index into [`Scene::nodes`].
+    pub parent: Option<usize>,
+    pub origin: [f32; 3],
+    pub scale: [f32; 3],
+    /// Radians.
+    pub angles: [f32; 3],
+    pub visible: bool,
+}
+
+impl Node {
+    /// Origin · rotation(z) · scale. Rotations of π about x/y (mirroring in
+    /// an orthographic view) fold into the scale.
+    pub fn local(&self) -> [f32; 6] {
+        affine(
+            [self.origin[0], self.origin[1]],
+            self.angles[2],
+            [
+                self.scale[0] * self.angles[1].cos(),
+                self.scale[1] * self.angles[0].cos(),
+            ],
+        )
+    }
+}
+
+/// World transform and effective visibility of `nodes[index]` (hidden
+/// parents hide children). Depth-capped against cycles.
+pub fn node_world(nodes: &[Node], index: usize) -> ([f32; 6], bool) {
+    let Some(node) = nodes.get(index) else {
+        return (IDENTITY_AFFINE, true);
+    };
+    let mut transform = node.local();
+    let mut visible = node.visible;
+    let mut parent = node.parent;
+    for _ in 0..64 {
+        let Some(p) = parent.and_then(|p| nodes.get(p)) else {
+            break;
+        };
+        transform = compose(p.local(), transform);
+        visible &= p.visible;
+        parent = p.parent;
+    }
+    (transform, visible)
+}
+
+#[derive(Debug, Clone)]
+pub struct FontData {
+    pub name: String,
+    pub data: Arc<[u8]>,
+}
+
+/// A scripted value: an ES module whose `update(value)` result becomes the
+/// property each frame (WE SceneScript).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Script {
+    pub source: String,
+    /// Object the script belongs to (`thisLayer`), index into [`Scene::nodes`].
+    pub node: Option<usize>,
+    pub target: ScriptTarget,
+    /// The property's value before scripts run, as JSON.
+    pub initial: String,
+    /// Values of the script's own settings (`scriptProperties`), as a JSON object.
+    pub properties: String,
+}
+
+/// What a script's result is written to.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScriptTarget {
+    /// Node properties (index into [`Scene::nodes`]).
+    Origin(usize),
+    Scale(usize),
+    Angles(usize),
+    Visible(usize),
+    /// Layer properties (index into [`Scene::layers`]).
+    Alpha(usize),
+    Color(usize),
+    Text(usize),
+    EffectVisible {
+        layer: usize,
+        effect: usize,
+    },
+    /// A uniform of one effect pass.
+    Constant {
+        layer: usize,
+        effect: usize,
+        pass: usize,
+        uniform: String,
+    },
+    /// Not represented yet; the script still runs for its side effects.
+    Other(String),
+}
+
+/// JavaScript the scripts build on: global classes (`Vec3`, …) and named
+/// modules they import (`WEMath`, …).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ScriptLibrary {
+    pub classes: String,
+    pub modules: Vec<(String, String)>,
+}
+
+/// A text layer's content and style; the renderer lays it out (and again
+/// whenever scripts change the text).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextSpec {
+    /// Index into [`Scene::fonts`].
+    pub font: usize,
+    pub text: String,
+    /// Em size in layer pixels.
+    pub pixel_size: f32,
+    pub halign: TextAlign,
+    pub valign: TextAlign,
+    pub max_width: Option<f32>,
+    pub max_rows: Option<usize>,
+    pub ellipsis: bool,
+    /// Space around the text box in the layer target (x, y).
+    pub padding: [f32; 2],
+}
+
+/// Horizontal (start = left) or vertical (start = top) text alignment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextAlign {
+    Start,
+    #[default]
+    Center,
+    End,
 }
 
 /// Layers shift away from the cursor: offset = depth · amount · influence ·
@@ -114,6 +259,14 @@ pub struct ImageLayer {
     pub name: String,
     /// Unscaled size in scene pixels; also the size of its render targets.
     pub size: [u32; 2],
+    /// The scene object placing this layer (index into [`Scene::nodes`]):
+    /// `transform = node_world(node) ∘ local`.
+    pub node: Option<usize>,
+    /// Layer offset/scale relative to its node (anchor alignment, zoom).
+    pub local: [f32; 6],
+    /// Text content; the renderer builds the glyph mesh and atlas from it
+    /// (and centres the text box on `transform`).
+    pub text: Option<TextSpec>,
     /// Layer-local pixels (centred, y up) → scene pixels (origin bottom-left,
     /// y up), parents already applied: `x' = m0·x + m2·y + m4`,
     /// `y' = m1·x + m3·y + m5`.
@@ -173,6 +326,8 @@ pub enum LayerKind {
 #[derive(Debug, Clone)]
 pub struct Effect {
     pub name: String,
+    /// Hidden effects are skipped (scripts may show them later).
+    pub visible: bool,
     /// Extra render targets this effect uses, sized `layer size / scale_div`.
     pub fbos: Vec<Fbo>,
     pub passes: Vec<Pass>,
@@ -193,6 +348,8 @@ pub enum TextureBinding {
     Fbo(String),
     /// Everything composited below this layer so far (`_rt_FullFrameBuffer`).
     FrameBuffer,
+    /// The glyph atlas of the layer's text (built by the renderer).
+    TextAtlas,
 }
 
 #[derive(Debug, Clone)]

@@ -15,8 +15,8 @@ use std::path::Path;
 
 use lumen_core::Limits;
 use lumen_scene::{
-    Attribute, Blend, Effect, Fbo, ImageLayer, LayerKind, Pass, ProgramId, Scene, ShaderProgram,
-    Texture, TextureBinding, TextureId,
+    Attribute, Blend, Effect, Fbo, ImageLayer, LayerKind, Node, Pass, ProgramId, Scene, Script,
+    ScriptLibrary, ScriptTarget, ShaderProgram, Texture, TextureBinding, TextureId,
 };
 use serde_json::Value;
 
@@ -82,19 +82,27 @@ pub fn import_with(vfs: &Vfs, limits: &Limits, properties: &Properties) -> Resul
         fonts: HashMap::new(),
     };
     importer.scene_header(&json);
+    importer.scene.user_properties = user_properties_json(vfs, properties);
     importer.scene.scheme_color = properties
         .0
         .get("schemecolor")
         .map_or([0.0; 3], |v| vec_n(Some(v), [0.0; 3]));
     let objects: Vec<&Value> = json["objects"].as_array().into_iter().flatten().collect();
     let graph = SceneGraph::new(&objects);
+    importer.scene.nodes = nodes(&objects);
     // Lights first: lit shaders are generated for the scene's light count.
     for object in &objects {
         importer.light(object, &graph);
     }
     importer.engine.point_lights = importer.scene.point_lights.len();
-    for object in objects {
-        importer.object(object, &graph);
+    for (node, object) in objects.into_iter().enumerate() {
+        importer.object(object, node, &graph);
+    }
+    for (key, value) in json["general"].as_object().into_iter().flatten() {
+        importer.script(value, None, ScriptTarget::Other(format!("general.{key}")));
+    }
+    if !importer.scene.scripts.is_empty() {
+        importer.scene.script_library = Some(script_library(vfs));
     }
     if let Err(e) = importer.bloom(&json["general"]) {
         importer.skip(format!("bloom: {e}"));
@@ -172,6 +180,67 @@ fn local_transform(object: &Value) -> [f32; 6] {
     )
 }
 
+/// One node per object, in object order; parents resolved by id.
+fn nodes(objects: &[&Value]) -> Vec<Node> {
+    let index: HashMap<i64, usize> = objects
+        .iter()
+        .enumerate()
+        .filter_map(|(i, o)| Some((integer(o.get("id"))?, i)))
+        .collect();
+    objects
+        .iter()
+        .map(|o| Node {
+            name: o["name"].as_str().unwrap_or("").to_owned(),
+            id: integer(o.get("id")).unwrap_or(-1),
+            parent: integer(o.get("parent")).and_then(|p| index.get(&p).copied()),
+            origin: vec_n(o.get("origin"), [0.0; 3]),
+            scale: vec_n(o.get("scale"), [1.0; 3]),
+            angles: vec_n(o.get("angles"), [0.0; 3]),
+            visible: boolean(o.get("visible"), true),
+        })
+        .collect()
+}
+
+/// WE's helper JavaScript from the install (`assets/scripts`): global classes
+/// and the modules scripts import by name.
+fn script_library(vfs: &Vfs) -> ScriptLibrary {
+    ScriptLibrary {
+        classes: vfs
+            .read_string("scripts/jsclasses/baseclasses.js")
+            .unwrap_or_default(),
+        modules: [
+            ("WEMath", "wemath"),
+            ("WEVector", "wevector"),
+            ("WEColor", "wecolor"),
+        ]
+        .into_iter()
+        .filter_map(|(name, file)| {
+            let source = vfs.read_string(&format!("scripts/jsmodules/{file}.js"))?;
+            Some((name.to_owned(), source))
+        })
+        .collect(),
+    }
+}
+
+/// `{"name": {"type", "value"}}` for `engine.userProperties`: the project's
+/// property types with the values in effect (defaults or the user's choices).
+fn user_properties_json(vfs: &Vfs, properties: &Properties) -> String {
+    let project = vfs.read_json("project.json").unwrap_or(Value::Null);
+    let declared = project["general"]["properties"].as_object();
+    let mut out = serde_json::Map::new();
+    for (name, value) in &properties.0 {
+        let kind = declared
+            .and_then(|d| d.get(name))
+            .and_then(|p| p["type"].as_str())
+            .unwrap_or("");
+        out.insert(
+            name.clone(),
+            serde_json::json!({"type": kind, "value": value}),
+        );
+    }
+    Value::Object(out).to_string()
+}
+
 struct Importer<'a> {
     vfs: &'a Vfs,
     limits: &'a Limits,
@@ -188,7 +257,7 @@ struct Importer<'a> {
     /// Object id → layer index of composition layers (groups for children).
     groups: HashMap<i64, usize>,
     /// Fonts by scene name (`None` = not loadable).
-    fonts: HashMap<String, Option<lumen_text::Font>>,
+    fonts: HashMap<String, Option<usize>>,
 }
 
 /// A synthetic pass of an engine post-processing chain (bloom).
@@ -495,6 +564,9 @@ impl Importer<'_> {
         self.scene.layers.push(ImageLayer {
             name: name.into(),
             size: [self.scene.width, self.scene.height],
+            node: None,
+            local: lumen_scene::affine(centre, 0.0, [1.0, 1.0]),
+            text: None,
             transform: lumen_scene::affine(centre, 0.0, [1.0, 1.0]),
             visible: true,
             parallax_depth: [0.0, 0.0],
@@ -508,6 +580,7 @@ impl Importer<'_> {
             composite: None,
             effects: vec![Effect {
                 name: name.into(),
+                visible: true,
                 fbos,
                 passes,
             }],
@@ -559,24 +632,149 @@ impl Importer<'_> {
         });
     }
 
-    fn object(&mut self, object: &Value, graph: &SceneGraph) {
+    fn object(&mut self, object: &Value, node: usize, graph: &SceneGraph) {
         let name = object["name"].as_str().unwrap_or("").to_owned();
+        let layers_before = self.scene.layers.len();
         let kind = ["particle", "text", "model", "sound"]
             .into_iter()
             .find(|k| object.get(*k).is_some_and(|v| !v.is_null()));
         match (object.get("image").and_then(Value::as_str), kind) {
             (Some(model), _) => {
-                if let Err(e) = self.image_layer(object, model, &name, graph) {
+                if let Err(e) = self.image_layer(object, model, &name, node, graph) {
                     self.skip(format!("image layer {name:?}: {e}"));
                 }
             }
             (None, Some("text")) => {
-                if let Err(e) = self.text_layer(object, &name, graph) {
+                if let Err(e) = self.text_layer(object, &name, node, graph) {
                     self.skip(format!("text layer {name:?}: {e}"));
                 }
             }
             (None, Some(kind)) => self.skip(format!("{kind} objects")),
             (None, None) => {}
+        }
+        // The object's own layer, if it made one.
+        let layer = (self.scene.layers.len() > layers_before)
+            .then(|| self.scene.layers.len() - 1)
+            .filter(|&l| self.scene.layers[l].node == Some(node));
+        for (key, value) in object.as_object().into_iter().flatten() {
+            let target = match (key.as_str(), layer) {
+                ("origin", _) => ScriptTarget::Origin(node),
+                ("scale", _) => ScriptTarget::Scale(node),
+                ("angles", _) => ScriptTarget::Angles(node),
+                ("visible", _) => ScriptTarget::Visible(node),
+                ("alpha", Some(l)) => ScriptTarget::Alpha(l),
+                ("color", Some(l)) => ScriptTarget::Color(l),
+                ("text", Some(l)) => ScriptTarget::Text(l),
+                _ => ScriptTarget::Other(key.clone()),
+            };
+            self.script(value, Some(node), target);
+        }
+        if let Some(l) = layer {
+            self.effect_scripts(object, node, l);
+        }
+    }
+
+    /// Records `value` if it is scripted (`{"script": …, "value": …}`).
+    fn script(&mut self, value: &Value, node: Option<usize>, target: ScriptTarget) {
+        let Some(source) = value.get("script").and_then(Value::as_str) else {
+            return;
+        };
+        if source.len() > self.limits.max_string_len as usize {
+            self.skip("script larger than the string limit".into());
+            return;
+        }
+        let properties: serde_json::Map<String, Value> = value["scriptproperties"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(k, v)| (k.clone(), unwrap_value(v).clone()))
+            .collect();
+        self.scene.scripts.push(Script {
+            source: source.to_owned(),
+            node,
+            target,
+            initial: unwrap_value(value).to_string(),
+            properties: Value::Object(properties).to_string(),
+        });
+    }
+
+    /// Scripted effect visibility and effect constants of `layer`'s effects
+    /// (imported in object order, so effect `i` of the JSON is effect `i`).
+    fn effect_scripts(&mut self, object: &Value, node: usize, layer: usize) {
+        let effects = object["effects"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        for (e, effect) in effects.iter().enumerate() {
+            let Some(imported) = self.scene.layers[layer].effects.get(e) else {
+                break;
+            };
+            let programs: Vec<ProgramId> = imported.passes.iter().map(|p| p.program).collect();
+            if let Some(v) = effect.get("visible") {
+                self.script(
+                    v,
+                    Some(node),
+                    ScriptTarget::EffectVisible { layer, effect: e },
+                );
+            }
+            for (p, pass) in effect["passes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .enumerate()
+            {
+                for (key, value) in pass["constantshadervalues"]
+                    .as_object()
+                    .into_iter()
+                    .flatten()
+                {
+                    if value.get("script").is_none() {
+                        continue;
+                    }
+                    let target = match programs.get(p).and_then(|&id| self.uniform_for(id, key)) {
+                        Some(uniform) => ScriptTarget::Constant {
+                            layer,
+                            effect: e,
+                            pass: p,
+                            uniform,
+                        },
+                        None => ScriptTarget::Other(format!("constant {key}")),
+                    };
+                    self.script(value, Some(node), target);
+                }
+            }
+        }
+    }
+
+    /// The uniform a material constant key (`constantshadervalues`) sets.
+    fn uniform_for(&self, program: ProgramId, key: &str) -> Option<String> {
+        self.program_uniforms.get(&program)?.iter().find_map(|d| {
+            let k = d.annotation.as_ref()?["material"].as_str()?;
+            k.eq_ignore_ascii_case(key).then(|| d.name.clone())
+        })
+    }
+
+    /// Imports the object's effects in order; a failed effect becomes an
+    /// empty hidden one so indices keep matching the scene JSON.
+    fn attach_effects(&mut self, object: &Value, layer: &mut ImageLayer) {
+        for effect in object["effects"].as_array().into_iter().flatten() {
+            let file = effect["file"].as_str().unwrap_or("");
+            let visible = boolean(effect.get("visible"), true);
+            match self.effect(file, effect) {
+                Ok(mut e) => {
+                    e.visible = visible;
+                    layer.effects.push(e);
+                }
+                Err(e) => {
+                    self.skip(format!("effect {file}: {e}"));
+                    layer.effects.push(Effect {
+                        name: file.to_owned(),
+                        visible: false,
+                        fbos: Vec::new(),
+                        passes: Vec::new(),
+                    });
+                }
+            }
         }
     }
 
@@ -585,6 +783,7 @@ impl Importer<'_> {
         object: &Value,
         model_path: &str,
         name: &str,
+        node: usize,
         graph: &SceneGraph,
     ) -> Result<()> {
         let model = self.vfs.read_json(model_path)?;
@@ -641,15 +840,13 @@ impl Importer<'_> {
             });
         }
 
-        let (transform, visible) = if fullscreen {
+        let (transform, visible, layer_node, local) = if fullscreen {
             let centre = [
                 self.scene.width as f32 / 2.0,
                 self.scene.height as f32 / 2.0,
             ];
-            (
-                lumen_scene::affine(centre, 0.0, [1.0, 1.0]),
-                graph.world(object).1,
-            )
+            let t = lumen_scene::affine(centre, 0.0, [1.0, 1.0]);
+            (t, graph.world(object).1, None, t)
         } else {
             let (world, visible) = graph.world(object);
             // `origin` is the anchor named by `alignment`; children hang off
@@ -658,9 +855,12 @@ impl Importer<'_> {
             // `general.zoom` scales every layer about its own origin (capture
             // of 3195058405: zoom 1.05 → layers drawn at 1.0496×, origins kept).
             let zoom = [self.zoom, self.zoom];
+            let local = lumen_scene::affine(anchor, 0.0, zoom);
             (
-                lumen_scene::compose(world, lumen_scene::affine(anchor, 0.0, zoom)),
+                lumen_scene::compose(world, local),
                 visible,
+                Some(node),
+                local,
             )
         };
         let [r, g, b] = vec_n(object.get("color"), [1.0; 3]);
@@ -672,6 +872,9 @@ impl Importer<'_> {
         let mut layer = ImageLayer {
             name: name.to_owned(),
             size,
+            node: layer_node,
+            local,
+            text: None,
             transform,
             visible,
             parallax_depth: vec_n(object.get("parallaxDepth"), [1.0, 1.0]),
@@ -709,18 +912,9 @@ impl Importer<'_> {
                 Err(e) => self.skip(format!("colorBlendMode composite: {e}")),
             }
         }
-        for effect in object["effects"].as_array().into_iter().flatten() {
-            if !boolean(effect.get("visible"), true) {
-                continue;
-            }
-            let file = effect["file"].as_str().unwrap_or("");
-            match self.effect(file, effect) {
-                Ok(e) => layer.effects.push(e),
-                Err(e) => self.skip(format!("effect {file}: {e}")),
-            }
-        }
+        self.attach_effects(object, &mut layer);
         // A passthrough layer without effects redraws what is already there.
-        if !(passthrough && layer.effects.is_empty()) {
+        if !(passthrough && !layer.effects.iter().any(|e| e.visible)) {
             if layer.kind == LayerKind::Compose
                 && let Some(id) = integer(object.get("id"))
             {
@@ -772,6 +966,7 @@ impl Importer<'_> {
         }
         Ok(Effect {
             name: json["name"].as_str().unwrap_or(file).to_owned(),
+            visible: true,
             fbos,
             passes,
         })

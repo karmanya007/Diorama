@@ -2,6 +2,7 @@
 //! scene IR renderer (Phase 2, [`scene`]).
 
 pub mod scene;
+mod text;
 mod video;
 
 use lumen_gpu::{Gpu, wgpu};

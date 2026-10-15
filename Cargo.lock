@@ -859,6 +859,7 @@ dependencies = [
  "bytemuck",
  "lumen-gpu",
  "lumen-scene",
+ "lumen-text",
  "pollster",
  "thiserror 2.0.21",
  "tracing",

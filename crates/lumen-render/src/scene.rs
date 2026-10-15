@@ -14,11 +14,14 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use lumen_gpu::shader::{ShaderCompiler, ShaderError, Stage, UniformLayout};
 use lumen_gpu::{Gpu, wgpu};
 use lumen_scene::{self as ir, Blend, LayerKind, TextureBinding};
 use wgpu::util::DeviceExt as _;
+
+use crate::text::TextState;
 
 /// Scene targets use WE's gamma-space RGBA8 (no sRGB conversion)...
 pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -42,6 +45,32 @@ pub struct FrameInputs {
     pub daytime: f32,
     /// Cursor in scene UV, 0..1, y down (`g_PointerPosition`).
     pub pointer: [f32; 2],
+}
+
+/// Runtime changes to one layer (from scripts). `None` / empty = unchanged.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LayerUpdate {
+    /// Layer transform (`node_world ∘ local`, see [`ir::ImageLayer`]).
+    pub transform: Option<[f32; 6]>,
+    /// Object colour and alpha (`g_Color4`).
+    pub color: Option<[f32; 4]>,
+    pub visible: Option<bool>,
+    pub text: Option<String>,
+    /// (effect index, visible).
+    pub effects: Vec<(usize, bool)>,
+    /// (effect index, pass index, uniform, value).
+    pub constants: Vec<(usize, usize, String, Vec<f32>)>,
+}
+
+/// What scripts may change about a layer; layers are (re)built from this.
+#[derive(Debug, Clone)]
+struct LayerState {
+    transform: [f32; 6],
+    color: [f32; 4],
+    visible: bool,
+    text: Option<String>,
+    effects: Vec<bool>,
+    constants: BTreeMap<(usize, usize, String), Vec<f32>>,
 }
 
 impl Default for FrameInputs {
@@ -103,9 +132,20 @@ struct GpuPass {
     /// Placement and camera of a pass drawn into the scene or a group target
     /// (moved by parallax each frame); `None` for passes into layer targets.
     placement: Option<([f32; 6], Rows)>,
+    /// Uniform data changed outside the frame loop; upload before drawing.
+    dirty: bool,
+    /// (effect, pass) this GPU pass draws; `None` for albedo / composite.
+    source: Option<(usize, usize)>,
 }
 
 struct GpuLayer {
+    /// Index in the IR scene's layers.
+    index: usize,
+    /// Where it draws (kept for rebuilds).
+    frame: Frame,
+    visible: bool,
+    /// Targets created for this layer (freed when it is rebuilt).
+    owned: Vec<usize>,
     /// Albedo then effect passes. A layer without effects has only its albedo
     /// pass, drawn straight into the scene like WE does (no layer target).
     passes: Vec<GpuPass>,
@@ -149,6 +189,25 @@ pub struct SceneRenderer {
     programs: Vec<Option<Program>>,
     layers: Vec<GpuLayer>,
     composite_pipelines: HashMap<Blend, wgpu::RenderPipeline>,
+    /// Build resources kept so layers can be rebuilt at runtime.
+    shared: Arc<Shared>,
+    /// The imported scene without texture pixels (layers are rebuilt from it).
+    ir: Arc<ir::Scene>,
+    /// Current, script-driven state of every IR layer.
+    state: Vec<LayerState>,
+    /// Text layout and glyph atlas per text layer (IR index).
+    texts: HashMap<usize, TextState>,
+    /// Target slots released by rebuilt layers.
+    free_targets: Vec<usize>,
+}
+
+/// Resources every layer build needs.
+struct Shared {
+    assets: Vec<AssetTexture>,
+    placeholder: AssetTexture,
+    samplers: Vec<wgpu::Sampler>,
+    uniforms_layout: wgpu::BindGroupLayout,
+    composite_layout: wgpu::BindGroupLayout,
 }
 
 impl std::fmt::Debug for SceneRenderer {
@@ -301,6 +360,7 @@ fn create_target(
 enum Source {
     Asset(usize),
     Target(usize),
+    Atlas,
     Placeholder,
 }
 
@@ -382,6 +442,26 @@ impl SceneRenderer {
         }
 
         let composite = CompositeShared::new(device, format);
+        let shared = Arc::new(Shared {
+            assets,
+            placeholder,
+            samplers,
+            uniforms_layout,
+            composite_layout: composite.layout,
+        });
+        let ir = Arc::new(stripped(scene));
+        let state = scene
+            .layers
+            .iter()
+            .map(|l| LayerState {
+                transform: l.transform,
+                color: l.color,
+                visible: l.visible,
+                text: None,
+                effects: l.effects.iter().map(|e| e.visible).collect(),
+                constants: BTreeMap::new(),
+            })
+            .collect();
         let mut renderer = Self {
             size: [scene.width, scene.height],
             shake: scene.shake,
@@ -403,31 +483,222 @@ impl SceneRenderer {
             programs,
             layers: Vec::new(),
             composite_pipelines: composite.pipelines,
+            shared,
+            ir,
+            state,
+            texts: HashMap::new(),
+            free_targets: Vec::new(),
         };
 
-        let ctx = BuildContext {
-            gpu,
-            scene,
-            assets: &assets,
-            placeholder: &placeholder,
-            samplers: &samplers,
-            uniforms_layout: &uniforms_layout,
-        };
         let top = Frame {
             target: SCENE,
             camera: renderer.camera,
         };
-        for (i, layer) in scene.layers.iter().enumerate() {
-            if layer.visible
-                && layer.group.is_none()
-                && let Some(gpu_layer) = renderer.build_layer(&ctx, i, top, &composite.layout)
+        let (shared, ir) = (renderer.shared.clone(), renderer.ir.clone());
+        let ctx = BuildContext {
+            gpu,
+            scene: &ir,
+            assets: &shared.assets,
+            placeholder: &shared.placeholder,
+            samplers: &shared.samplers,
+            uniforms_layout: &shared.uniforms_layout,
+        };
+        for (i, layer) in ir.layers.iter().enumerate() {
+            if layer.group.is_none()
+                && let Some(gpu_layer) =
+                    renderer.build_layer(&ctx, i, top, &shared.composite_layout)
             {
                 renderer.layers.push(gpu_layer);
             }
         }
-        // Asset textures stay alive through their views/bind groups.
-        drop(assets);
         Ok(renderer)
+    }
+
+    /// Applies script changes to layer `index` (IR order). Transform, colour,
+    /// visibility and constants update in place; text and effect visibility
+    /// rebuild the layer.
+    pub fn update_layer(&mut self, gpu: &Gpu, index: usize, update: &LayerUpdate) {
+        let Some(state) = self.state.get_mut(index) else {
+            return;
+        };
+        let mut rebuild = false;
+        if let Some(text) = &update.text
+            && state.text.as_ref() != Some(text)
+        {
+            state.text = Some(text.clone());
+            rebuild = true;
+        }
+        for &(effect, visible) in &update.effects {
+            if let Some(v) = state.effects.get_mut(effect)
+                && *v != visible
+            {
+                *v = visible;
+                rebuild = true;
+            }
+        }
+        if let Some(t) = update.transform {
+            state.transform = t;
+        }
+        if let Some(c) = update.color {
+            state.color = c;
+        }
+        if let Some(v) = update.visible {
+            state.visible = v;
+        }
+        for (effect, pass, uniform, value) in &update.constants {
+            state
+                .constants
+                .insert((*effect, *pass, uniform.clone()), value.clone());
+        }
+        if rebuild {
+            self.rebuild_layer(gpu, index);
+            return;
+        }
+
+        let anchor = self.text_anchor(index);
+        let programs = &self.programs;
+        let Some(layer) = find_layer(&mut self.layers, index) else {
+            return;
+        };
+        if let Some(v) = update.visible {
+            layer.visible = v;
+        }
+        if let Some(t) = update.transform {
+            let t = lumen_scene::compose(t, anchor);
+            layer.transform = t;
+            for pass in &mut layer.passes {
+                if let Some((base, _)) = &mut pass.placement {
+                    *base = t;
+                }
+            }
+            // Recompute placements, composite and background quads next frame.
+            layer.offset = [f32::NAN; 2];
+        }
+        let write = |pass: &mut GpuPass, name: &str, value: &[f32]| {
+            let Some(Some(program)) = programs.get(pass.program) else {
+                return;
+            };
+            pass.dirty |= program.vs_uniforms.write(&mut pass.vs_data, name, value);
+            pass.dirty |= program.fs_uniforms.write(&mut pass.fs_data, name, value);
+        };
+        if let Some(c) = update.color
+            && let Some(albedo) = layer.passes.first_mut()
+        {
+            write(albedo, "g_Color4", &c);
+            write(albedo, "g_Color", &c[..3]);
+            write(albedo, "g_Alpha", &c[3..]);
+        }
+        for (effect, pass, uniform, value) in &update.constants {
+            if let Some(p) = layer
+                .passes
+                .iter_mut()
+                .find(|p| p.source == Some((*effect, *pass)))
+            {
+                write(p, uniform, value);
+            }
+        }
+    }
+
+    /// Offset from a text layer's anchor to the centre of its text box.
+    fn text_anchor(&self, index: usize) -> [f32; 6] {
+        self.texts
+            .get(&index)
+            .map_or(lumen_scene::IDENTITY_AFFINE, |t| {
+                lumen_scene::affine(t.centre, 0.0, [1.0, 1.0])
+            })
+    }
+
+    /// Rebuilds layer `index` (and its group children) from its state.
+    fn rebuild_layer(&mut self, gpu: &Gpu, index: usize) {
+        let Some(frame) = find_layer(&mut self.layers, index).map(|l| l.frame) else {
+            return;
+        };
+        let (shared, ir) = (self.shared.clone(), self.ir.clone());
+        let ctx = BuildContext {
+            gpu,
+            scene: &ir,
+            assets: &shared.assets,
+            placeholder: &shared.placeholder,
+            samplers: &shared.samplers,
+            uniforms_layout: &shared.uniforms_layout,
+        };
+        let Some(new) = self.build_layer(&ctx, index, frame, &shared.composite_layout) else {
+            return;
+        };
+        let Some(slot) = find_layer(&mut self.layers, index) else {
+            return;
+        };
+        let old = std::mem::replace(slot, new);
+        let mut freed = Vec::new();
+        collect_targets(&old, &mut freed);
+        for t in freed {
+            self.targets[t] = create_target(&gpu.device, "free", [1, 1], self.format);
+            self.free_targets.push(t);
+        }
+    }
+
+    /// A target slot (reusing freed ones), recorded in `owned`.
+    fn alloc_target(
+        &mut self,
+        device: &wgpu::Device,
+        label: &str,
+        size: [u32; 2],
+        owned: &mut Vec<usize>,
+    ) -> usize {
+        let target = create_target(device, label, size, self.format);
+        let index = match self.free_targets.pop() {
+            Some(i) => {
+                self.targets[i] = target;
+                i
+            }
+            None => {
+                self.targets.push(target);
+                self.targets.len() - 1
+            }
+        };
+        owned.push(index);
+        index
+    }
+
+    /// Layer `index` as it should be built now: IR plus script state, with
+    /// text laid out (size, centred transform, glyph mesh).
+    fn effective_layer(&mut self, gpu: &Gpu, scene: &ir::Scene, index: usize) -> ir::ImageLayer {
+        let mut layer = scene.layers[index].clone();
+        let state = &self.state[index];
+        layer.transform = state.transform;
+        layer.color = state.color;
+        layer.visible = state.visible;
+        for (e, visible) in layer.effects.iter_mut().zip(&state.effects) {
+            e.visible = *visible;
+        }
+        for ((e, p, uniform), value) in &state.constants {
+            if let Some(pass) = layer.effects.get_mut(*e).and_then(|e| e.passes.get_mut(*p)) {
+                pass.constants.insert(uniform.clone(), value.clone());
+            }
+        }
+        if let Some(spec) = &layer.text {
+            let text = state.text.as_deref().unwrap_or(&spec.text);
+            let text_state = match self.texts.entry(index) {
+                std::collections::hash_map::Entry::Occupied(e) => Some(e.into_mut()),
+                std::collections::hash_map::Entry::Vacant(v) => scene
+                    .fonts
+                    .get(spec.font)
+                    .and_then(TextState::new)
+                    .map(|t| v.insert(t)),
+            };
+            if let Some(t) = text_state {
+                let laid = t.layout(gpu, spec, text);
+                layer.size = laid.size;
+                layer.transform = lumen_scene::compose(
+                    layer.transform,
+                    lumen_scene::affine(laid.centre, 0.0, [1.0, 1.0]),
+                );
+                layer.mesh = Some(laid.mesh);
+            } else {
+                layer.mesh = Some(Vec::new());
+            }
+        }
+        layer
     }
 
     /// Size of [`SceneRenderer::output`].
@@ -447,8 +718,14 @@ impl SceneRenderer {
         frame: Frame,
         composite_layout: &wgpu::BindGroupLayout,
     ) -> Option<GpuLayer> {
-        let layer = &ctx.scene.layers[index];
+        let layer = &self.effective_layer(ctx.gpu, ctx.scene, index);
+        let atlas = self
+            .texts
+            .get(&index)
+            .and_then(|t| Some((t.view()?.clone(), t.resolution())));
+        let atlas = atlas.as_ref().map(|(v, r)| (v, *r));
         let device = &ctx.gpu.device;
+        let mut owned = Vec::new();
         // Drawing into a group target keeps what is already there.
         let into_group = frame.target != SCENE;
         let needs_framebuffer = std::iter::once(&layer.albedo)
@@ -461,7 +738,8 @@ impl SceneRenderer {
             })
             || layer.copy_background;
 
-        if layer.effects.is_empty() && !layer.copy_background {
+        let effects: Vec<&ir::Effect> = layer.effects.iter().filter(|e| e.visible).collect();
+        if effects.is_empty() && !layer.copy_background {
             let plan = PassPlan {
                 pass: &layer.albedo,
                 blend: layer.blend,
@@ -478,10 +756,15 @@ impl SceneRenderer {
                 },
                 color: layer.color,
                 mesh: layer.mesh.as_deref(),
+                atlas,
             };
             let mut pass = self.build_pass(ctx, &plan)?;
             pass.load |= into_group;
             return Some(GpuLayer {
+                index,
+                frame,
+                visible: layer.visible,
+                owned,
                 passes: vec![pass],
                 background: None,
                 composite: None,
@@ -496,16 +779,11 @@ impl SceneRenderer {
             });
         }
 
-        let ping = self.targets.len();
-        for suffix in ["a", "b"] {
-            self.targets.push(create_target(
-                device,
-                &format!("{} {suffix}", layer.name),
-                layer.size,
-                self.format,
-            ));
-        }
-        let mut current = ping;
+        let ping = [
+            self.alloc_target(device, &format!("{} a", layer.name), layer.size, &mut owned),
+            self.alloc_target(device, &format!("{} b", layer.name), layer.size, &mut owned),
+        ];
+        let mut current = ping[0];
 
         let mut passes = Vec::new();
         // Albedo: no blending inside the layer target (blend applies at
@@ -519,7 +797,7 @@ impl SceneRenderer {
             },
             previous: None,
             fbos: &HashMap::new(),
-            target: ping,
+            target: ping[0],
             geometry: match layer.kind {
                 LayerKind::Fullscreen => Geometry::Fullscreen,
                 LayerKind::Image => Geometry::LayerTarget {
@@ -536,6 +814,7 @@ impl SceneRenderer {
             },
             color: layer.color,
             mesh: layer.mesh.as_deref(),
+            atlas,
         };
         let mut albedo = self.build_pass(ctx, &albedo)?;
         albedo.load = layer.copy_background;
@@ -563,13 +842,13 @@ impl SceneRenderer {
                 contents: bytemuck::cast_slice(&quad),
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             });
-            (bind_group, vertices, ping, frame.camera)
+            (bind_group, vertices, ping[0], frame.camera)
         });
 
         // Children of a composition layer draw into its target (scene
         // coordinates mapped onto the layer's rect) before its effects.
         let group = Frame {
-            target: ping,
+            target: ping[0],
             camera: mat_mul(
                 inverse_model_rows(layer.transform),
                 centred_ortho_rows(layer.size[0] as f32, layer.size[1] as f32),
@@ -577,8 +856,7 @@ impl SceneRenderer {
         };
         let mut children = Vec::new();
         for (j, child) in ctx.scene.layers.iter().enumerate() {
-            if child.visible
-                && child.group == Some(index)
+            if child.group == Some(index)
                 && let Some(c) = self.build_layer(ctx, j, group, composite_layout)
             {
                 children.push(c);
@@ -586,19 +864,22 @@ impl SceneRenderer {
         }
         let children_at = passes.len();
 
-        for effect in &layer.effects {
+        for (e, effect) in layer.effects.iter().enumerate() {
+            if !effect.visible {
+                continue;
+            }
             let mut fbos = HashMap::new();
             for fbo in &effect.fbos {
                 let size = layer.size.map(|s| (s / fbo.scale_div).max(1));
-                fbos.insert(fbo.name.clone(), self.targets.len());
-                self.targets.push(create_target(
+                let t = self.alloc_target(
                     device,
                     &format!("{} {}", layer.name, fbo.name),
                     size,
-                    self.format,
-                ));
+                    &mut owned,
+                );
+                fbos.insert(fbo.name.clone(), t);
             }
-            for pass in &effect.passes {
+            for (pass_index, pass) in effect.passes.iter().enumerate() {
                 let target = match &pass.target {
                     Some(name) => match fbos.get(name) {
                         Some(t) => *t,
@@ -607,7 +888,13 @@ impl SceneRenderer {
                             continue;
                         }
                     },
-                    None => ping + 1 - (current - ping),
+                    None => {
+                        if current == ping[0] {
+                            ping[1]
+                        } else {
+                            ping[0]
+                        }
+                    }
                 };
                 let plan = PassPlan {
                     pass,
@@ -618,8 +905,10 @@ impl SceneRenderer {
                     geometry: Geometry::Effect,
                     color: [1.0; 4],
                     mesh: None,
+                    atlas: None,
                 };
-                if let Some(p) = self.build_pass(ctx, &plan) {
+                if let Some(mut p) = self.build_pass(ctx, &plan) {
+                    p.source = Some((e, pass_index));
                     passes.push(p);
                     if pass.target.is_none() {
                         current = target;
@@ -643,11 +932,16 @@ impl SceneRenderer {
                 // Colour and alpha were applied by the albedo pass.
                 color: [1.0; 4],
                 mesh: None,
+                atlas: None,
             };
             if let Some(mut p) = self.build_pass(ctx, &plan) {
                 p.load |= into_group;
                 passes.push(p);
                 return Some(GpuLayer {
+                    index,
+                    frame,
+                    visible: layer.visible,
+                    owned,
                     passes,
                     background,
                     composite: None,
@@ -687,6 +981,10 @@ impl SceneRenderer {
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
         Some(GpuLayer {
+            index,
+            frame,
+            visible: layer.visible,
+            owned,
             passes,
             background,
             composite: Some((composite, composite_vertices, frame.target, frame.camera)),
@@ -721,7 +1019,8 @@ impl SceneRenderer {
                     .get(name)
                     .map_or(Source::Placeholder, |t| Source::Target(*t)),
                 Some(TextureBinding::FrameBuffer) => Source::Target(FRAMEBUFFER),
-                None => Source::Placeholder,
+                Some(TextureBinding::TextAtlas) if plan.atlas.is_some() => Source::Atlas,
+                Some(TextureBinding::TextAtlas) | None => Source::Placeholder,
             };
             let source = match source {
                 Source::Target(t) if t == plan.target => {
@@ -756,6 +1055,14 @@ impl SceneRenderer {
                     let [w, h] = t.size.map(|v| v as f32);
                     (&t.view, &ctx.samplers[CLAMP_LINEAR], [w, h, w, h])
                 }
+                Source::Atlas => match plan.atlas {
+                    Some((view, resolution)) => (view, &ctx.samplers[CLAMP_LINEAR], resolution),
+                    None => (
+                        &ctx.placeholder.view,
+                        &ctx.samplers[CLAMP_LINEAR],
+                        ctx.placeholder.resolution,
+                    ),
+                },
                 Source::Placeholder => (
                     &ctx.placeholder.view,
                     &ctx.samplers[CLAMP_LINEAR],
@@ -942,6 +1249,8 @@ impl SceneRenderer {
                 } => Some((transform, camera)),
                 _ => None,
             },
+            dirty: false,
+            source: None,
         })
     }
 
@@ -1079,6 +1388,9 @@ impl SceneRenderer {
         layer: &mut GpuLayer,
         f: &mut FrameState<'_>,
     ) {
+        if !layer.visible {
+            return;
+        }
         let gpu = f.gpu;
         let offset = [
             f.shift[0] * layer.parallax_depth[0] + f.shake[0],
@@ -1179,10 +1491,11 @@ impl SceneRenderer {
             dirty |= layout.write(buf, "g_Daytime", &[inputs.daytime]);
             dirty |= layout.write(buf, "g_PointerPosition", &inputs.pointer);
             dirty |= layout.write(buf, "g_PointerPositionLast", &inputs.pointer);
-            if dirty {
+            if dirty || pass.dirty {
                 f.gpu.queue.write_buffer(gpu_buf, 0, buf);
             }
         }
+        pass.dirty = false;
         let load = if pass.target == SCENE {
             std::mem::replace(f.scene_load, wgpu::LoadOp::Load)
         } else if pass.load {
@@ -1329,6 +1642,8 @@ struct PassPlan<'a> {
     color: [f32; 4],
     /// Quads replacing the albedo's single quad.
     mesh: Option<&'a [ir::MeshQuad]>,
+    /// The layer's glyph atlas and its resolution (text layers).
+    atlas: Option<(&'a wgpu::TextureView, [f32; 4])>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1424,6 +1739,46 @@ fn composite_quad(size: [u32; 2], t: [f32; 6], camera: Rows) -> [f32; 16] {
         ]);
     }
     out
+}
+
+/// The GPU layer for IR layer `index`, searching group children too.
+fn find_layer(layers: &mut [GpuLayer], index: usize) -> Option<&mut GpuLayer> {
+    for layer in layers {
+        if layer.index == index {
+            return Some(layer);
+        }
+        if let Some(found) = find_layer(&mut layer.children, index) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn collect_targets(layer: &GpuLayer, out: &mut Vec<usize>) {
+    out.extend(&layer.owned);
+    for child in &layer.children {
+        collect_targets(child, out);
+    }
+}
+
+/// `scene` without texture pixels (uploaded already) or shader sources.
+fn stripped(scene: &ir::Scene) -> ir::Scene {
+    ir::Scene {
+        width: scene.width,
+        height: scene.height,
+        clear_color: scene.clear_color,
+        scheme_color: scene.scheme_color,
+        hdr: scene.hdr,
+        ambient_color: scene.ambient_color,
+        skylight_color: scene.skylight_color,
+        shake: scene.shake,
+        parallax: scene.parallax,
+        point_lights: scene.point_lights.clone(),
+        layers: scene.layers.clone(),
+        textures: Vec::new(),
+        fonts: scene.fonts.clone(),
+        ..ir::Scene::default()
+    }
 }
 
 /// Fills a layer target with the frame under the layer: a quad over the whole

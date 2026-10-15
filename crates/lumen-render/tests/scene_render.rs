@@ -98,6 +98,9 @@ fn layer(name: &str, origin: [f32; 2], texture: usize, alpha: f32) -> ImageLayer
     ImageLayer {
         name: name.into(),
         size: [32, 32],
+        node: None,
+        local: affine(origin, 0.0, [1.0, 1.0]),
+        text: None,
         transform: affine(origin, 0.0, [1.0, 1.0]),
         visible: true,
         parallax_depth: [1.0, 1.0],
@@ -124,11 +127,13 @@ fn scene() -> Scene {
     right.effects = vec![
         Effect {
             name: "invert".into(),
+            visible: true,
             fbos: Vec::new(),
             passes: vec![pass(1, TextureBinding::Previous, Blend::Opaque)],
         },
         Effect {
             name: "fbo round trip".into(),
+            visible: true,
             fbos: vec![Fbo {
                 name: "_rt_half".into(),
                 scale_div: 2,
@@ -304,6 +309,7 @@ fn copy_background_starts_the_target_from_the_frame() {
     let mut text = glyphs([16.0, 16.0]);
     text.effects = vec![Effect {
         name: "invert".into(),
+        visible: true,
         fbos: Vec::new(),
         passes: vec![pass(1, TextureBinding::Previous, Blend::Opaque)],
     }];
