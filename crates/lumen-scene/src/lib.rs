@@ -132,11 +132,28 @@ pub struct ImageLayer {
     pub blend: Blend,
     /// Draws the layer's own image into its first target.
     pub albedo: Pass,
+    /// Quads the albedo pass draws instead of one quad over the layer (the
+    /// glyphs of a text layer). An albedo with a mesh blends into the layer
+    /// target with the layer's blending, like WE's font draws.
+    pub mesh: Option<Vec<MeshQuad>>,
+    /// The layer target starts as a copy of the frame below the layer
+    /// (WE `copybackground`); forces a layer target even without effects.
+    pub copy_background: bool,
     /// Custom composite for layers with effects (e.g. a colour blend mode):
     /// placed like a direct layer, sampling the finished layer image as
     /// `Previous`. `None` = plain blended copy.
     pub composite: Option<Pass>,
     pub effects: Vec<Effect>,
+}
+
+/// One textured quad of a [`ImageLayer::mesh`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MeshQuad {
+    /// `[x0, y0, x1, y1]` in layer-local pixels (centred on the layer, y up).
+    pub rect: [f32; 4],
+    /// `[u0, v0, u1, v1]` texture coordinates of the rect's top-left and
+    /// bottom-right corners (v down).
+    pub uv: [f32; 4],
 }
 
 /// How a layer's albedo pass is drawn.

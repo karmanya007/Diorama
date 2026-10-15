@@ -8,6 +8,7 @@ set -euo pipefail
 # crate:space-separated crates it must never depend on (directly or transitively)
 rules=(
   "lumen-core:lumen-scene lumen-assets lumen-ipc lumen-we lumen-gpu lumen-runtime lumen-render lumen-platform"
+  "lumen-text:lumen-scene lumen-assets lumen-ipc lumen-we lumen-gpu lumen-runtime lumen-render lumen-platform"
   "lumen-scene:lumen-assets lumen-ipc lumen-we lumen-gpu lumen-runtime lumen-render lumen-platform"
   "lumen-assets:lumen-we lumen-gpu lumen-runtime lumen-render lumen-platform"
   "lumen-ipc:lumen-we lumen-gpu lumen-runtime lumen-render lumen-platform"

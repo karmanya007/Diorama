@@ -89,6 +89,7 @@ struct GpuPass {
     program: usize,
     pipeline: wgpu::RenderPipeline,
     vertices: wgpu::Buffer,
+    vertex_count: u32,
     uniforms: wgpu::BindGroup,
     textures: wgpu::BindGroup,
     vs_buffer: wgpu::Buffer,
@@ -108,6 +109,9 @@ struct GpuLayer {
     /// Albedo then effect passes. A layer without effects has only its albedo
     /// pass, drawn straight into the scene like WE does (no layer target).
     passes: Vec<GpuPass>,
+    /// Copy of the frame under the layer into its first target, before the
+    /// albedo (`copy_background`): bind group, quad, target, frame camera.
+    background: Option<(wgpu::BindGroup, wgpu::Buffer, usize, Rows)>,
     /// Final layer target → its frame (layers with effects only): bind group,
     /// quad, frame target and frame camera.
     composite: Option<(wgpu::BindGroup, wgpu::Buffer, usize, Rows)>,
@@ -454,9 +458,10 @@ impl SceneRenderer {
                 p.textures
                     .values()
                     .any(|t| *t == TextureBinding::FrameBuffer)
-            });
+            })
+            || layer.copy_background;
 
-        if layer.effects.is_empty() {
+        if layer.effects.is_empty() && !layer.copy_background {
             let plan = PassPlan {
                 pass: &layer.albedo,
                 blend: layer.blend,
@@ -472,11 +477,13 @@ impl SceneRenderer {
                     },
                 },
                 color: layer.color,
+                mesh: layer.mesh.as_deref(),
             };
             let mut pass = self.build_pass(ctx, &plan)?;
             pass.load |= into_group;
             return Some(GpuLayer {
                 passes: vec![pass],
+                background: None,
                 composite: None,
                 children: Vec::new(),
                 children_at: 0,
@@ -501,10 +508,15 @@ impl SceneRenderer {
         let mut current = ping;
 
         let mut passes = Vec::new();
-        // Albedo: no blending inside the layer target (blend applies at composite).
+        // Albedo: no blending inside the layer target (blend applies at
+        // composite), except meshes (glyphs), which blend like WE's font draws.
         let albedo = PassPlan {
             pass: &layer.albedo,
-            blend: Blend::Opaque,
+            blend: if layer.mesh.is_some() {
+                layer.blend
+            } else {
+                Blend::Opaque
+            },
             previous: None,
             fbos: &HashMap::new(),
             target: ping,
@@ -523,8 +535,36 @@ impl SceneRenderer {
                 },
             },
             color: layer.color,
+            mesh: layer.mesh.as_deref(),
         };
-        passes.push(self.build_pass(ctx, &albedo)?);
+        let mut albedo = self.build_pass(ctx, &albedo)?;
+        albedo.load = layer.copy_background;
+        passes.push(albedo);
+        let background = layer.copy_background.then(|| {
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("background copy"),
+                layout: composite_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(
+                            &self.targets[FRAMEBUFFER].view,
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&ctx.samplers[CLAMP_LINEAR]),
+                    },
+                ],
+            });
+            let quad = background_quad(layer.size, layer.transform, frame.camera);
+            let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("background quad"),
+                contents: bytemuck::cast_slice(&quad),
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            });
+            (bind_group, vertices, ping, frame.camera)
+        });
 
         // Children of a composition layer draw into its target (scene
         // coordinates mapped onto the layer's rect) before its effects.
@@ -577,6 +617,7 @@ impl SceneRenderer {
                     target,
                     geometry: Geometry::Effect,
                     color: [1.0; 4],
+                    mesh: None,
                 };
                 if let Some(p) = self.build_pass(ctx, &plan) {
                     passes.push(p);
@@ -601,12 +642,14 @@ impl SceneRenderer {
                 },
                 // Colour and alpha were applied by the albedo pass.
                 color: [1.0; 4],
+                mesh: None,
             };
             if let Some(mut p) = self.build_pass(ctx, &plan) {
                 p.load |= into_group;
                 passes.push(p);
                 return Some(GpuLayer {
                     passes,
+                    background,
                     composite: None,
                     children,
                     children_at,
@@ -645,6 +688,7 @@ impl SceneRenderer {
         });
         Some(GpuLayer {
             passes,
+            background,
             composite: Some((composite, composite_vertices, frame.target, frame.camera)),
             children,
             children_at,
@@ -862,9 +906,20 @@ impl SceneRenderer {
             }
             _ => [1.0, 1.0],
         };
+        let data = pass_vertices(&program.attributes, plan.geometry, uv_max, plan.mesh);
+        let stride: usize = program
+            .attributes
+            .iter()
+            .map(|a| a.components.clamp(1, 4) as usize)
+            .sum();
+        let vertex_count = (data.len() / stride.max(1)) as u32;
+        // An empty mesh (blank text) still clears its target; wgpu needs a
+        // non-empty buffer to bind.
+        let mut contents = data;
+        contents.resize(contents.len().max(stride.max(1)), 0.0);
         let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("pass quad"),
-            contents: bytemuck::cast_slice(&pass_quad(&program.attributes, plan.geometry, uv_max)),
+            label: Some("pass vertices"),
+            contents: bytemuck::cast_slice(&contents),
             usage: wgpu::BufferUsages::VERTEX,
         });
 
@@ -872,6 +927,7 @@ impl SceneRenderer {
             program: index,
             pipeline,
             vertices,
+            vertex_count,
             uniforms,
             textures,
             vs_buffer,
@@ -1031,11 +1087,16 @@ impl SceneRenderer {
         let moved = offset != layer.offset;
         if moved {
             layer.offset = offset;
+            let t = offset_transform(layer.transform, offset);
             if let Some((_, vertices, _, camera)) = &layer.composite {
-                let t = offset_transform(layer.transform, offset);
                 let quad = composite_quad(layer.size, t, *camera);
                 gpu.queue
                     .write_buffer(vertices, 0, bytemuck::cast_slice(&quad));
+            }
+            if let Some((_, background, _, camera)) = &layer.background {
+                let quad = background_quad(layer.size, t, *camera);
+                gpu.queue
+                    .write_buffer(background, 0, bytemuck::cast_slice(&quad));
             }
         }
         if layer.needs_framebuffer {
@@ -1054,6 +1115,16 @@ impl SceneRenderer {
                 self.targets[FRAMEBUFFER].texture.as_image_copy(),
                 size,
             );
+        }
+        if let Some((bind_group, vertices, target, _)) = &layer.background
+            && let Some(pipeline) = self.composite_pipelines.get(&Blend::Opaque)
+        {
+            let clear = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
+            let mut rp = scene_pass(encoder, &self.targets[*target].view, clear, "background");
+            rp.set_pipeline(pipeline);
+            rp.set_bind_group(0, bind_group, &[]);
+            rp.set_vertex_buffer(0, vertices.slice(..));
+            rp.draw(0..4, 0..1);
         }
         let children_at = layer.children_at.min(layer.passes.len());
         let (before, after) = layer.passes.split_at_mut(children_at);
@@ -1129,7 +1200,9 @@ impl SceneRenderer {
         rp.set_bind_group(0, &pass.uniforms, &[]);
         rp.set_bind_group(1, &pass.textures, &[]);
         rp.set_vertex_buffer(0, pass.vertices.slice(..));
-        rp.draw(0..4, 0..1);
+        if pass.vertex_count > 0 {
+            rp.draw(0..pass.vertex_count, 0..1);
+        }
     }
 
     /// Scene-space parallax shift for depth 1 this frame (smoothed cursor).
@@ -1254,6 +1327,8 @@ struct PassPlan<'a> {
     geometry: Geometry,
     /// `g_Color4` (object colour + alpha) for albedo passes.
     color: [f32; 4],
+    /// Quads replacing the albedo's single quad.
+    mesh: Option<&'a [ir::MeshQuad]>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1275,27 +1350,56 @@ enum Geometry {
     Fullscreen,
 }
 
-/// Triangle-strip quad (BL, BR, TL, TR) with each attribute filled by name.
-fn pass_quad(attributes: &[ir::Attribute], geometry: Geometry, uv_max: [f32; 2]) -> Vec<f32> {
-    let mut out = Vec::new();
-    for (x, y) in [(0.0f32, 0.0f32), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)] {
-        let position = match geometry {
-            Geometry::LayerTarget { size: [w, h], .. } | Geometry::Direct { size: [w, h], .. } => {
-                [(x - 0.5) * w as f32, (y - 0.5) * h as f32, 0.0, 1.0]
+/// Triangle list (two triangles per quad) with each attribute filled by
+/// name: one quad over the layer / target, or the layer's mesh.
+fn pass_vertices(
+    attributes: &[ir::Attribute],
+    geometry: Geometry,
+    uv_max: [f32; 2],
+    mesh: Option<&[ir::MeshQuad]>,
+) -> Vec<f32> {
+    let whole = match geometry {
+        Geometry::LayerTarget { size: [w, h], .. } | Geometry::Direct { size: [w, h], .. } => {
+            let [w, h] = [w as f32 * 0.5, h as f32 * 0.5];
+            ir::MeshQuad {
+                rect: [-w, -h, w, h],
+                uv: [0.0, 0.0, uv_max[0], uv_max[1]],
             }
-            Geometry::Effect | Geometry::Fullscreen => [x * 2.0 - 1.0, y * 2.0 - 1.0, 0.0, 1.0],
-        };
-        // Texture v runs top-down; clip y runs bottom-up.
-        let uv = [x * uv_max[0], (1.0 - y) * uv_max[1], 0.0, 0.0];
-        for a in attributes {
-            let n = a.components.clamp(1, 4) as usize;
-            let values = match a.name.as_str() {
-                "a_Position" => position,
-                "a_TexCoord" => uv,
-                "a_Color" => [1.0; 4],
-                _ => [0.0; 4],
-            };
-            out.extend_from_slice(&values[..n]);
+        }
+        Geometry::Effect | Geometry::Fullscreen => ir::MeshQuad {
+            rect: [-1.0, -1.0, 1.0, 1.0],
+            uv: [0.0, 0.0, uv_max[0], uv_max[1]],
+        },
+    };
+    let quads = match (mesh, geometry) {
+        (Some(m), Geometry::LayerTarget { .. } | Geometry::Direct { .. }) => m,
+        _ => std::slice::from_ref(&whole),
+    };
+    let mut out = Vec::new();
+    for q in quads {
+        let [x0, y0, x1, y1] = q.rect;
+        let [u0, v0, u1, v1] = q.uv;
+        // (x, y) in 0..1 from the bottom-left corner; texture v runs top-down.
+        for (x, y) in [
+            (0.0, 0.0),
+            (1.0, 0.0),
+            (0.0, 1.0),
+            (0.0, 1.0),
+            (1.0, 0.0),
+            (1.0, 1.0),
+        ] {
+            let position = [x0 + (x1 - x0) * x, y0 + (y1 - y0) * y, 0.0, 1.0];
+            let uv = [u0 + (u1 - u0) * x, v1 + (v0 - v1) * y, 0.0, 0.0];
+            for a in attributes {
+                let n = a.components.clamp(1, 4) as usize;
+                let values = match a.name.as_str() {
+                    "a_Position" => position,
+                    "a_TexCoord" => uv,
+                    "a_Color" => [1.0; 4],
+                    _ => [0.0; 4],
+                };
+                out.extend_from_slice(&values[..n]);
+            }
         }
     }
     out
@@ -1318,6 +1422,22 @@ fn composite_quad(size: [u32; 2], t: [f32; 6], camera: Rows) -> [f32; 16] {
             (x + 1.0) * 0.5,
             (1.0 - y) * 0.5,
         ]);
+    }
+    out
+}
+
+/// Fills a layer target with the frame under the layer: a quad over the whole
+/// target sampling the frame snapshot where `composite_quad` would land
+/// (strip order, pos.xy + uv).
+fn background_quad(size: [u32; 2], t: [f32; 6], camera: Rows) -> [f32; 16] {
+    let placed = composite_quad(size, t, camera);
+    let mut out = [0.0; 16];
+    for (i, (x, y)) in [(-1.0f32, -1.0f32), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)]
+        .into_iter()
+        .enumerate()
+    {
+        let (cx, cy) = (placed[i * 4], placed[i * 4 + 1]);
+        out[i * 4..i * 4 + 4].copy_from_slice(&[x, y, (cx + 1.0) * 0.5, (1.0 - cy) * 0.5]);
     }
     out
 }
@@ -1539,7 +1659,7 @@ fn create_pipeline(
             })],
         }),
         primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleStrip,
+            topology: wgpu::PrimitiveTopology::TriangleList,
             ..Default::default()
         },
         depth_stencil: None,
@@ -1682,18 +1802,25 @@ mod tests {
                 components: 2,
             },
         ];
-        let q = pass_quad(
-            &attrs,
-            Geometry::LayerTarget {
-                size: [100, 50],
-                transform: lumen_scene::IDENTITY_AFFINE,
-            },
-            [0.5, 1.0],
-        );
-        assert_eq!(q.len(), 4 * 5);
+        let geometry = Geometry::LayerTarget {
+            size: [100, 50],
+            transform: lumen_scene::IDENTITY_AFFINE,
+        };
+        let q = pass_vertices(&attrs, geometry, [0.5, 1.0], None);
+        assert_eq!(q.len(), 6 * 5);
         // Bottom-left vertex samples the bottom of the image (v = 1).
         assert_eq!(&q[0..5], &[-50.0, -25.0, 0.0, 0.0, 1.0]);
         // Top-right: (w/2, h/2), uv (u_max, 0).
-        assert_eq!(&q[15..20], &[50.0, 25.0, 0.0, 0.5, 0.0]);
+        assert_eq!(&q[25..30], &[50.0, 25.0, 0.0, 0.5, 0.0]);
+
+        // A mesh replaces the quad: one glyph, top-left uv (0.25, 0.5).
+        let glyph = ir::MeshQuad {
+            rect: [1.0, 2.0, 11.0, 22.0],
+            uv: [0.25, 0.5, 0.75, 1.0],
+        };
+        let m = pass_vertices(&attrs, geometry, [1.0, 1.0], Some(&[glyph, glyph]));
+        assert_eq!(m.len(), 2 * 6 * 5);
+        assert_eq!(&m[0..5], &[1.0, 2.0, 0.0, 0.25, 1.0]);
+        assert_eq!(&m[25..30], &[11.0, 22.0, 0.0, 0.75, 0.5]);
     }
 }

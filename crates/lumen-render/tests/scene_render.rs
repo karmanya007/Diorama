@@ -1,6 +1,6 @@
 //! Golden tests for the scene renderer on synthetic scenes (no Wallpaper
 //! Engine content): direct and target layers, effect ping-pong, FBOs,
-//! blending, parallax. Exact colours at known pixels. Skipped without DXC
+//! blending, parallax, meshes (text glyphs) and background copies. Exact colours at known pixels. Skipped without DXC
 //! (`LUMEN_DXC`, see `scripts/fetch-dxc.ps1`) or without any GPU adapter.
 
 #![allow(clippy::unwrap_used, reason = "test")]
@@ -11,8 +11,8 @@ use lumen_gpu::shader::ShaderCompiler;
 use lumen_gpu::{Gpu, GpuOptions};
 use lumen_render::scene::{FrameInputs, SceneRenderer};
 use lumen_scene::{
-    Attribute, Blend, Effect, Fbo, ImageLayer, LayerKind, Parallax, Pass, ProgramId, Scene,
-    ShaderProgram, Texture, TextureBinding, TextureId, affine,
+    Attribute, Blend, Effect, Fbo, ImageLayer, LayerKind, MeshQuad, Parallax, Pass, ProgramId,
+    Scene, ShaderProgram, Texture, TextureBinding, TextureId, affine,
 };
 
 /// Textured quad through the engine MVP, tinted by g_Color4 (like genericimage).
@@ -106,6 +106,8 @@ fn layer(name: &str, origin: [f32; 2], texture: usize, alpha: f32) -> ImageLayer
         color: [1.0, 1.0, 1.0, alpha],
         blend: Blend::Translucent,
         albedo: pass(0, TextureBinding::Asset(TextureId(texture)), Blend::Opaque),
+        mesh: None,
+        copy_background: false,
         composite: None,
         effects: Vec::new(),
     }
@@ -264,4 +266,56 @@ fn group_children_render_inside_the_group_before_its_effects() {
         [255, 0, 0, 255],
         "other layer untouched"
     );
+}
+
+/// Two "glyph" quads, 8 px wide, 8 px left and right of the layer centre.
+fn glyphs(origin: [f32; 2]) -> ImageLayer {
+    let mut l = layer("glyphs", origin, 1, 1.0);
+    l.albedo.blend = Blend::Translucent;
+    let quad = |x0: f32| MeshQuad {
+        rect: [x0, -4.0, x0 + 8.0, 4.0],
+        uv: [0.0, 0.0, 1.0, 1.0],
+    };
+    l.mesh = Some(vec![quad(-12.0), quad(4.0)]);
+    l
+}
+
+#[test]
+fn meshes_draw_only_their_quads() {
+    let Some((gpu, compiler)) = setup() else {
+        return;
+    };
+    let mut s = scene();
+    s.layers = vec![glyphs([32.0, 16.0])];
+    let img = render(&gpu, &compiler, &s, [0.5, 0.5]);
+    assert_eq!(px(&img, 64, 24, 16), [0, 255, 0, 255], "left glyph");
+    assert_eq!(px(&img, 64, 40, 16), [0, 255, 0, 255], "right glyph");
+    assert_eq!(px(&img, 64, 32, 16), [0, 0, 0, 255], "between glyphs");
+    assert_eq!(px(&img, 64, 24, 24), [0, 0, 0, 255], "below glyphs");
+}
+
+#[test]
+fn copy_background_starts_the_target_from_the_frame() {
+    let Some((gpu, compiler)) = setup() else {
+        return;
+    };
+    let mut s = scene();
+    // Glyphs over the red layer, inverted by an effect.
+    let mut text = glyphs([16.0, 16.0]);
+    text.effects = vec![Effect {
+        name: "invert".into(),
+        fbos: Vec::new(),
+        passes: vec![pass(1, TextureBinding::Previous, Blend::Opaque)],
+    }];
+    s.layers.truncate(1);
+    s.layers.push(text.clone());
+    // Without the copy the gaps are transparent: red shows through.
+    let img = render(&gpu, &compiler, &s, [0.5, 0.5]);
+    assert_eq!(px(&img, 64, 16, 16), [255, 0, 0, 255], "gap without copy");
+    assert_eq!(px(&img, 64, 8, 16), [255, 0, 255, 255], "glyph without copy");
+    // With it the red background is part of the layer and gets inverted.
+    s.layers[1].copy_background = true;
+    let img = render(&gpu, &compiler, &s, [0.5, 0.5]);
+    assert_eq!(px(&img, 64, 16, 16), [0, 255, 255, 255], "gap with copy");
+    assert_eq!(px(&img, 64, 8, 16), [255, 0, 255, 255], "glyph with copy");
 }

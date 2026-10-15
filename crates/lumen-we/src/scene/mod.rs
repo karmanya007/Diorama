@@ -6,6 +6,7 @@
 //! `docs/re-notes/renderdoc-captures.md` for the pass structure this mirrors.
 
 pub mod properties;
+mod text;
 pub mod values;
 pub mod vfs;
 
@@ -78,6 +79,7 @@ pub fn import_with(vfs: &Vfs, limits: &Limits, properties: &Properties) -> Resul
         engine: shader::EngineContext::default(),
         zoom: 1.0,
         groups: HashMap::new(),
+        fonts: HashMap::new(),
     };
     importer.scene_header(&json);
     importer.scene.scheme_color = properties
@@ -185,6 +187,8 @@ struct Importer<'a> {
     zoom: f32,
     /// Object id → layer index of composition layers (groups for children).
     groups: HashMap<i64, usize>,
+    /// Fonts by scene name (`None` = not loadable).
+    fonts: HashMap<String, Option<lumen_text::Font>>,
 }
 
 /// A synthetic pass of an engine post-processing chain (bloom).
@@ -499,6 +503,8 @@ impl Importer<'_> {
             color: [1.0; 4],
             blend: Blend::Opaque,
             albedo,
+            mesh: None,
+            copy_background: false,
             composite: None,
             effects: vec![Effect {
                 name: name.into(),
@@ -562,6 +568,11 @@ impl Importer<'_> {
             (Some(model), _) => {
                 if let Err(e) = self.image_layer(object, model, &name, graph) {
                     self.skip(format!("image layer {name:?}: {e}"));
+                }
+            }
+            (None, Some("text")) => {
+                if let Err(e) = self.text_layer(object, &name, graph) {
+                    self.skip(format!("text layer {name:?}: {e}"));
                 }
             }
             (None, Some(kind)) => self.skip(format!("{kind} objects")),
@@ -675,6 +686,8 @@ impl Importer<'_> {
             color: [r, g, b, alpha],
             blend: composite_blend,
             albedo,
+            mesh: None,
+            copy_background: false,
             effects: Vec::new(),
             composite: None,
         };

@@ -21,3 +21,8 @@ Outputs contain Workshop content: write them to the git-ignored `scratch/` folde
 & "C:\Program Files\RenderDoc\qrenderdoc.exe" --python tools\refcap\analyze.py
 ```
 Writes `<capture>.json` (draws, render targets, formats, blend state, cbuffer values) and `<capture>.final.png` per capture. Findings are summarized in `docs/re-notes/renderdoc-captures.md`.
+
+Text layers: `$env:REFCAP_CAPTURES = "<a.rdc>;<b.rdc>"` then
+`qrenderdoc.exe --python toolsefcap	extdraws.py` writes `<capture>.text.json`
+(font draws with post-VS glyph quads, and every draw reading a text render target)
+and `<capture>.atlas_<id>.png`. See `docs/re-notes/text.md`.

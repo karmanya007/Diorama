@@ -78,6 +78,25 @@ enum Command {
         #[arg(long)]
         out: Option<PathBuf>,
     },
+    /// Lay out text like a WE text object and print the glyph quads
+    /// (pixels relative to the object origin, y up) and the text box.
+    Text {
+        /// Font file (.ttf/.otf), or a .pkg with --entry.
+        font: PathBuf,
+        text: String,
+        #[arg(long)]
+        entry: Option<String>,
+        /// WE point size (rendered at 300 dpi).
+        #[arg(long, default_value_t = 32.0)]
+        pointsize: f32,
+        #[arg(long, default_value = "center")]
+        halign: String,
+        #[arg(long, default_value = "center")]
+        valign: String,
+        /// Write the glyph atlas here.
+        #[arg(long)]
+        atlas: Option<PathBuf>,
+    },
 }
 
 const DEFAULT_CORPUS: &str = r"C:\Program Files (x86)\Steam\steamapps\workshop\content\431960";
@@ -175,6 +194,55 @@ fn run(cli: Cli) -> Result<()> {
                 Some(path) => fs::write(&path, report)
                     .with_context(|| format!("writing {}", path.display()))?,
                 None => out.write_all(report.as_bytes())?,
+            }
+        }
+        Command::Text {
+            font,
+            text,
+            entry,
+            pointsize,
+            halign,
+            valign,
+            atlas,
+        } => {
+            let bytes = read_input(&font, entry.as_deref(), &limits)?;
+            let font = lumen_text::Font::new(bytes.into(), 0).context("loading font")?;
+            let style = lumen_text::Style {
+                pixel_size: pointsize * 300.0 / 72.0,
+                halign: match halign.as_str() {
+                    "left" => lumen_text::HAlign::Left,
+                    "right" => lumen_text::HAlign::Right,
+                    _ => lumen_text::HAlign::Center,
+                },
+                valign: match valign.as_str() {
+                    "top" => lumen_text::VAlign::Top,
+                    "bottom" => lumen_text::VAlign::Bottom,
+                    _ => lumen_text::VAlign::Center,
+                },
+                max_width: None,
+                max_rows: None,
+                ellipsis: false,
+            };
+            let mut engine = lumen_text::TextEngine::new();
+            let layout = engine.layout(&font, &text, &style);
+            writeln!(out, "metrics {:?}", font.metrics(style.pixel_size))?;
+            for q in &layout.quads {
+                writeln!(out, "quad {:?} atlas {:?}", q.rect, q.atlas)?;
+            }
+            writeln!(
+                out,
+                "bounds {:?} ({} x {}), rows {}",
+                layout.bounds,
+                layout.width(),
+                layout.height(),
+                layout.rows
+            )?;
+            if let Some(path) = atlas {
+                let a = engine.atlas();
+                image::GrayImage::from_raw(a.size(), a.size(), a.pixels().to_vec())
+                    .context("atlas size mismatch")?
+                    .save(&path)
+                    .with_context(|| format!("writing {}", path.display()))?;
             }
         }
         Command::Tex2png {
