@@ -189,6 +189,9 @@ pub struct SceneRenderer {
     programs: Vec<Option<Program>>,
     layers: Vec<GpuLayer>,
     composite_pipelines: HashMap<Blend, wgpu::RenderPipeline>,
+    /// Background copies into text targets: colour only, alpha stays 0 (as
+    /// WE: the copy only shows where effects raise alpha).
+    background_pipeline: wgpu::RenderPipeline,
     /// Build resources kept so layers can be rebuilt at runtime.
     shared: Arc<Shared>,
     /// The imported scene without texture pixels (layers are rebuilt from it).
@@ -483,6 +486,7 @@ impl SceneRenderer {
             programs,
             layers: Vec::new(),
             composite_pipelines: composite.pipelines,
+            background_pipeline: composite.background,
             shared,
             ir,
             state,
@@ -1428,9 +1432,8 @@ impl SceneRenderer {
                 size,
             );
         }
-        if let Some((bind_group, vertices, target, _)) = &layer.background
-            && let Some(pipeline) = self.composite_pipelines.get(&Blend::Opaque)
-        {
+        if let Some((bind_group, vertices, target, _)) = &layer.background {
+            let pipeline = &self.background_pipeline;
             let clear = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
             let mut rp = scene_pass(encoder, &self.targets[*target].view, clear, "background");
             rp.set_pipeline(pipeline);
@@ -2027,6 +2030,8 @@ fn create_pipeline(
 struct CompositeShared {
     layout: wgpu::BindGroupLayout,
     pipelines: HashMap<Blend, wgpu::RenderPipeline>,
+    /// Copies colour only (alpha stays as cleared): background copies.
+    background: wgpu::RenderPipeline,
 }
 
 impl CompositeShared {
@@ -2062,9 +2067,8 @@ impl CompositeShared {
             immediate_size: 0,
         });
         let attributes = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2];
-        let mut pipelines = HashMap::new();
-        for blend in [Blend::Opaque, Blend::Translucent, Blend::Additive] {
-            let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let make = |blend: Blend, write_mask: wgpu::ColorWrites| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("composite"),
                 layout: Some(&pipeline_layout),
                 vertex: wgpu::VertexState {
@@ -2084,7 +2088,7 @@ impl CompositeShared {
                     targets: &[Some(wgpu::ColorTargetState {
                         format,
                         blend: blend_state(blend),
-                        write_mask: wgpu::ColorWrites::ALL,
+                        write_mask,
                     })],
                 }),
                 primitive: wgpu::PrimitiveState {
@@ -2095,10 +2099,18 @@ impl CompositeShared {
                 multisample: wgpu::MultisampleState::default(),
                 multiview_mask: None,
                 cache: None,
-            });
-            pipelines.insert(blend, pipeline);
+            })
+        };
+        let pipelines = [Blend::Opaque, Blend::Translucent, Blend::Additive]
+            .into_iter()
+            .map(|b| (b, make(b, wgpu::ColorWrites::ALL)))
+            .collect();
+        let background = make(Blend::Opaque, wgpu::ColorWrites::COLOR);
+        Self {
+            layout,
+            pipelines,
+            background,
         }
-        Self { layout, pipelines }
     }
 }
 

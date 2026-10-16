@@ -4,7 +4,7 @@
 //! (`docs/re-notes/text.md`): glyphs are drawn with WE's `font` shader; a text
 //! layer without effects draws its glyphs straight into the scene, otherwise
 //! into a target of the text box plus `padding` on each side, which starts as
-//! a copy of the frame below when `copybackground` is set.
+//! a copy of the frame below (unless `copybackground` is false).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -116,7 +116,13 @@ impl Importer<'_> {
             blend: Blend::Translucent,
             albedo,
             mesh: None,
-            copy_background: boolean(object.get("copybackground"), false),
+            // Text targets start from the frame below unless switched off
+            // (captures 914, 924: no `copybackground` key, copy still made).
+            // Without effects there is no target: glyphs draw straight in.
+            copy_background: boolean(
+                object.get("copybackground"),
+                object["effects"].as_array().is_some_and(|e| !e.is_empty()),
+            ),
             composite: None,
             effects: Vec::new(),
         };

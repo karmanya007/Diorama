@@ -10,6 +10,7 @@
 mod clock;
 mod headless;
 mod policy;
+mod scripts;
 mod session;
 mod state;
 
@@ -55,6 +56,10 @@ struct Args {
     /// Scene time in seconds for `--frame-out`.
     #[arg(long, default_value_t = 0.0)]
     time: f32,
+    /// With `--frame-out`: wall clock scripts see (`Date`, `engine.timeOfDay`),
+    /// in milliseconds since the Unix epoch. Default: now.
+    #[arg(long, requires = "frame_out")]
+    clock: Option<f64>,
     /// With `--frame-out`: cursor position as fractions of the output (x right, y down).
     #[arg(long, value_parser = parse_pointer, default_value = "0.5,0.5")]
     pointer: [f32; 2],
@@ -205,6 +210,7 @@ fn main() -> Result<()> {
         let assets = args.we_assets.is_dir().then_some(args.we_assets.as_path());
         let request = headless::FrameRequest {
             time: args.time,
+            clock_ms: args.clock.unwrap_or_else(scripts::now_ms),
             pointer: args.pointer,
             out,
             dump_targets: args.dump_targets,

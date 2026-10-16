@@ -679,8 +679,8 @@ impl Importer<'_> {
         let Some(source) = value.get("script").and_then(Value::as_str) else {
             return;
         };
-        if source.len() > self.limits.max_string_len as usize {
-            self.skip("script larger than the string limit".into());
+        if source.len() > self.limits.max_script_len as usize {
+            self.skip("script larger than the script limit".into());
             return;
         }
         let properties: serde_json::Map<String, Value> = value["scriptproperties"]

@@ -67,6 +67,8 @@ pub fn load_scene(
 /// What `--frame-out` renders.
 pub struct FrameRequest<'a> {
     pub time: f32,
+    /// Wall clock for scripts, Unix milliseconds.
+    pub clock_ms: f64,
     pub pointer: [f32; 2],
     pub out: &'a PathBuf,
     pub dump_targets: bool,
@@ -83,6 +85,7 @@ pub fn render_to_png(
 ) -> Result<()> {
     let FrameRequest {
         time,
+        clock_ms,
         pointer,
         out,
         dump_targets,
@@ -100,12 +103,23 @@ pub fn render_to_png(
     });
     let mut renderer = SceneRenderer::new(&gpu, &scene, &compiler, output)?;
     tracing::info!(ms = started.elapsed().as_millis(), "scene renderer built");
+    if let Some(mut scripts) = crate::scripts::SceneScripts::new(&scene, clock_ms) {
+        // A couple of seconds of frames first: scripts that ease or count
+        // frames settle like they would have while playing.
+        let warm_up = 2.0f32.min(time);
+        let frames = (warm_up * 30.0).ceil() as u32;
+        for i in 0..=frames {
+            let t = time - warm_up + warm_up * i as f32 / frames.max(1) as f32;
+            let clock = clock_ms - f64::from(time - t) * 1000.0;
+            scripts.frame(&gpu, &mut renderer, t, clock, pointer);
+        }
+    }
     renderer.render(
         &gpu,
         &FrameInputs {
             time,
             pointer,
-            ..FrameInputs::default()
+            daytime: crate::scripts::day_fraction_at(clock_ms),
         },
     );
     if dump_targets {

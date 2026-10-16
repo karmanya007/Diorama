@@ -18,6 +18,7 @@ lumen-media.workspace = true
 lumen-platform.workspace = true
 lumen-render.workspace = true
 lumen-scene.workspace = true
+lumen-script.workspace = true
 lumen-we.workspace = true
 serde.workspace = true
 serde_json.workspace = true

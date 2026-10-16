@@ -299,33 +299,41 @@ fn meshes_draw_only_their_quads() {
     assert_eq!(px(&img, 64, 24, 24), [0, 0, 0, 255], "below glyphs");
 }
 
+/// Effect pass: previous with alpha forced to 1 (like edge_glow's
+/// "background alpha 1").
+const OPAQUE: &str = r"
+Texture2D g_Texture0 : register(t0, space1);
+SamplerState g_Texture0SamplerState : register(s1, space1);
+struct VsIn { [[vk::location(0)]] float3 pos : ATTRIBUTE0; [[vk::location(1)]] float2 uv : ATTRIBUTE1; };
+struct VsOut { float4 position : SV_Position; [[vk::location(0)]] float2 uv : TEXCOORD0; };
+VsOut vs(VsIn i) { VsOut o; o.position = float4(i.pos, 1.0); o.uv = i.uv; return o; }
+float4 ps(VsOut i) : SV_Target0 { return float4(g_Texture0.Sample(g_Texture0SamplerState, i.uv).rgb, 1.0); }
+";
+
 #[test]
-fn copy_background_starts_the_target_from_the_frame() {
+fn copy_background_fills_colour_but_not_alpha() {
     let Some((gpu, compiler)) = setup() else {
         return;
     };
     let mut s = scene();
-    // Glyphs over the red layer, inverted by an effect.
+    s.programs.push(program("opaque", OPAQUE));
+    // Glyphs over the red layer, then an effect that makes everything opaque.
     let mut text = glyphs([16.0, 16.0]);
     text.effects = vec![Effect {
-        name: "invert".into(),
+        name: "opaque".into(),
         visible: true,
         fbos: Vec::new(),
-        passes: vec![pass(1, TextureBinding::Previous, Blend::Opaque)],
+        passes: vec![pass(3, TextureBinding::Previous, Blend::Opaque)],
     }];
     s.layers.truncate(1);
-    s.layers.push(text.clone());
-    // Without the copy the gaps are transparent: red shows through.
+    s.layers.push(text);
+    // Without the copy the gaps hold transparent black, made opaque.
     let img = render(&gpu, &compiler, &s, [0.5, 0.5]);
-    assert_eq!(px(&img, 64, 16, 16), [255, 0, 0, 255], "gap without copy");
-    assert_eq!(
-        px(&img, 64, 8, 16),
-        [255, 0, 255, 255],
-        "glyph without copy"
-    );
-    // With it the red background is part of the layer and gets inverted.
+    assert_eq!(px(&img, 64, 16, 16), [0, 0, 0, 255], "gap without copy");
+    assert_eq!(px(&img, 64, 8, 16), [0, 255, 0, 255], "glyph without copy");
+    // With it the gaps carry the frame's colour: seamless once opaque.
     s.layers[1].copy_background = true;
     let img = render(&gpu, &compiler, &s, [0.5, 0.5]);
-    assert_eq!(px(&img, 64, 16, 16), [0, 255, 255, 255], "gap with copy");
-    assert_eq!(px(&img, 64, 8, 16), [255, 0, 255, 255], "glyph with copy");
+    assert_eq!(px(&img, 64, 16, 16), [255, 0, 0, 255], "gap with copy");
+    assert_eq!(px(&img, 64, 8, 16), [0, 255, 0, 255], "glyph with copy");
 }

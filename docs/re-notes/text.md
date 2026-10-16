@@ -52,9 +52,12 @@ Coordinates in the object's local space (pixels before the object's scale), y up
   from the top. The target is centred on the text box (so the box keeps the
   placement above), effects ping-pong on it, and it is composited with
   SrcAlpha/InvSrcAlpha.
-- `copybackground: true`: before the glyphs, the target is filled from a copy of
-  the frame (`_rt_FullFrameBuffer`-like texture) under the layer's placement
-  (no blending); glyphs then blend on top.
+- Before the glyphs, the target is filled from a copy of the frame
+  (`_rt_FullFrameBuffer`-like texture) under the layer's placement (no
+  blending); glyphs then blend on top. This happens with `copybackground: true`
+  and also when the key is absent (captures 914, 924); effects such as
+  edge_glow with "Background alpha 1" rely on it (otherwise the transparent
+  margin turns opaque black).
 - `padding` is a number or `"x y"`.
 
 ## Not yet covered

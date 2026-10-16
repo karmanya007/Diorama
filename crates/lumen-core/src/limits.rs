@@ -9,6 +9,8 @@ pub struct Limits {
     pub max_pkg_entries: u32,
     /// Maximum length in bytes of a path or other length-prefixed string.
     pub max_string_len: u32,
+    /// Maximum size in bytes of one scene script.
+    pub max_script_len: u32,
     /// Maximum size of a single decompressed buffer (texture mip, etc.).
     pub max_decompressed_bytes: u64,
     /// Maximum texture width or height in pixels.
@@ -20,6 +22,7 @@ impl Default for Limits {
         Self {
             max_pkg_entries: 65_536,
             max_string_len: 4_096,
+            max_script_len: 1024 * 1024,
             max_decompressed_bytes: 512 * 1024 * 1024,
             max_texture_dim: 16_384,
         }

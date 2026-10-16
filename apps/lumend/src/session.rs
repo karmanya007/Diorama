@@ -124,6 +124,7 @@ enum Renderer {
     Video(VideoBlit),
     Scene {
         scene: Box<SceneRenderer>,
+        scripts: Option<crate::scripts::SceneScripts>,
         blit: ImageBlit,
         /// Fills monitor areas the scene does not cover (fit/custom pan), as WE.
         clear: [f32; 4],
@@ -227,6 +228,7 @@ impl Session {
                 let max = gpu.device.limits().max_texture_dimension_2d;
                 let (w, h) = render_size(look.fit_mode(), (scene.width, scene.height), &sizes, max);
                 let renderer = SceneRenderer::new(gpu, &scene, &compiler, Some([w, h]))?;
+                let scripts = crate::scripts::SceneScripts::new(&scene, crate::scripts::now_ms());
                 let [r, g, b] = scene.scheme_color;
                 let scene_clear = [r, g, b, 1.0];
                 // CPU copies of textures are not needed once uploaded.
@@ -235,6 +237,7 @@ impl Session {
                 let blit = ImageBlit::from_view(gpu, format, renderer.output(), w, h);
                 Renderer::Scene {
                     scene: Box::new(renderer),
+                    scripts,
                     blit,
                     clear: scene_clear,
                 }
@@ -296,7 +299,10 @@ impl Session {
 
     /// Renders the scene at `time` and presents it (no-op for other content).
     pub fn show_scene_frame(&mut self, gpu: &Gpu, time: f32, pointer: [f32; 2]) -> Result<()> {
-        if let Renderer::Scene { scene, .. } = &mut self.renderer {
+        if let Renderer::Scene { scene, scripts, .. } = &mut self.renderer {
+            if let Some(scripts) = scripts {
+                scripts.frame(gpu, scene, time, crate::scripts::now_ms(), pointer);
+            }
             scene.render(
                 gpu,
                 &FrameInputs {

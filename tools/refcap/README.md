@@ -26,3 +26,10 @@ Text layers: `$env:REFCAP_CAPTURES = "<a.rdc>;<b.rdc>"` then
 `qrenderdoc.exe --python toolsefcap	extdraws.py` writes `<capture>.text.json`
 (font draws with post-VS glyph quads, and every draw reading a text render target)
 and `<capture>.atlas_<id>.png`. See `docs/re-notes/text.md`.
+
+Single textures: `$env:REFCAP_SAVE = "<a.rdc>|<event>|<resource id>;…"` then
+`qrenderdoc.exe --python tools\refcap\savetex.py` saves each texture as it is at
+that event (`<capture>.ev<event>.res<id>.png`, alpha kept).
+
+`golden.sh` passes the capture's wall clock (`.rdc` modification time) to
+`lumend --clock`, so scripted clocks and dates show what WE showed.

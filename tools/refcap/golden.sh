@@ -3,7 +3,8 @@
 # g_Time (and recorded cursor) with `lumend --frame-out`, presented into a
 # frame the size of WE's swapchain with the wallpaper's own WE fit (read from
 # <captures>/we-config.json, the WE config at capture time), and compares it
-# with WE's frame using imgdiff.
+# with WE's frame using imgdiff. Scripts see the capture's wall clock (the
+# .rdc file's modification time).
 # Captures and WE content stay local; nothing here is committed.
 # Usage: CAPTURES=scratch/captures tools/refcap/golden.sh
 #        (after `cargo build --release -p lumend -p imgdiff`)
@@ -31,8 +32,9 @@ for entry in json.load(open(caps / "manifest.json")):
     print(rdc, scene, t, f"{(cx - ox) / sw},{(cy - oy) / sh}", f"{sw}x{sh}", sep="|")
 PY
   out="$caps/$frame.lumen.png"
+  clock=$(python -c "import os,sys; print(int(os.path.getmtime(sys.argv[1]) * 1000))" "$caps/$frame.rdc")
   ./target/release/lumend --scene "$scene" --frame-out "$out" --time "$time" --pointer "$pointer" \
-    --frame-size "$size" "${config_args[@]}" >/dev/null 2>&1
+    --frame-size "$size" --clock "$clock" "${config_args[@]}" >/dev/null 2>&1
   echo -n "$frame $(basename "$scene"): "
   ./target/release/imgdiff "$caps/$frame.final.png" "$out" --side-by-side "$caps/$frame.sbs.png"
 done
