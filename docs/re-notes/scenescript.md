@@ -57,7 +57,8 @@ Any bindable value in `scene.json` can be an object instead of a literal:
 - Limits: 128 MiB heap; 2 s budget to load, 20 ms per `update()` call. QuickJS interrupts are uncatchable, so the host calls each `update()` separately: a runaway script stops only itself. A script that throws three times is disabled.
 - A frame returns one JSON change set (nodes, layer alpha/colour/text, effect visibility, effect constants); `lumend` turns node changes into layer transforms (`node_world ∘ local`) and calls `SceneRenderer::update_layer`.
 - Keyframe animations (`{"animation": {"c0": [keys], …, "options": {fps, length, mode, startpaused, name}, "relative"}, "value"}`) run in the same host: keys `{frame, value, front: {x, y}, back: {x, y}}` are cubic bezier segments (handles as offsets in frames and value units), angle keys are radians, `relative` adds the original value; scripts reach them with `thisLayer.getAnimation(name?)`.
-- Not yet: cursor/media/audio events (`cursorClick`, `media*`), audio spectrum data (silent), texture animations (stub), runtime-created layers are not drawn, `localStorage` is not persisted.
+- Media events come from the Windows media session (any player using the system media controls); the thumbnail palette is Lumen's own approximation (WE's algorithm unknown).
+- Not yet: audio spectrum (`cursorClick`, `media*`), audio spectrum data (silent), texture animations (stub), runtime-created layers are not drawn, `localStorage` is not persisted.
 
 ## Implementation notes for Phase 3
 - Runtime: QuickJS (rquickjs) with **ES module** support; one module per script value, evaluated in a per-scene context so `shared` works.

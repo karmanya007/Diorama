@@ -292,3 +292,22 @@ fn clicks_reach_the_layer_under_the_cursor() {
     host.update(&at(true, 2.0));
     assert!(host.update(&at(false, 40.0)).is_empty());
 }
+
+#[test]
+fn events_reach_every_script_with_a_handler() {
+    let player = script(
+        "export function mediaThumbnailChanged(e) { thisScene.getLayer('clock').text = e.hasThumbnail + ' ' + (e.primaryColor instanceof Vec3) + ' ' + e.primaryColor.y; }",
+        1,
+        ScriptTarget::Other("media".into()),
+        "{}",
+    );
+    let mut host = ScriptHost::new(&scene(vec![player]), [100, 100], CLOCK)
+        .unwrap()
+        .unwrap();
+    host.send(
+        "mediaThumbnailChanged",
+        json!({"hasThumbnail": true, "primaryColor": {"vec3": [0.0, 0.5, 1.0]}}),
+    );
+    let changes = host.update(&inputs(0.0));
+    assert_eq!(changes[&0].text.as_deref(), Some("true true 0.5"));
+}

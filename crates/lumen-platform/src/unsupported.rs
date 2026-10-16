@@ -110,3 +110,17 @@ pub fn day_fraction() -> f32 {
         .map_or(0, |d| d.as_secs());
     (secs % 86_400) as f32 / 86_400.0
 }
+
+/// No media session on this platform yet: reports media integration as off.
+#[derive(Debug)]
+pub struct MediaWatcher;
+
+impl MediaWatcher {
+    pub fn start() -> Self {
+        Self
+    }
+
+    pub fn latest(&self) -> crate::MediaInfo {
+        crate::MediaInfo::default()
+    }
+}

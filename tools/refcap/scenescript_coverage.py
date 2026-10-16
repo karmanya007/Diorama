@@ -27,13 +27,14 @@ STUBS = {
     "createLayer", "getCameraTransforms", "openUserShortcut", "registerAsset",
     "registerAudioBuffers", "getTransformMatrix",
     # Component callbacks the host never raises yet.
-    "mediaStatusChanged", "mediaPlaybackChanged", "mediaPropertiesChanged",
-    "mediaThumbnailChanged", "mediaTimelineChanged", "resizeScreen", "applyGeneralSettings",
+    "resizeScreen", "applyGeneralSettings",
     "destroy",
 }
 # Component callbacks the host calls.
 CALLED = {"init", "update", "applyUserProperties", "cursorEnter", "cursorLeave",
-          "cursorMove", "cursorDown", "cursorUp", "cursorClick"}
+          "cursorMove", "cursorDown", "cursorUp", "cursorClick", "mediaStatusChanged",
+          "mediaPlaybackChanged", "mediaPropertiesChanged", "mediaThumbnailChanged",
+          "mediaTimelineChanged"}
 
 
 def members(dts):

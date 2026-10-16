@@ -16,7 +16,7 @@ mod windows;
 
 #[cfg(windows)]
 pub use windows::{
-    Platform, Waker, WallpaperWindow, autostart, cache_dir, config_dir, day_fraction,
+    MediaWatcher, Platform, Waker, WallpaperWindow, autostart, cache_dir, config_dir, day_fraction,
     detach_console, set_autostart, set_os_wallpaper,
 };
 
@@ -25,7 +25,7 @@ mod unsupported;
 
 #[cfg(not(windows))]
 pub use unsupported::{
-    Platform, Waker, WallpaperWindow, autostart, cache_dir, config_dir, day_fraction,
+    MediaWatcher, Platform, Waker, WallpaperWindow, autostart, cache_dir, config_dir, day_fraction,
     detach_console, set_autostart, set_os_wallpaper,
 };
 
@@ -46,6 +46,38 @@ pub enum Error {
 /// which encodes EDID manufacturer/product and the connector instance.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct OutputId(pub String);
+
+/// What the system says is playing (any player using the OS media controls).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MediaInfo {
+    /// Media integration is available on this system.
+    pub enabled: bool,
+    /// A player session exists.
+    pub active: bool,
+    pub title: String,
+    pub artist: String,
+    pub subtitle: String,
+    pub album_title: String,
+    pub album_artist: String,
+    /// Comma-separated.
+    pub genres: String,
+    pub playback: MediaPlayback,
+    /// Seconds.
+    pub position: f64,
+    pub duration: f64,
+    /// Encoded image (PNG/JPEG…) as the player provides it.
+    pub thumbnail: Option<std::sync::Arc<Vec<u8>>>,
+    /// Changes when the track (and so the thumbnail) changes.
+    pub thumbnail_key: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MediaPlayback {
+    #[default]
+    Stopped,
+    Playing,
+    Paused,
+}
 
 /// Mouse state on the desktop, polled (wallpapers get no mouse messages).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

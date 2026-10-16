@@ -432,6 +432,19 @@
 			} catch (e) { fail(s, handler, e); }
 		}
 	}
+	// Events for every script (media integration …).
+	function revive(v) {
+		if (v && typeof v === 'object' && Array.isArray(v.vec3)) return vec3(v.vec3);
+		if (v && typeof v === 'object') { for (const k in v) v[k] = revive(v[k]); }
+		return v;
+	}
+	function broadcast(handler, event) {
+		event = revive(event);
+		for (const s of scripts) {
+			if (s.disabled || !s.ns || typeof s.ns[handler] !== 'function') continue;
+			try { s.ns[handler](event); } catch (e) { fail(s, handler, e); }
+		}
+	}
 	function pointer(cx, cy, state) {
 		const world = new Vec3(cx, cy, 0);
 		const down = !!state.down;
@@ -453,6 +466,7 @@
 			}
 			pressed = new Set();
 		}
+		for (const [handler, event] of state.events || []) broadcast(handler, event);
 		hovered = hits;
 		wasDown = down;
 		input.cursorLeftDown = down;

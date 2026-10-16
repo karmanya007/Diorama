@@ -24,6 +24,10 @@ use rquickjs::loader::{BuiltinLoader, BuiltinResolver};
 use rquickjs::{CatchResultExt, Context, Function, Module, Object, Persistent, Runtime};
 use serde_json::{Value, json};
 
+mod media;
+
+pub use media::{ThumbnailColors, thumbnail_colors};
+
 const PRELUDE: &str = include_str!("prelude.js");
 const MEMORY_LIMIT: usize = 128 << 20;
 /// Budget for loading every script and running `init`.
@@ -96,6 +100,8 @@ pub struct ScriptHost {
     deadline: Arc<Deadline>,
     nodes: Vec<lumen_scene::Node>,
     layers: Vec<LayerSlot>,
+    /// Component events for the next frame: (handler, event object).
+    events: Vec<(String, Value)>,
 }
 
 impl std::fmt::Debug for ScriptHost {
@@ -369,6 +375,7 @@ impl ScriptHost {
             deadline,
             nodes: scene.nodes.clone(),
             layers,
+            events: Vec::new(),
         }))
     }
 
@@ -377,6 +384,7 @@ impl ScriptHost {
         let deadline = &self.deadline;
         let calls = &self.calls;
         let mut stopped = Vec::new();
+        let events = std::mem::take(&mut self.events);
         let out = self.context.with(|ctx| {
             let restore = |f: &Persistent<Function<'static>>| f.clone().restore(&ctx).ok();
             let (begin, run, disable, end) = (
@@ -386,7 +394,12 @@ impl ScriptHost {
                 restore(&calls.end)?,
             );
             deadline.set(CALL_BUDGET);
-            let pointer = json!({"down": inputs.left_down, "hits": self.hits(inputs)}).to_string();
+            let pointer = json!({
+                "down": inputs.left_down,
+                "hits": self.hits(inputs),
+                "events": events,
+            })
+            .to_string();
             let args = (
                 inputs.clock_ms,
                 inputs.runtime,
@@ -417,6 +430,15 @@ impl ScriptHost {
             return BTreeMap::new();
         };
         self.apply(&out)
+    }
+
+    /// Delivers a component event (e.g. `mediaPlaybackChanged`) to every
+    /// script exporting `handler`, at the start of the next frame. Vectors
+    /// in `event` given as `{"vec3": [r, g, b]}` become `Vec3`.
+    pub fn send(&mut self, handler: &str, event: Value) {
+        if self.events.len() < 64 {
+            self.events.push((handler.to_owned(), event));
+        }
     }
 
     /// Layers under the cursor as `[[node, local x, local y], …]` (local

@@ -103,7 +103,7 @@ pub fn render_to_png(
     });
     let mut renderer = SceneRenderer::new(&gpu, &scene, &compiler, output)?;
     tracing::info!(ms = started.elapsed().as_millis(), "scene renderer built");
-    if let Some(mut scripts) = crate::scripts::SceneScripts::new(&scene, clock_ms) {
+    if let Some(mut scripts) = crate::scripts::SceneScripts::new(&scene, clock_ms, false) {
         // A couple of seconds of frames first: scripts that ease or count
         // frames settle like they would have while playing.
         let warm_up = 2.0f32.min(time);

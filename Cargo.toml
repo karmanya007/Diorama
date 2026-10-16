@@ -52,6 +52,11 @@ harfrust = "0.14.0"
 swash = "0.2.10"
 wgpu = "30.0.1"
 windows = { version = "0.62.2", features = [
+    "Foundation",
+    "Foundation_Collections",
+    "Media_Control",
+    "Storage_Streams",
+    "Win32_System_WinRT",
     "Win32_Devices_Display",
     "Win32_Foundation",
     "Win32_Graphics_Direct3D",
