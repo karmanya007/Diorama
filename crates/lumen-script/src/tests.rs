@@ -114,6 +114,8 @@ fn inputs(runtime: f64) -> Inputs {
         frametime: 1.0 / 30.0,
         cursor: [0.0, 0.0],
         daytime: 0.5,
+        pointer_active: false,
+        left_down: false,
     }
 }
 
@@ -263,4 +265,30 @@ fn scripts_start_paused_animations() {
     // Paused at frame 0: relative 0 + the original 5.
     assert!(x(&paused).is_none_or(|x| (x - 5.0).abs() < 1e-3));
     assert!((x(&started).unwrap() - 10.0).abs() < 1e-3);
+}
+
+#[test]
+fn clicks_reach_the_layer_under_the_cursor() {
+    let button = script(
+        "export function cursorClick(event) { thisScene.getLayer('clock').text = 'clicked ' + event.localPosition.x; }",
+        1,
+        ScriptTarget::Other("click".into()),
+        "{}",
+    );
+    let mut host = ScriptHost::new(&scene(vec![button]), [100, 100], CLOCK)
+        .unwrap()
+        .unwrap();
+    let at = |down: bool, x: f32| Inputs {
+        cursor: [x, 2.0],
+        pointer_active: true,
+        left_down: down,
+        ..inputs(0.0)
+    };
+    assert!(host.update(&at(false, 2.0)).is_empty());
+    assert!(host.update(&at(true, 2.0)).is_empty());
+    let changes = host.update(&at(false, 2.0));
+    assert_eq!(changes[&0].text.as_deref(), Some("clicked 2"));
+    // Pressed on the layer, released outside it (10 × 10 around 0): no click.
+    host.update(&at(true, 2.0));
+    assert!(host.update(&at(false, 40.0)).is_empty());
 }

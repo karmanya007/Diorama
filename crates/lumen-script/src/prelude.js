@@ -59,6 +59,7 @@
 		setMaterialProperty() {}
 		executeMaterialFunction() {}
 		getMaterial() { return this; }
+		getMaterialCount() { return 1; }
 	}
 
 	const noopAnimation = {
@@ -100,6 +101,46 @@
 			const l = this.__layer;
 			if (l === null) return;
 			layers[l].text = String(v); dirtyLayers.add(l);
+		}
+		// Text style: readable, and writable without effect yet (no re-layout).
+		get __style() {
+			const l = this.__layer;
+			if (l === null) return this.__ownStyle || (this.__ownStyle = {});
+			return layers[l].style || (layers[l].style = {});
+		}
+		get pointsize() { return this.__style.pointsize ?? 0; }
+		set pointsize(v) { this.__style.pointsize = Number(v); }
+		get font() { return this.__style.font ?? ''; }
+		set font(v) { this.__style.font = String(v); }
+		get padding() { return this.__style.padding ?? 0; }
+		set padding(v) { this.__style.padding = v; }
+		get horizontalalign() { return this.__style.horizontalalign ?? 'center'; }
+		set horizontalalign(v) { this.__style.horizontalalign = String(v); }
+		get verticalalign() { return this.__style.verticalalign ?? 'center'; }
+		set verticalalign(v) { this.__style.verticalalign = String(v); }
+		get anchor() { return this.__style.anchor ?? 'none'; }
+		set anchor(v) { this.__style.anchor = String(v); }
+		get limitrows() { return !!this.__style.maxrows; }
+		set limitrows(v) { if (!v) this.__style.maxrows = null; }
+		get maxrows() { return this.__style.maxrows ?? 1; }
+		set maxrows(v) { this.__style.maxrows = Number(v); }
+		get limitwidth() { return !!this.__style.maxwidth; }
+		set limitwidth(v) { if (!v) this.__style.maxwidth = null; }
+		get maxwidth() { return this.__style.maxwidth ?? 0; }
+		set maxwidth(v) { this.__style.maxwidth = Number(v); }
+		get opaquebackground() { return !!this.__style.opaquebackground; }
+		set opaquebackground(v) { this.__style.opaquebackground = !!v; }
+		get backgroundcolor() { return this.__style.backgroundcolor ?? new Vec3(0); }
+		set backgroundcolor(v) { this.__style.backgroundcolor = v; }
+		get alignment() { return this.__alignment ?? 'center'; }
+		set alignment(v) { this.__alignment = v; }
+		get solid() { return this.__solid ?? true; }
+		set solid(v) { this.__solid = !!v; }
+		get perspective() { return !!this.__perspective; }
+		set perspective(v) { this.__perspective = !!v; }
+		setParent(parent) {
+			nodes[this.__n].parent = parent ? parent.__n : null;
+			dirtyNodes.add(this.__n);
 		}
 		get size() { const l = this.__layer; return l === null ? new Vec2(0) : new Vec2(layers[l].size[0], layers[l].size[1]); }
 		getParent() { const p = nodes[this.__n].parent; return p === null ? null : objects[p]; }
@@ -162,7 +203,9 @@
 		registerAudioBuffers: audio,
 		registerAsset(path) { return path; },
 		isDesktopDevice() { return true; }, isMobileDevice() { return false; }, isTabletDevice() { return false; },
-		isWallpaper() { return true; }, isScreensaver() { return false; }, isRunningInEditor() { return false; },
+		isWallpaper() { return true; },
+		isPortrait() { return engine.canvasSize.y > engine.canvasSize.x; },
+		isLandscape() { return engine.canvasSize.x >= engine.canvasSize.y; }, isScreensaver() { return false; }, isRunningInEditor() { return false; },
 		openUserShortcut() {},
 		setTimeout(fn, ms) { const id = timerId++; timers.push({ id, at: engine.runtime + (Number(ms) || 0) / 1000, fn, every: 0 }); return id; },
 		setInterval(fn, ms) { const s = Math.max(Number(ms) || 0, 1) / 1000; const id = timerId++; timers.push({ id, at: engine.runtime + s, fn, every: s }); return id; },
@@ -378,7 +421,44 @@
 		.map((s) => s.index);
 	L.disable = (i) => { scripts[i].disabled = true; console.error('script ' + i + ' stopped (time budget)'); };
 
-	L.begin = function (clock, runtime, frametime, cx, cy, daytime) {
+	// Cursor events (cursorEnter/Leave/Move/Down/Up/Click) for the scripts
+	// of objects under the cursor; the host hit-tests layer rectangles.
+	let hovered = new Map(), pressed = new Set(), wasDown = false, lastCursor = '';
+	function dispatch(node, handler, world, local) {
+		for (const s of scripts) {
+			if (s.node !== node || s.disabled || !s.ns || typeof s.ns[handler] !== 'function') continue;
+			try {
+				s.ns[handler]({ worldPosition: world, localPosition: new Vec3(local[0], local[1], 0) });
+			} catch (e) { fail(s, handler, e); }
+		}
+	}
+	function pointer(cx, cy, state) {
+		const world = new Vec3(cx, cy, 0);
+		const down = !!state.down;
+		const hits = new Map((state.hits || []).map((h) => [h[0], [h[1], h[2]]]));
+		const moved = lastCursor !== cx + ',' + cy;
+		lastCursor = cx + ',' + cy;
+		for (const [n, local] of hovered) if (!hits.has(n)) dispatch(n, 'cursorLeave', world, local);
+		for (const [n, local] of hits) {
+			if (!hovered.has(n)) dispatch(n, 'cursorEnter', world, local);
+			else if (moved) dispatch(n, 'cursorMove', world, local);
+		}
+		if (down && !wasDown) {
+			pressed = new Set(hits.keys());
+			for (const [n, local] of hits) dispatch(n, 'cursorDown', world, local);
+		} else if (!down && wasDown) {
+			for (const [n, local] of hits) {
+				dispatch(n, 'cursorUp', world, local);
+				if (pressed.has(n)) dispatch(n, 'cursorClick', world, local);
+			}
+			pressed = new Set();
+		}
+		hovered = hits;
+		wasDown = down;
+		input.cursorLeftDown = down;
+	}
+
+	L.begin = function (clock, runtime, frametime, cx, cy, daytime, pointerJson) {
 		L.clock = clock;
 		engine.runtime = runtime;
 		engine.frametime = frametime;
@@ -388,6 +468,7 @@
 		for (const a of anims) {
 			try { a.apply(runtime); } catch (e) { console.error('animation: ' + e); }
 		}
+		pointer(cx, cy, JSON.parse(pointerJson || '{}'));
 		const due = timers.filter((t) => t.at <= runtime);
 		for (const t of due) {
 			if (t.every > 0) t.at = runtime + t.every; else timers = timers.filter((x) => x !== t);

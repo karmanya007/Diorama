@@ -14,7 +14,8 @@
 
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, FindWindowExW, FindWindowW, SMTO_NORMAL, SendMessageTimeoutW,
+    EnumWindows, FindWindowExW, FindWindowW, GA_ROOT, GetAncestor, GetClassNameW, SMTO_NORMAL,
+    SendMessageTimeoutW,
 };
 use windows::core::{BOOL, PCWSTR, w};
 
@@ -76,4 +77,17 @@ unsafe extern "system" fn find_legacy_worker(hwnd: HWND, out: LPARAM) -> BOOL {
         }
     }
     BOOL::from(true)
+}
+
+/// `hwnd` belongs to the desktop (icons view, Explorer's desktop windows or
+/// a wallpaper window), not to an application window.
+pub(super) fn is_desktop_window(hwnd: HWND) -> bool {
+    // SAFETY: class-name and ancestor queries on any window handle.
+    unsafe {
+        let root = GetAncestor(hwnd, GA_ROOT);
+        let mut name = [0u16; 64];
+        let n = GetClassNameW(root, &mut name);
+        let class = String::from_utf16_lossy(&name[..usize::try_from(n).unwrap_or(0)]);
+        matches!(class.as_str(), "Progman" | "WorkerW")
+    }
 }

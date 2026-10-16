@@ -37,6 +37,10 @@ impl Platform {
         None
     }
 
+    pub fn desktop_pointer(&self) -> crate::DesktopPointer {
+        crate::DesktopPointer::default()
+    }
+
     pub fn lower_priority(&self) {}
 
     pub fn waker(&self) -> Waker {

@@ -599,14 +599,18 @@ impl Daemon<'_> {
         if let Some(Content::Scene(_)) = self.wallpaper.as_ref().map(|w| &w.content)
             && self.scene_clock.frame_due()
         {
-            if let Some(p) = self
+            let on_scene = self
                 .platform
                 .cursor_position()
-                .and_then(|c| session.pointer(c))
-            {
+                .and_then(|c| session.pointer(c));
+            if let Some(p) = on_scene {
                 self.pointer = p;
             }
-            if let Err(e) = session.show_scene_frame(gpu, self.scene_clock.time(), self.pointer) {
+            // Cursor events only while the cursor is over the wallpaper.
+            let buttons = on_scene.map(|_| self.platform.desktop_pointer());
+            if let Err(e) =
+                session.show_scene_frame(gpu, self.scene_clock.time(), self.pointer, buttons)
+            {
                 tracing::warn!("scene frame failed: {e:#}; resetting GPU");
                 self.reset_gpu = true;
                 return Ok(());

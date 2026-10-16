@@ -298,10 +298,17 @@ impl Session {
     }
 
     /// Renders the scene at `time` and presents it (no-op for other content).
-    pub fn show_scene_frame(&mut self, gpu: &Gpu, time: f32, pointer: [f32; 2]) -> Result<()> {
+    /// `buttons`: mouse state when the cursor is over this wallpaper.
+    pub fn show_scene_frame(
+        &mut self,
+        gpu: &Gpu,
+        time: f32,
+        pointer: [f32; 2],
+        buttons: Option<lumen_platform::DesktopPointer>,
+    ) -> Result<()> {
         if let Renderer::Scene { scene, scripts, .. } = &mut self.renderer {
             if let Some(scripts) = scripts {
-                scripts.frame(gpu, scene, time, crate::scripts::now_ms(), pointer);
+                scripts.frame(gpu, scene, time, crate::scripts::now_ms(), pointer, buttons);
             }
             scene.render(
                 gpu,

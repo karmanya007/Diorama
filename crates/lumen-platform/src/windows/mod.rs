@@ -42,7 +42,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{PCWSTR, w};
 
-use crate::{Coverage, DesktopEvent, Error, OutputInfo, Result, SurfaceHandles, classify};
+use crate::{
+    Coverage, DesktopEvent, DesktopPointer, Error, OutputInfo, Result, SurfaceHandles, classify,
+};
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
+use windows::Win32::UI::WindowsAndMessaging::WindowFromPoint;
 
 const CONTROL_CLASS: PCWSTR = w!("LumenControl");
 const WALLPAPER_CLASS: PCWSTR = w!("LumenWallpaper");
@@ -142,6 +146,25 @@ impl Platform {
         // SAFETY: out-param is a valid local.
         unsafe { GetCursorPos(&mut pt) }.ok()?;
         Some((pt.x, pt.y))
+    }
+
+    /// Whether the cursor is over the desktop itself (no window in the way)
+    /// and the left mouse button is down there. Wallpapers sit behind the
+    /// icons, so they never receive mouse messages; this is polled instead.
+    pub fn desktop_pointer(&self) -> DesktopPointer {
+        let mut pt = POINT::default();
+        // SAFETY: plain queries with a valid out-param.
+        unsafe {
+            if GetCursorPos(&mut pt).is_err() {
+                return DesktopPointer::default();
+            }
+            let over = desktop::is_desktop_window(WindowFromPoint(pt));
+            let down = GetAsyncKeyState(i32::from(VK_LBUTTON.0)) as u16 & 0x8000 != 0;
+            DesktopPointer {
+                over_desktop: over,
+                left_down: over && down,
+            }
+        }
     }
 
     /// True when running on battery power.

@@ -47,6 +47,15 @@ pub enum Error {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct OutputId(pub String);
 
+/// Mouse state on the desktop, polled (wallpapers get no mouse messages).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DesktopPointer {
+    /// The cursor is over the desktop, not over an application window.
+    pub over_desktop: bool,
+    /// Left button held while over the desktop.
+    pub left_down: bool,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct OutputInfo {
     pub id: OutputId,

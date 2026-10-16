@@ -50,6 +50,10 @@ pub struct Inputs {
     pub cursor: [f32; 2],
     /// Fraction of the local day, 0..1 (`engine.timeOfDay`).
     pub daytime: f32,
+    /// The cursor is over the desktop (layers under it get cursor events).
+    pub pointer_active: bool,
+    /// Left mouse button held on the desktop.
+    pub left_down: bool,
 }
 
 /// What changed about one layer this frame. `None` / empty = unchanged.
@@ -73,6 +77,7 @@ struct LayerSlot {
     color: [f32; 4],
     text: Option<String>,
     shown: LayerShown,
+    size: [u32; 2],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -157,6 +162,24 @@ fn target_json(target: &ScriptTarget) -> Value {
     }
 }
 
+/// A text layer's style as `ITextLayer` exposes it (WE units: points).
+fn text_style(scene: &Scene, t: &lumen_scene::TextSpec) -> Value {
+    let align = |a: lumen_scene::TextAlign, start: &str, end: &str| match a {
+        lumen_scene::TextAlign::Start => start.to_owned(),
+        lumen_scene::TextAlign::Center => "center".to_owned(),
+        lumen_scene::TextAlign::End => end.to_owned(),
+    };
+    json!({
+        "pointsize": t.pixel_size * 72.0 / 300.0,
+        "font": scene.fonts.get(t.font).map(|f| f.name.as_str()),
+        "padding": t.padding[0],
+        "horizontalalign": align(t.halign, "left", "right"),
+        "verticalalign": align(t.valign, "top", "bottom"),
+        "maxwidth": t.max_width,
+        "maxrows": t.max_rows,
+    })
+}
+
 /// The scene as the prelude sees it (`__lumen.init`).
 fn state_json(scene: &Scene, canvas: [u32; 2]) -> String {
     let layer_of_node: BTreeMap<usize, usize> = scene
@@ -185,6 +208,7 @@ fn state_json(scene: &Scene, canvas: [u32; 2]) -> String {
                 "alpha": l.color[3],
                 "color": &l.color[..3],
                 "text": l.text.as_ref().map(|t| &t.text),
+                "style": l.text.as_ref().map(|t| text_style(scene, t)),
                 "size": l.size,
                 "effects": l.effects.iter()
                     .map(|e| json!({"name": e.name, "visible": e.visible}))
@@ -231,6 +255,10 @@ fn state_json(scene: &Scene, canvas: [u32; 2]) -> String {
         "skylightcolor": scene.skylight_color,
         "bloom": scene.hdr,
         "fov": 50.0,
+        "nearz": 0.01,
+        "farz": 10000.0,
+        "bloomstrength": 1.0,
+        "bloomthreshold": 0.65,
     });
     json!({
         "nodes": nodes, "layers": layers, "scripts": scripts, "general": general,
@@ -322,6 +350,7 @@ impl ScriptHost {
             .layers
             .iter()
             .map(|l| LayerSlot {
+                size: l.size,
                 node: l.node,
                 local: l.local,
                 color: l.color,
@@ -357,6 +386,7 @@ impl ScriptHost {
                 restore(&calls.end)?,
             );
             deadline.set(CALL_BUDGET);
+            let pointer = json!({"down": inputs.left_down, "hits": self.hits(inputs)}).to_string();
             let args = (
                 inputs.clock_ms,
                 inputs.runtime,
@@ -364,6 +394,7 @@ impl ScriptHost {
                 inputs.cursor[0],
                 inputs.cursor[1],
                 inputs.daytime,
+                pointer,
             );
             if let Err(e) = begin.call::<_, ()>(args).catch(&ctx) {
                 tracing::warn!("script timers: {e}");
@@ -386,6 +417,34 @@ impl ScriptHost {
             return BTreeMap::new();
         };
         self.apply(&out)
+    }
+
+    /// Layers under the cursor as `[[node, local x, local y], …]` (local
+    /// pixels around the layer centre, y up), back to front.
+    fn hits(&self, inputs: &Inputs) -> Value {
+        if !inputs.pointer_active {
+            return json!([]);
+        }
+        let [cx, cy] = inputs.cursor;
+        let hits: Vec<Value> = self
+            .layers
+            .iter()
+            .filter(|s| s.shown.visible && s.size[0] > 1 && s.size[1] > 1)
+            .filter_map(|s| {
+                let node = s.node?;
+                let [a, b, c, d, e, f] = s.shown.transform;
+                let det = a * d - b * c;
+                if det.abs() < 1e-9 {
+                    return None;
+                }
+                let (x, y) = (cx - e, cy - f);
+                let lx = (d * x - c * y) / det;
+                let ly = (-b * x + a * y) / det;
+                let [w, h] = s.size.map(|v| v as f32 * 0.5);
+                (lx.abs() <= w && ly.abs() <= h).then(|| json!([node, lx, ly]))
+            })
+            .collect();
+        Value::Array(hits)
     }
 
     fn apply(&mut self, out: &Value) -> BTreeMap<usize, LayerChange> {
