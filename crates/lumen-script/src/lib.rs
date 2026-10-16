@@ -436,6 +436,7 @@ impl ScriptHost {
     /// script exporting `handler`, at the start of the next frame. Vectors
     /// in `event` given as `{"vec3": [r, g, b]}` become `Vec3`.
     pub fn send(&mut self, handler: &str, event: Value) {
+        tracing::debug!(handler, %event, "script event");
         if self.events.len() < 64 {
             self.events.push((handler.to_owned(), event));
         }

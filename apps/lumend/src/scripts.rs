@@ -124,6 +124,11 @@ impl Media {
     /// events (`mediaStatusChanged`, `mediaPropertiesChanged`, …).
     fn send_changes(&mut self, host: &mut ScriptHost, time: f32) {
         let now = self.watcher.latest();
+        // The watcher's first read takes a moment; don't announce "nothing
+        // playing" before it (scripts would log an empty track).
+        if self.last.is_none() && !now.enabled && time < 3.0 {
+            return;
+        }
         let last = self.last.take();
         let first = last.is_none();
         let last = last.unwrap_or_default();
