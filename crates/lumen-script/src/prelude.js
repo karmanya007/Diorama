@@ -37,6 +37,7 @@
 	};
 	globalThis.console = { log: say('log'), info: say('log'), warn: say('warn'), error: say('error'), debug: say('log') };
 
+	let anims = [];
 	let nodes = [], layers = [], scripts = [], dirtyNodes = new Set(), dirtyLayers = new Set();
 	let effectChanges = [], constantChanges = [], timers = [], timerId = 1;
 	const objects = [];
@@ -105,6 +106,11 @@
 		getChildren() { return objects.filter((o) => nodes[o.__n].parent === this.__n); }
 		getTransformMatrix() { return Mat4.identity ? Mat4.identity() : null; }
 		getTextureAnimation() { return noopAnimation; }
+		// Keyframe animation of one of this object's values (first, or by name).
+		getAnimation(name) {
+			const a = anims.find((x) => x.node === this.__n && (name === undefined || x.name === name));
+			return a ? a.control : noopAnimation;
+		}
 		getVideoTexture() { return noopAnimation; }
 		getAnimationLayer() { return noopAnimation; }
 		getAnimationLayerCount() { return 0; }
@@ -237,6 +243,93 @@
 		}
 	}
 
+	// Keyframe animations: channels c0, c1, … of {frame, value, front, back}
+	// keys with bezier handles (offsets in frames / value units), played at
+	// options.fps over options.length frames: single (hold the end), loop,
+	// or mirror (ping-pong). `relative` adds the value to the original.
+	function bezier(a, b, f) {
+		const h = (k, side, sign) => (k[side] && k[side].enabled !== false)
+			? [Number(k[side].x) || 0, Number(k[side].y) || 0] : [0, 0];
+		const [fx, fy] = h(a, 'front'), [bx, by] = h(b, 'back');
+		const x0 = a.frame, y0 = Number(a.value), x3 = b.frame, y3 = Number(b.value);
+		const x1 = Math.min(x0 + Math.max(fx, 0), x3), y1 = y0 + fy;
+		const x2 = Math.max(x3 + Math.min(bx, 0), x0), y2 = y3 + by;
+		const at = (p0, p1, p2, p3, t) => {
+			const u = 1 - t;
+			return u * u * u * p0 + 3 * u * u * t * p1 + 3 * u * t * t * p2 + t * t * t * p3;
+		};
+		let lo = 0, hi = 1;
+		for (let i = 0; i < 32; i++) {
+			const mid = (lo + hi) / 2;
+			if (at(x0, x1, x2, x3, mid) < f) lo = mid; else hi = mid;
+		}
+		return at(y0, y1, y2, y3, (lo + hi) / 2);
+	}
+	function channelAt(keys, f) {
+		if (!Array.isArray(keys) || keys.length === 0) return null;
+		if (f <= keys[0].frame) return Number(keys[0].value);
+		for (let i = 0; i + 1 < keys.length; i++) {
+			if (f <= keys[i + 1].frame) return bezier(keys[i], keys[i + 1], f);
+		}
+		return Number(keys[keys.length - 1].value);
+	}
+	class Animation {
+		constructor(spec) {
+			Object.assign(this, spec);
+			const k = spec.keyframes || {};
+			const o = k.options || {};
+			this.channels = [];
+			for (let i = 0; Array.isArray(k['c' + i]); i++) this.channels.push(k['c' + i]);
+			this.fps = Number(o.fps) > 0 ? Number(o.fps) : 30;
+			this.length = Number(o.length) > 0 ? Number(o.length) : 1;
+			this.mode = o.mode || 'loop';
+			this.name = o.name;
+			this.relative = !!k.relative;
+			this.base = numbers(toScript(spec.initial)) || [0];
+			this.playing = !o.startpaused;
+			this.startedAt = 0;
+			this.held = 0;
+			this.rate = 1;
+			const self = this;
+			this.control = {
+				get frameCount() { return self.length; },
+				get rate() { return self.rate; }, set rate(r) { self.rate = Number(r) || 0; },
+				play() { if (!self.playing) { self.startedAt = engine.runtime - self.held; self.playing = true; } },
+				pause() { if (self.playing) { self.held = self.time(); self.playing = false; } },
+				stop() { self.playing = false; self.held = 0; },
+				isPlaying() { return self.playing; },
+				getFrame() { return Math.floor(self.frame(engine.runtime)); },
+				setFrame(f) { self.held = Number(f) / self.fps; self.startedAt = engine.runtime - self.held; },
+			};
+		}
+		time(runtime = engine.runtime) {
+			return this.playing ? Math.max(0, runtime - this.startedAt) : this.held;
+		}
+		frame(runtime) {
+			const L = this.length;
+			let f = this.time(runtime) * this.fps * this.rate;
+			if (this.mode === 'single') return Math.min(f, L);
+			if (this.mode === 'mirror') { f %= 2 * L; return f <= L ? f : 2 * L - f; }
+			return f % L;
+		}
+		apply(runtime) {
+			const f = this.frame(runtime);
+			if (this.mode === 'single' && this.playing && f >= this.length) {
+				this.held = this.length / this.fps; this.playing = false;
+			}
+			const v = this.channels.map((c, i) => {
+				const x = channelAt(c, f) ?? 0;
+				return this.relative ? x + (this.base[i] ?? 0) : x;
+			});
+			if (v.length === 0) return;
+			// Keys hold scene units; scripts (and assign) use degrees for angles.
+			const out = this.kind === 'angles' ? v.map((a) => a * 180 / Math.PI) : v;
+			const value = out.length === 1 ? (this.kind === 'visible' ? out[0] > 0.5 : out[0])
+				: out.length === 2 ? new Vec2(out[0], out[1]) : new Vec3(out[0], out[1], out[2]);
+			assign(this, value);
+		}
+	}
+
 	function fail(s, where, e) {
 		s.errors = (s.errors || 0) + 1;
 		if (s.errors <= 3) {
@@ -259,6 +352,7 @@
 		engine.screenResolution = new Vec2(state.canvas[0], state.canvas[1]);
 		try { engine.userProperties = _Internal.convertUserProperties(state.userProperties); } catch (e) { engine.userProperties = {}; }
 		scripts = state.scripts.map((s, index) => Object.assign(s, { index, value: toScript(s.initial) }));
+		anims = (state.animations || []).map((a) => new Animation(a));
 	};
 	L.layerFor = (node) => node === null ? null : objects[node];
 	L.attach = function (index, ns) { scripts[index].ns = ns; };
@@ -291,6 +385,9 @@
 		engine.timeOfDay = daytime;
 		input.cursorWorldPosition = new Vec3(cx, cy, 0);
 		input.cursorScreenPosition = new Vec2(cx, cy);
+		for (const a of anims) {
+			try { a.apply(runtime); } catch (e) { console.error('animation: ' + e); }
+		}
 		const due = timers.filter((t) => t.at <= runtime);
 		for (const t of due) {
 			if (t.every > 0) t.at = runtime + t.every; else timers = timers.filter((x) => x !== t);

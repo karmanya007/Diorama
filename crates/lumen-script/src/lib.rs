@@ -192,6 +192,17 @@ fn state_json(scene: &Scene, canvas: [u32; 2]) -> String {
             })
         })
         .collect();
+    let animations: Vec<Value> = scene
+        .animations
+        .iter()
+        .map(|a| {
+            let mut v = target_json(&a.target);
+            v["node"] = json!(a.node);
+            v["keyframes"] = serde_json::from_str(&a.keyframes).unwrap_or(Value::Null);
+            v["initial"] = serde_json::from_str(&a.initial).unwrap_or(Value::Null);
+            v
+        })
+        .collect();
     let scripts: Vec<Value> = scene
         .scripts
         .iter()
@@ -223,6 +234,7 @@ fn state_json(scene: &Scene, canvas: [u32; 2]) -> String {
     });
     json!({
         "nodes": nodes, "layers": layers, "scripts": scripts, "general": general,
+        "animations": animations,
         "userProperties": scene.user_properties, "canvas": canvas,
     })
     .to_string()
@@ -231,7 +243,7 @@ fn state_json(scene: &Scene, canvas: [u32; 2]) -> String {
 impl ScriptHost {
     /// Loads every script of `scene`; `None` when it has none.
     pub fn new(scene: &Scene, canvas: [u32; 2], clock_ms: f64) -> Result<Option<Self>, Error> {
-        if scene.scripts.is_empty() {
+        if scene.scripts.is_empty() && scene.animations.is_empty() {
             return Ok(None);
         }
         let library = scene.script_library.clone().unwrap_or_default();

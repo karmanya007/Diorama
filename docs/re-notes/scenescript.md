@@ -56,6 +56,7 @@ Any bindable value in `scene.json` can be an object instead of a literal:
 - Each script is an ES module prefixed with `const thisLayer = …` on its first line (line numbers in errors stay right). `init`, then `applyUserProperties(engine.userProperties)`; every frame `update(currentValue)`.
 - Limits: 128 MiB heap; 2 s budget to load, 20 ms per `update()` call. QuickJS interrupts are uncatchable, so the host calls each `update()` separately: a runaway script stops only itself. A script that throws three times is disabled.
 - A frame returns one JSON change set (nodes, layer alpha/colour/text, effect visibility, effect constants); `lumend` turns node changes into layer transforms (`node_world ∘ local`) and calls `SceneRenderer::update_layer`.
+- Keyframe animations (`{"animation": {"c0": [keys], …, "options": {fps, length, mode, startpaused, name}, "relative"}, "value"}`) run in the same host: keys `{frame, value, front: {x, y}, back: {x, y}}` are cubic bezier segments (handles as offsets in frames and value units), angle keys are radians, `relative` adds the original value; scripts reach them with `thisLayer.getAnimation(name?)`.
 - Not yet: cursor/media/audio events (`cursorClick`, `media*`), audio spectrum data (silent), texture animations (stub), runtime-created layers are not drawn, `localStorage` is not persisted.
 
 ## Implementation notes for Phase 3

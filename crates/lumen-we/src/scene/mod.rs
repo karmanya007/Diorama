@@ -101,7 +101,7 @@ pub fn import_with(vfs: &Vfs, limits: &Limits, properties: &Properties) -> Resul
     for (key, value) in json["general"].as_object().into_iter().flatten() {
         importer.script(value, None, ScriptTarget::Other(format!("general.{key}")));
     }
-    if !importer.scene.scripts.is_empty() {
+    if !importer.scene.scripts.is_empty() || !importer.scene.animations.is_empty() {
         importer.scene.script_library = Some(script_library(vfs));
     }
     if let Err(e) = importer.bloom(&json["general"]) {
@@ -674,8 +674,17 @@ impl Importer<'_> {
         }
     }
 
-    /// Records `value` if it is scripted (`{"script": …, "value": …}`).
+    /// Records `value` if it is scripted (`{"script": …, "value": …}`) or
+    /// keyframe-animated (`{"animation": …, "value": …}`).
     fn script(&mut self, value: &Value, node: Option<usize>, target: ScriptTarget) {
+        if let Some(animation) = value.get("animation").filter(|a| a.is_object()) {
+            self.scene.animations.push(lumen_scene::Animation {
+                node,
+                target: target.clone(),
+                keyframes: animation.to_string(),
+                initial: unwrap_value(value).to_string(),
+            });
+        }
         let Some(source) = value.get("script").and_then(Value::as_str) else {
             return;
         };
@@ -728,7 +737,7 @@ impl Importer<'_> {
                     .into_iter()
                     .flatten()
                 {
-                    if value.get("script").is_none() {
+                    if value.get("script").is_none() && value.get("animation").is_none() {
                         continue;
                     }
                     let target = match programs.get(p).and_then(|&id| self.uniform_for(id, key)) {

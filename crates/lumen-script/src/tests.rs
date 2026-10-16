@@ -200,3 +200,67 @@ fn broken_scripts_do_not_stop_loading() {
         assert!(host.update(&inputs(0.0)).is_empty());
     }
 }
+
+fn animation(keyframes: &str, target: ScriptTarget) -> lumen_scene::Animation {
+    lumen_scene::Animation {
+        node: Some(1),
+        target,
+        keyframes: keyframes.into(),
+        initial: r#""5 0 0""#.into(),
+    }
+}
+
+/// Origin x from 0 to 10 over frames 0–10 at 10 fps, straight (no handles).
+const RAMP: &str = r#"{
+  "c0": [{"frame": 0, "value": 0, "front": {"enabled": false}},
+         {"frame": 10, "value": 10, "back": {"enabled": false}}],
+  "c1": [{"frame": 0, "value": 0}], "c2": [{"frame": 0, "value": 0}],
+  "options": {"fps": 10, "length": 10, "mode": "MODE"}, "relative": true
+}"#;
+
+#[test]
+fn keyframes_play_relative_loop_and_mirror() {
+    let x_at = |mode: &str, t: f64| {
+        let mut s = scene(Vec::new());
+        s.animations = vec![animation(
+            &RAMP.replace("MODE", mode),
+            ScriptTarget::Origin(1),
+        )];
+        let mut host = ScriptHost::new(&s, [100, 100], CLOCK).unwrap().unwrap();
+        host.update(&inputs(t))[&1].transform.unwrap()[4]
+    };
+    // Relative to the original x = 5.
+    assert!((x_at("loop", 0.5) - 10.0).abs() < 1e-3);
+    // Loop wraps after 10 frames; mirror plays back; single holds the end.
+    assert!((x_at("loop", 1.3) - 8.0).abs() < 1e-3);
+    assert!((x_at("mirror", 1.3) - 12.0).abs() < 1e-3);
+    assert!((x_at("single", 1.3) - 15.0).abs() < 1e-3);
+}
+
+#[test]
+fn scripts_start_paused_animations() {
+    let keyframes = RAMP.replace("MODE", "single").replace(
+        r#""mode": "single""#,
+        r#""mode": "single", "startpaused": true"#,
+    );
+    let starter = script(
+        "export function init() { thisLayer.getAnimation().play(); }",
+        1,
+        ScriptTarget::Other("x".into()),
+        "{}",
+    );
+    let mut paused = scene(Vec::new());
+    paused.animations = vec![animation(&keyframes, ScriptTarget::Origin(1))];
+    let mut started = paused.clone();
+    started.scripts = vec![starter];
+    let x = |s: &Scene| {
+        let mut host = ScriptHost::new(s, [100, 100], CLOCK).unwrap().unwrap();
+        host.update(&inputs(0.5))
+            .get(&1)
+            .and_then(|c| c.transform)
+            .map(|t| t[4])
+    };
+    // Paused at frame 0: relative 0 + the original 5.
+    assert!(x(&paused).is_none_or(|x| (x - 5.0).abs() < 1e-3));
+    assert!((x(&started).unwrap() - 10.0).abs() < 1e-3);
+}

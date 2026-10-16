@@ -52,6 +52,8 @@ pub struct Scene {
     pub fonts: Vec<FontData>,
     /// Scripted values, in scene order.
     pub scripts: Vec<Script>,
+    /// Keyframe-animated values, in scene order.
+    pub animations: Vec<Animation>,
     /// Helper JavaScript the scripts expect (`None` without scripts).
     pub script_library: Option<ScriptLibrary>,
     /// User properties as `{"name": {"type", "value"}, …}` JSON (what
@@ -129,6 +131,18 @@ pub struct Script {
     pub initial: String,
     /// Values of the script's own settings (`scriptProperties`), as a JSON object.
     pub properties: String,
+}
+
+/// A keyframe-animated value (WE `{"animation": {c0.., options}, "value"}`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Animation {
+    /// Object the value belongs to, index into [`Scene::nodes`].
+    pub node: Option<usize>,
+    pub target: ScriptTarget,
+    /// The animation object (channels `c0`…, `options`, `relative`) as JSON.
+    pub keyframes: String,
+    /// The value before animation, as JSON.
+    pub initial: String,
 }
 
 /// What a script's result is written to.
