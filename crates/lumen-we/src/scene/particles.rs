@@ -293,6 +293,7 @@ impl Importer<'_> {
             local,
             text: None,
             particles: None,
+            puppet: None,
             transform,
             visible,
             parallax_depth: vec_n(object.get("parallaxDepth"), [1.0, 1.0]),

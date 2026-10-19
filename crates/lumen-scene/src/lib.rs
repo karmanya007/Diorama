@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub mod particles;
+pub mod puppet;
 pub use particles::ParticleSystem;
 
 /// Index into [`Scene::textures`].
@@ -348,6 +349,8 @@ pub struct ImageLayer {
     /// A particle system drawn at `transform` instead of the albedo quad
     /// (each system of the tree with its own `draw` pass).
     pub particles: Option<Box<ParticleSystem>>,
+    /// Puppet warp: the albedo is this skinned mesh instead of the quad.
+    pub puppet: Option<Box<puppet::Puppet>>,
     /// Layer-local pixels (centred, y up) → scene pixels (origin bottom-left,
     /// y up), parents already applied: `x' = m0·x + m2·y + m4`,
     /// `y' = m1·x + m3·y + m5`.

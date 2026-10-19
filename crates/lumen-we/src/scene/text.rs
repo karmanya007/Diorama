@@ -108,6 +108,7 @@ impl Importer<'_> {
             local,
             text: Some(spec),
             particles: None,
+            puppet: None,
             transform: lumen_scene::compose(world, local),
             visible,
             parallax_depth: vec_n(object.get("parallaxDepth"), [1.0, 1.0]),

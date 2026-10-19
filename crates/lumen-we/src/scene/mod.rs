@@ -573,6 +573,7 @@ impl Importer<'_> {
             local: lumen_scene::affine(centre, 0.0, [1.0, 1.0]),
             text: None,
             particles: None,
+            puppet: None,
             transform: lumen_scene::affine(centre, 0.0, [1.0, 1.0]),
             visible: true,
             parallax_depth: [0.0, 0.0],
@@ -941,6 +942,7 @@ impl Importer<'_> {
             local,
             text: None,
             particles: None,
+            puppet: None,
             transform,
             visible,
             parallax_depth: vec_n(object.get("parallaxDepth"), [1.0, 1.0]),
@@ -960,6 +962,12 @@ impl Importer<'_> {
             effects: Vec::new(),
             composite: None,
         };
+        if let Some(path) = model["puppet"].as_str() {
+            match self.puppet(path, object) {
+                Ok(p) => layer.puppet = Some(Box::new(p)),
+                Err(e) => self.skip(format!("puppet {path:?}: {e}")),
+            }
+        }
         if blend_mode != 0 && has_effects {
             // WE composites layers through a genericimage material; give it
             // the blend mode and the finished layer image.
@@ -989,6 +997,88 @@ impl Importer<'_> {
             self.scene.layers.push(layer);
         }
         Ok(())
+    }
+
+    /// A puppet mesh and the animations the object's `animationlayers` play.
+    fn puppet(&mut self, path: &str, object: &Value) -> Result<lumen_scene::puppet::Puppet> {
+        use lumen_scene::puppet as ir;
+        let bytes = self
+            .vfs
+            .read(path)
+            .ok_or_else(|| unsupported("missing puppet", path))?;
+        let mdl = crate::mdl::Mdl::parse(&bytes)?;
+        let mut animations = Vec::new();
+        for l in object["animationlayers"].as_array().into_iter().flatten() {
+            if !boolean(l.get("visible"), true) {
+                continue;
+            }
+            if boolean(l.get("additive"), false) {
+                self.skip("additive puppet animation layers".into());
+                continue;
+            }
+            let id = integer(l.get("animation")).unwrap_or(-1);
+            let Some(a) = mdl.animations.iter().find(|a| i64::from(a.id) == id) else {
+                continue;
+            };
+            let number = |key: &str| {
+                l.get(key)
+                    .and_then(floats)
+                    .and_then(|v| v.first().copied())
+                    .unwrap_or(1.0)
+            };
+            animations.push(ir::PlayingAnimation {
+                animation: ir::PuppetAnimation {
+                    name: a.name.clone(),
+                    fps: a.fps,
+                    frames: a.frames,
+                    mode: match a.mode.as_str() {
+                        "mirror" => ir::AnimationMode::Mirror,
+                        "single" => ir::AnimationMode::Single,
+                        _ => ir::AnimationMode::Loop,
+                    },
+                    tracks: a
+                        .tracks
+                        .iter()
+                        .map(|t| {
+                            t.iter()
+                                .map(|s| ir::BonePose {
+                                    position: [s[0], s[1]],
+                                    angle: s[5],
+                                    scale: [s[6], s[7]],
+                                })
+                                .collect()
+                        })
+                        .collect(),
+                },
+                rate: number("rate"),
+                weight: number("blend"),
+            });
+        }
+        Ok(ir::Puppet {
+            vertices: mdl
+                .vertices
+                .iter()
+                .map(|v| ir::PuppetVertex {
+                    position: [v.position[0], v.position[1]],
+                    uv: v.uv,
+                    bones: v.bones,
+                    weights: v.weights,
+                })
+                .collect(),
+            indices: mdl.indices.iter().map(|&i| u32::from(i)).collect(),
+            bones: mdl
+                .bones
+                .iter()
+                .map(|b| {
+                    let m = b.matrix;
+                    ir::PuppetBone {
+                        parent: b.parent,
+                        bind: [m[0], m[1], m[4], m[5], m[12], m[13]],
+                    }
+                })
+                .collect(),
+            animations,
+        })
     }
 
     fn effect(&mut self, file: &str, instance: &Value) -> Result<Effect> {

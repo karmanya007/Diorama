@@ -104,6 +104,7 @@ fn layer(name: &str, origin: [f32; 2], texture: usize, alpha: f32) -> ImageLayer
         local: affine(origin, 0.0, [1.0, 1.0]),
         text: None,
         particles: None,
+        puppet: None,
         transform: affine(origin, 0.0, [1.0, 1.0]),
         visible: true,
         parallax_depth: [1.0, 1.0],

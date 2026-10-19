@@ -156,6 +156,9 @@ struct GpuPass {
     source: Option<(usize, usize)>,
     /// Asset whose animation frames drive `g_Texture0Translation/Rotation`.
     sprite: Option<usize>,
+    /// Puppet albedo: the vertices are re-posed every frame (uv scale of the
+    /// padded texture).
+    puppet_uv: Option<[f32; 2]>,
 }
 
 struct GpuLayer {
@@ -752,6 +755,7 @@ impl SceneRenderer {
                 },
                 color: [1.0; 4],
                 mesh: None,
+                puppet: None,
                 atlas: None,
             };
             let Some(mut pass) = self.build_pass(ctx, &plan) else {
@@ -929,6 +933,7 @@ impl SceneRenderer {
                 },
                 color: layer.color,
                 mesh: layer.mesh.as_deref(),
+                puppet: layer.puppet.as_deref(),
                 atlas,
             };
             let mut pass = self.build_pass(ctx, &plan)?;
@@ -988,6 +993,7 @@ impl SceneRenderer {
             },
             color: layer.color,
             mesh: layer.mesh.as_deref(),
+            puppet: layer.puppet.as_deref(),
             atlas,
         };
         let mut albedo = self.build_pass(ctx, &albedo)?;
@@ -1079,6 +1085,7 @@ impl SceneRenderer {
                     geometry: Geometry::Effect,
                     color: [1.0; 4],
                     mesh: None,
+                    puppet: None,
                     atlas: None,
                 };
                 if let Some(mut p) = self.build_pass(ctx, &plan) {
@@ -1106,6 +1113,7 @@ impl SceneRenderer {
                 // Colour and alpha were applied by the albedo pass.
                 color: [1.0; 4],
                 mesh: None,
+                puppet: None,
                 atlas: None,
             };
             if let Some(mut p) = self.build_pass(ctx, &plan) {
@@ -1400,7 +1408,19 @@ impl SceneRenderer {
             }
             _ => [1.0, 1.0],
         };
-        let data = pass_vertices(&program.attributes, plan.geometry, uv_max, plan.mesh);
+        let skinned = plan.puppet.filter(|_| {
+            matches!(
+                plan.geometry,
+                Geometry::LayerTarget { .. } | Geometry::Direct { .. }
+            )
+        });
+        let data = match skinned {
+            Some(p) => {
+                let bind: Vec<[f32; 2]> = p.vertices.iter().map(|v| v.position).collect();
+                puppet_vertices(&program.attributes, p, &bind, uv_max)
+            }
+            None => pass_vertices(&program.attributes, plan.geometry, uv_max, plan.mesh),
+        };
         let stride: usize = program
             .attributes
             .iter()
@@ -1414,7 +1434,7 @@ impl SceneRenderer {
         let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("pass vertices"),
             contents: bytemuck::cast_slice(&contents),
-            usage: wgpu::BufferUsages::VERTEX,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
 
         Some(GpuPass {
@@ -1438,6 +1458,7 @@ impl SceneRenderer {
             },
             dirty: false,
             source: None,
+            puppet_uv: skinned.map(|_| uv_max),
             sprite,
         })
     }
@@ -1679,6 +1700,24 @@ impl SceneRenderer {
             rp.set_vertex_buffer(0, vertices.slice(..));
             rp.draw(0..4, 0..1);
         }
+        if let Some(puppet) = self
+            .ir
+            .layers
+            .get(layer.index)
+            .and_then(|l| l.puppet.as_deref())
+        {
+            let positions = puppet.pose(f.inputs.time);
+            for pass in &layer.passes {
+                let (Some(uv_max), Some(Some(program))) =
+                    (pass.puppet_uv, self.programs.get(pass.program))
+                else {
+                    continue;
+                };
+                let data = puppet_vertices(&program.attributes, puppet, &positions, uv_max);
+                gpu.queue
+                    .write_buffer(&pass.vertices, 0, bytemuck::cast_slice(&data));
+            }
+        }
         let children_at = layer.children_at.min(layer.passes.len());
         let (before, after) = layer.passes.split_at_mut(children_at);
         let sprite_frame = self.state.get(layer.index).and_then(|s| s.texture_frame);
@@ -1898,6 +1937,8 @@ struct PassPlan<'a> {
     color: [f32; 4],
     /// Quads replacing the albedo's single quad.
     mesh: Option<&'a [ir::MeshQuad]>,
+    /// Skinned mesh replacing the albedo's quad (re-posed every frame).
+    puppet: Option<&'a ir::puppet::Puppet>,
     /// The layer's glyph atlas and its resolution (text layers).
     atlas: Option<(&'a wgpu::TextureView, [f32; 4])>,
 }
@@ -1971,6 +2012,36 @@ fn pass_vertices(
                 };
                 out.extend_from_slice(&values[..n]);
             }
+        }
+    }
+    out
+}
+
+/// Triangle list of a puppet mesh at `positions` (one per puppet vertex),
+/// attributes filled by name like [`pass_vertices`].
+fn puppet_vertices(
+    attributes: &[ir::Attribute],
+    puppet: &ir::puppet::Puppet,
+    positions: &[[f32; 2]],
+    uv_max: [f32; 2],
+) -> Vec<f32> {
+    let mut out = Vec::with_capacity(puppet.indices.len() * 6);
+    for &i in &puppet.indices {
+        let i = i as usize;
+        let (Some(v), Some(p)) = (puppet.vertices.get(i), positions.get(i)) else {
+            continue;
+        };
+        let position = [p[0], p[1], 0.0, 1.0];
+        let uv = [v.uv[0] * uv_max[0], v.uv[1] * uv_max[1], 0.0, 0.0];
+        for a in attributes {
+            let n = a.components.clamp(1, 4) as usize;
+            let values = match a.name.as_str() {
+                "a_Position" => position,
+                "a_TexCoord" => uv,
+                "a_Color" => [1.0; 4],
+                _ => [0.0; 4],
+            };
+            out.extend_from_slice(&values[..n]);
         }
     }
     out

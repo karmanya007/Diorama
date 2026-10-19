@@ -1,4 +1,7 @@
 /target
+/fuzz/target/
+/fuzz/corpus/
+/fuzz/artifacts/
 **/*.rs.bk
 
 # Local RE artifacts — never commit Wallpaper Engine or Workshop content

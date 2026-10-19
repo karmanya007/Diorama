@@ -5,6 +5,7 @@
 
 pub mod config;
 pub mod error;
+pub mod mdl;
 pub mod pkg;
 mod reader;
 pub mod scene;

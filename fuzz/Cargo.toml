@@ -28,3 +28,10 @@ path = "fuzz_targets/tex.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "mdl"
+path = "fuzz_targets/mdl.rs"
+test = false
+doc = false
+bench = false
