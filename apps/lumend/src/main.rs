@@ -12,6 +12,7 @@ mod headless;
 mod policy;
 mod scripts;
 mod session;
+mod sounds;
 mod state;
 mod videos;
 
@@ -592,8 +593,11 @@ impl Daemon<'_> {
             }
             if let Some(Content::Scene(_)) = self.wallpaper.as_ref().map(|w| &w.content) {
                 // Resuming makes the next frame due immediately.
-                self.scene_clock
-                    .set_paused(session.outputs.iter().all(|o| o.paused));
+                let all_paused = session.outputs.iter().all(|o| o.paused);
+                self.scene_clock.set_paused(all_paused);
+                if let Some(sounds) = session.scene_sounds() {
+                    sounds.set_paused(all_paused);
+                }
             }
         }
 
@@ -656,6 +660,9 @@ impl Daemon<'_> {
             if self.audio.as_ref().is_some_and(AudioPlayer::needs_reopen) {
                 tracing::info!("audio device changed; reopening");
                 self.start_audio();
+            }
+            if let Some(sounds) = self.session.as_mut().and_then(Session::scene_sounds) {
+                sounds.check_devices();
             }
         }
         Ok(())
@@ -732,6 +739,9 @@ impl Daemon<'_> {
                     && let Err(e) = session.show_video_frame(gpu, frame)
                 {
                     tracing::warn!("re-showing current frame failed: {e:#}");
+                }
+                if let Some(sounds) = session.scene_sounds() {
+                    sounds.set_master(f32::from(self.volume) / 100.0);
                 }
                 self.session = Some(session);
                 self.next_coverage = Instant::now();
@@ -826,6 +836,9 @@ impl Daemon<'_> {
                     }
                     (Some(audio), v) => audio.set_volume(f32::from(v) / 100.0),
                     (None, _) => self.start_audio(),
+                }
+                if let Some(sounds) = self.session.as_mut().and_then(Session::scene_sounds) {
+                    sounds.set_master(f32::from(self.volume) / 100.0);
                 }
                 if let Some(w) = self.wallpaper.as_ref() {
                     self.persist(w);

@@ -57,12 +57,6 @@ impl Resampler {
             self.prev = Some(cur);
         }
     }
-
-    /// Forget history (after a seek/loop restart).
-    pub fn reset(&mut self) {
-        self.prev = None;
-        self.t = 0.0;
-    }
 }
 
 #[cfg(test)]

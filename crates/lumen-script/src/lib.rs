@@ -77,6 +77,16 @@ pub struct LayerChange {
     pub texture_frame: Option<u32>,
 }
 
+/// What a script asked of a sound object (index in `Scene::sounds`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SoundCommand {
+    Play(usize),
+    Pause(usize),
+    Stop(usize),
+    /// 0..1.
+    Volume(usize, f32),
+}
+
 /// What the host knows about one layer: placement inputs and what it last
 /// reported.
 struct LayerSlot {
@@ -106,6 +116,10 @@ pub struct ScriptHost {
     layers: Vec<LayerSlot>,
     /// Component events for the next frame: (handler, event object).
     events: Vec<(String, Value)>,
+    /// Whether each sound plays (from the player), for `isPlaying()`.
+    sound_states: Option<Vec<bool>>,
+    /// Sound commands from the last frame.
+    sound_commands: Vec<SoundCommand>,
 }
 
 impl std::fmt::Debug for ScriptHost {
@@ -274,6 +288,9 @@ fn state_json(scene: &Scene, canvas: [u32; 2]) -> String {
     json!({
         "nodes": nodes, "layers": layers, "scripts": scripts, "general": general,
         "animations": animations,
+        "sounds": scene.sounds.iter().map(|s| json!({
+            "node": s.node, "volume": s.volume, "playing": !s.start_silent,
+        })).collect::<Vec<_>>(),
         "userProperties": scene.user_properties, "canvas": canvas,
     })
     .to_string()
@@ -381,6 +398,8 @@ impl ScriptHost {
             nodes: scene.nodes.clone(),
             layers,
             events: Vec::new(),
+            sound_states: None,
+            sound_commands: Vec::new(),
         }))
     }
 
@@ -404,6 +423,7 @@ impl ScriptHost {
                 "hits": self.hits(inputs),
                 "events": events,
                 "audio": [inputs.audio[0].to_vec(), inputs.audio[1].to_vec()],
+                "sounds": self.sound_states,
             })
             .to_string();
             let args = (
@@ -436,6 +456,17 @@ impl ScriptHost {
             return BTreeMap::new();
         };
         self.apply(&out)
+    }
+
+    /// Tells scripts which sounds play (what `isPlaying()` returns); without
+    /// this they see what they asked for.
+    pub fn set_sound_states(&mut self, playing: Vec<bool>) {
+        self.sound_states = Some(playing);
+    }
+
+    /// Sound commands scripts gave during the last [`ScriptHost::update`].
+    pub fn take_sound_commands(&mut self) -> Vec<SoundCommand> {
+        std::mem::take(&mut self.sound_commands)
     }
 
     /// Delivers a component event (e.g. `mediaPlaybackChanged`) to every
@@ -572,6 +603,16 @@ impl ScriptHost {
             if let (Some(l), Some(frame)) = (index(&t[0]), t[1].as_u64()) {
                 changes.entry(l).or_default().texture_frame = u32::try_from(frame).ok();
             }
+        }
+        for c in out["sounds"].as_array().into_iter().flatten() {
+            let Some(i) = index(&c[0]) else { continue };
+            self.sound_commands.push(match c[1].as_str() {
+                Some("play") => SoundCommand::Play(i),
+                Some("pause") => SoundCommand::Pause(i),
+                Some("stop") => SoundCommand::Stop(i),
+                Some("volume") => SoundCommand::Volume(i, c[2].as_f64().unwrap_or(1.0) as f32),
+                _ => continue,
+            });
         }
         changes.retain(|_, c| *c != LayerChange::default());
         changes

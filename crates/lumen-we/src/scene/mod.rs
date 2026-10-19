@@ -660,6 +660,7 @@ impl Importer<'_> {
                     self.skip(format!("particle system {name:?}: {e}"));
                 }
             }
+            (None, Some("sound")) => self.sound(object, &name, node, graph),
             (None, Some(kind)) => self.skip(format!("{kind} objects")),
             (None, None) => {}
         }
@@ -682,6 +683,51 @@ impl Importer<'_> {
         if let Some(l) = layer {
             self.effect_scripts(object, node, l);
         }
+    }
+
+    fn sound(&mut self, object: &Value, name: &str, node: usize, graph: &SceneGraph) {
+        let mut tracks: Vec<(String, std::sync::Arc<[u8]>)> = Vec::new();
+        for path in object["sound"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
+            match self.vfs.read(path) {
+                Some(bytes) if bytes.len() as u64 <= self.limits.max_decompressed_bytes => {
+                    let file = path.rsplit('/').next().unwrap_or(path).to_owned();
+                    tracks.push((file, bytes.into()));
+                }
+                _ => self.skip(format!("sound file {path:?}")),
+            }
+        }
+        if tracks.is_empty() {
+            return;
+        }
+        let number = |key: &str, default: f32| {
+            object
+                .get(key)
+                .and_then(floats)
+                .and_then(|v| v.first().copied())
+                .unwrap_or(default)
+        };
+        let mode = match object["playbackmode"].as_str() {
+            Some("random") => lumen_scene::SoundMode::Random {
+                min_gap: number("mintime", 1.0),
+                max_gap: number("maxtime", 5.0),
+            },
+            Some("single") => lumen_scene::SoundMode::Once,
+            _ => lumen_scene::SoundMode::Loop,
+        };
+        let (_, visible) = graph.world(object);
+        self.scene.sounds.push(lumen_scene::Sound {
+            name: name.to_owned(),
+            node: Some(node),
+            tracks,
+            volume: number("volume", 1.0).clamp(0.0, 1.0),
+            mode,
+            start_silent: boolean(object.get("startsilent"), false) || !visible,
+        });
     }
 
     /// Records `value` if it is scripted (`{"script": …, "value": …}`) or

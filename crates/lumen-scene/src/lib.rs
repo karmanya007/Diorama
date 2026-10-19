@@ -62,6 +62,8 @@ pub struct Scene {
     /// User properties as `{"name": {"type", "value"}, …}` JSON (what
     /// `engine.userProperties` exposes).
     pub user_properties: String,
+    /// Sound objects (played on the system's audio output).
+    pub sounds: Vec<Sound>,
     /// Things the importer could not represent yet (shown in logs/reports).
     pub skipped: Vec<String>,
 }
@@ -240,6 +242,31 @@ pub struct PointLight {
     pub radius: f32,
     /// Falloff exponent.
     pub exponent: f32,
+}
+
+/// A sound object: a list of tracks and how they play.
+#[derive(Debug, Clone)]
+pub struct Sound {
+    pub name: String,
+    /// Scene node (scripts reach the sound through it).
+    pub node: Option<usize>,
+    /// (file name, encoded file) per track, in order.
+    pub tracks: Vec<(String, Arc<[u8]>)>,
+    /// 0..1.
+    pub volume: f32,
+    pub mode: SoundMode,
+    /// Silent until a script starts it.
+    pub start_silent: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SoundMode {
+    /// Tracks in order, forever.
+    Loop,
+    /// Tracks in order, once.
+    Once,
+    /// A random track, then `min_gap..max_gap` seconds of silence, forever.
+    Random { min_gap: f32, max_gap: f32 },
 }
 
 /// A decoded texture (mip 0 only for now).

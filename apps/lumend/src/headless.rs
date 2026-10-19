@@ -118,7 +118,7 @@ pub fn render_to_png(
                 buttons: None,
                 audio: [[0.0; 64]; 2],
             };
-            scripts.frame(&gpu, &mut renderer, &frame);
+            scripts.frame(&gpu, &mut renderer, None, &frame);
         }
     }
     if let Some(mut videos) = crate::videos::SceneVideos::start(&scene) {

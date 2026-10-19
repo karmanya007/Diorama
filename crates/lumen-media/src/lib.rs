@@ -124,21 +124,96 @@ pub trait VideoDecoder: Send {
     fn restart(&mut self) -> Result<()>;
 }
 
-/// Where a video comes from.
+/// Where a video or sound comes from.
 #[derive(Debug, Clone)]
-pub enum VideoSource {
+pub enum MediaSource {
     File(PathBuf),
-    /// A whole MP4 file in memory (e.g. a video texture inside a package).
-    Memory(Arc<[u8]>),
+    /// A whole media file in memory (e.g. inside a package); `name` is its
+    /// file name, whose extension tells the decoder the container.
+    Memory {
+        data: Arc<[u8]>,
+        name: String,
+    },
+}
+
+impl MediaSource {
+    /// File name, for logs.
+    pub fn name(&self) -> String {
+        match self {
+            Self::File(p) => p.display().to_string(),
+            Self::Memory { name, .. } => name.clone(),
+        }
+    }
+
+    /// MIME type from the file extension, for decoders that need a hint.
+    pub fn mime(&self) -> Option<&'static str> {
+        let name = match self {
+            Self::File(p) => p.to_string_lossy().into_owned(),
+            Self::Memory { name, .. } => name.clone(),
+        };
+        let ext = name.rsplit_once('.')?.1.to_ascii_lowercase();
+        Some(match ext.as_str() {
+            "mp4" | "m4v" => "video/mp4",
+            "webm" => "video/webm",
+            "mp3" => "audio/mpeg",
+            "wav" => "audio/wav",
+            "m4a" | "aac" => "audio/mp4",
+            "ogg" => "audio/ogg",
+            "flac" => "audio/flac",
+            _ => return None,
+        })
+    }
+}
+
+/// How a sound list plays.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PlaybackMode {
+    /// Tracks in order, forever.
+    Loop,
+    /// Tracks in order, once.
+    Once,
+    /// A random track, then silence of `min..max` seconds, forever.
+    Random { min_gap: f32, max_gap: f32 },
+}
+
+impl PlaybackMode {
+    /// The track after `current` of `count` and the silence before it, or
+    /// `None` when playback ends. `r1`, `r2`: uniform random numbers in 0..1.
+    pub fn next_track(
+        self,
+        current: usize,
+        count: usize,
+        r1: f32,
+        r2: f32,
+    ) -> Option<(usize, f32)> {
+        if count == 0 {
+            return None;
+        }
+        match self {
+            Self::Loop => Some(((current + 1) % count, 0.0)),
+            Self::Once => (current + 1 < count).then_some((current + 1, 0.0)),
+            Self::Random { min_gap, max_gap } => {
+                // Another track than the one that just ended, when there is one.
+                let next = if count > 1 {
+                    let skip = ((r1 * (count - 1) as f32) as usize).min(count - 2);
+                    (current + 1 + skip) % count
+                } else {
+                    0
+                };
+                let (lo, hi) = (min_gap.max(0.0), max_gap.max(min_gap).max(0.0));
+                Some((next, lo + r2.clamp(0.0, 1.0) * (hi - lo)))
+            }
+        }
+    }
 }
 
 /// Opens `path` with the platform decoder.
 pub fn open(path: &Path) -> Result<Box<dyn VideoDecoder>> {
-    open_source(&VideoSource::File(path.to_path_buf()))
+    open_source(&MediaSource::File(path.to_path_buf()))
 }
 
 /// Opens `source` with the platform decoder.
-pub fn open_source(source: &VideoSource) -> Result<Box<dyn VideoDecoder>> {
+pub fn open_source(source: &MediaSource) -> Result<Box<dyn VideoDecoder>> {
     #[cfg(windows)]
     {
         windows::MfDecoder::open(source).map(|d| Box::new(d) as Box<dyn VideoDecoder>)
@@ -166,10 +241,10 @@ const QUEUE_DEPTH: usize = 3;
 
 impl VideoPlayer {
     pub fn spawn(path: &Path) -> Result<Self> {
-        Self::spawn_source(VideoSource::File(path.to_path_buf()))
+        Self::spawn_source(MediaSource::File(path.to_path_buf()))
     }
 
-    pub fn spawn_source(source: VideoSource) -> Result<Self> {
+    pub fn spawn_source(source: MediaSource) -> Result<Self> {
         let (tx, rx) = sync_channel(QUEUE_DEPTH);
         // The decoder is opened on its own thread (COM/MF state is per thread);
         // the open result comes back here so errors are still reported synchronously.
@@ -292,6 +367,30 @@ mod tests {
     }
 
     #[test]
+    fn playlists_loop_end_or_pick_other_tracks() {
+        assert_eq!(
+            PlaybackMode::Loop.next_track(2, 3, 0.5, 0.5),
+            Some((0, 0.0))
+        );
+        assert_eq!(
+            PlaybackMode::Once.next_track(0, 2, 0.5, 0.5),
+            Some((1, 0.0))
+        );
+        assert_eq!(PlaybackMode::Once.next_track(1, 2, 0.5, 0.5), None);
+        let random = PlaybackMode::Random {
+            min_gap: 1.0,
+            max_gap: 5.0,
+        };
+        for r in [0.0, 0.3, 0.99, 1.0] {
+            let (next, gap) = random.next_track(1, 3, r, r).unwrap();
+            assert_ne!(next, 1);
+            assert!((1.0..=5.0).contains(&gap));
+        }
+        assert_eq!(random.next_track(0, 1, 0.7, 0.0), Some((0, 1.0)));
+        assert_eq!(PlaybackMode::Loop.next_track(0, 0, 0.0, 0.0), None);
+    }
+
+    #[test]
     fn bt709_limited_range_extremes() {
         assert_eq!(&frame(16, 128, 128).to_rgba()[..4], &[0, 0, 0, 255]);
         assert_eq!(&frame(235, 128, 128).to_rgba()[..4], &[255, 255, 255, 255]);
@@ -331,7 +430,14 @@ mod unsupported_audio {
         pub fn spawn(_path: &Path, _volume: f32) -> Result<Self> {
             Err(Error::Unsupported)
         }
-        pub fn path(&self) -> &Path {
+        pub fn spawn_playlist(
+            _tracks: Vec<crate::MediaSource>,
+            _mode: crate::PlaybackMode,
+            _volume: f32,
+        ) -> Result<Self> {
+            Err(Error::Unsupported)
+        }
+        pub fn is_playing(&self) -> bool {
             match *self {}
         }
         pub fn set_volume(&self, _volume: f32) {

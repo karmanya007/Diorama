@@ -18,21 +18,23 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 use windows::Win32::Graphics::Dxgi::IDXGIAdapter;
 use windows::Win32::Media::MediaFoundation::{
-    IMF2DBuffer2, IMFAttributes, IMFDXGIDeviceManager, IMFSourceReader, MF_BYTESTREAM_CONTENT_TYPE,
-    MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE,
-    MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, MF_SOURCE_READER_ALL_STREAMS,
-    MF_SOURCE_READER_D3D_MANAGER, MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING,
-    MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_SOURCE_READERF_ENDOFSTREAM, MF_VERSION,
-    MF2DBuffer_LockFlags_Read, MFCreateAttributes, MFCreateDXGIDeviceManager,
-    MFCreateMFByteStreamOnStream, MFCreateMediaType, MFCreateSourceReaderFromByteStream,
-    MFCreateSourceReaderFromURL, MFMediaType_Video, MFSTARTUP_FULL, MFShutdown, MFStartup,
-    MFVideoFormat_NV12,
+    IMF2DBuffer2, IMFAttributes, IMFDXGIDeviceManager, IMFMediaSource, IMFSourceReader,
+    MF_BYTESTREAM_CONTENT_TYPE, MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE,
+    MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_OBJECT_INVALID, MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
+    MF_RESOLUTION_CONTENT_DOES_NOT_HAVE_TO_MATCH_EXTENSION_OR_MIME_TYPE, MF_RESOLUTION_MEDIASOURCE,
+    MF_RESOLUTION_READ, MF_SOURCE_READER_ALL_STREAMS, MF_SOURCE_READER_D3D_MANAGER,
+    MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, MF_SOURCE_READER_FIRST_VIDEO_STREAM,
+    MF_SOURCE_READERF_ENDOFSTREAM, MF_VERSION, MF2DBuffer_LockFlags_Read, MFCreateAttributes,
+    MFCreateDXGIDeviceManager, MFCreateMFByteStreamOnStream, MFCreateMediaType,
+    MFCreateSourceReaderFromMediaSource, MFCreateSourceReaderFromURL, MFCreateSourceResolver,
+    MFMediaType_Video, MFSTARTUP_FULL, MFShutdown, MFStartup, MFVideoFormat_NV12,
 };
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
+use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
 use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::core::{HSTRING, Interface};
 
-use crate::{Error, Nv12Frame, Result, VideoDecoder, VideoInfo, VideoSource};
+use crate::{Error, MediaSource, Nv12Frame, Result, VideoDecoder, VideoInfo};
 
 const VIDEO_STREAM: u32 = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
 
@@ -122,7 +124,7 @@ pub(crate) struct MfDecoder {
     // Field order: the reader must be released before the D3D manager and Media Foundation.
     reader: IMFSourceReader,
     hw: Option<HwDecode>,
-    source: VideoSource,
+    source: MediaSource,
     info: VideoInfo,
     stride: u32,
     _runtime: MfRuntime,
@@ -133,7 +135,7 @@ pub(crate) struct MfDecoder {
 unsafe impl Send for MfDecoder {}
 
 impl MfDecoder {
-    pub(crate) fn open(source: &VideoSource) -> Result<Self> {
+    pub(crate) fn open(source: &MediaSource) -> Result<Self> {
         let runtime = MfRuntime::start()?;
         let hw = HwDecode::create()
             .inspect_err(|e| {
@@ -168,7 +170,7 @@ impl MfDecoder {
 }
 
 fn open_reader(
-    source: &VideoSource,
+    source: &MediaSource,
     hw: Option<&HwDecode>,
 ) -> Result<(IMFSourceReader, VideoInfo, u32)> {
     // SAFETY: COM calls on interfaces we own; GUID pointers reference constants.
@@ -190,33 +192,15 @@ fn open_reader(
             .SetUINT32(&MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, 1)
             .map_err(os("SetUINT32(video processing)"))?;
 
-        let reader = match source {
-            VideoSource::File(path) => {
-                MFCreateSourceReaderFromURL(&HSTRING::from(path.as_os_str()), &attrs)
-                    .map_err(os("MFCreateSourceReaderFromURL"))?
-            }
-            VideoSource::Memory(bytes) => {
-                // SHCreateMemStream copies the bytes into its own stream.
-                let stream = SHCreateMemStream(Some(bytes))
-                    .ok_or_else(|| Error::BadFrame("SHCreateMemStream failed".into()))?;
-                let byte_stream = MFCreateMFByteStreamOnStream(&stream)
-                    .map_err(os("MFCreateMFByteStreamOnStream"))?;
-                // Without a name or MIME type the source resolver may not find the MP4 parser.
-                if let Ok(a) = byte_stream.cast::<IMFAttributes>() {
-                    let _ = a.SetString(&MF_BYTESTREAM_CONTENT_TYPE, &HSTRING::from("video/mp4"));
-                }
-                MFCreateSourceReaderFromByteStream(&byte_stream, &attrs)
-                    .map_err(os("MFCreateSourceReaderFromByteStream"))?
-            }
-        };
+        let reader = source_reader(source, &attrs)?;
         // Video only: never touch audio streams or devices.
         reader
             .SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS.0 as u32, false)
             .map_err(os("SetStreamSelection(all)"))?;
         reader.SetStreamSelection(VIDEO_STREAM, true).map_err(|_| {
             Error::NoVideo(match source {
-                VideoSource::File(p) => p.clone(),
-                VideoSource::Memory(_) => "<memory>".into(),
+                MediaSource::File(p) => p.clone(),
+                MediaSource::Memory { name, .. } => name.into(),
             })
         })?;
 
@@ -257,6 +241,54 @@ fn open_reader(
             },
             stride.max(width),
         ))
+    }
+}
+
+/// A source reader over `source` (a file, or bytes in memory).
+pub(crate) fn source_reader(
+    source: &MediaSource,
+    attrs: &IMFAttributes,
+) -> Result<IMFSourceReader> {
+    // SAFETY: COM calls on interfaces we own; the memory stream copies the bytes.
+    unsafe {
+        match source {
+            MediaSource::File(path) => {
+                MFCreateSourceReaderFromURL(&HSTRING::from(path.as_os_str()), attrs)
+                    .map_err(os("MFCreateSourceReaderFromURL"))
+            }
+            MediaSource::Memory { data, .. } => {
+                let stream = SHCreateMemStream(Some(data))
+                    .ok_or_else(|| Error::BadFrame("SHCreateMemStream failed".into()))?;
+                let byte_stream = MFCreateMFByteStreamOnStream(&stream)
+                    .map_err(os("MFCreateMFByteStreamOnStream"))?;
+                if let (Some(mime), Ok(a)) = (source.mime(), byte_stream.cast::<IMFAttributes>()) {
+                    let _ = a.SetString(&MF_BYTESTREAM_CONTENT_TYPE, &HSTRING::from(mime));
+                }
+                // A bare stream does not identify MP3 or WAV: resolve with the
+                // file name as URL so the extension picks the parser.
+                let resolver = MFCreateSourceResolver().map_err(os("MFCreateSourceResolver"))?;
+                let mut kind = MF_OBJECT_INVALID;
+                let mut object = None;
+                resolver
+                    .CreateObjectFromByteStream(
+                        &byte_stream,
+                        &HSTRING::from(source.name()),
+                        (MF_RESOLUTION_MEDIASOURCE.0
+                            | MF_RESOLUTION_CONTENT_DOES_NOT_HAVE_TO_MATCH_EXTENSION_OR_MIME_TYPE.0
+                            | MF_RESOLUTION_READ.0) as u32,
+                        None::<&IPropertyStore>,
+                        &mut kind,
+                        &mut object,
+                    )
+                    .map_err(os("CreateObjectFromByteStream"))?;
+                let media_source = object
+                    .ok_or_else(|| Error::BadFrame("no media source".into()))?
+                    .cast::<IMFMediaSource>()
+                    .map_err(os("IMFMediaSource"))?;
+                MFCreateSourceReaderFromMediaSource(&media_source, attrs)
+                    .map_err(os("MFCreateSourceReaderFromMediaSource"))
+            }
+        }
     }
 }
 

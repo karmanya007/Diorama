@@ -382,3 +382,43 @@ fn scripts_drive_texture_animations() {
     // 1/30 s × 4.5 = 0.15 s on from frame 2 (0.2 s) → frame 3.
     assert_eq!(host.update(&inputs(2.0 / 30.0))[&1].texture_frame, Some(3));
 }
+
+#[test]
+fn scripts_control_sounds() {
+    let dj = script(
+        "export function update(value) {
+  const s = thisLayer;
+  if (engine.runtime === 0) { s.volume = 0.5; s.volume = 0.5; s.play(); }
+  else if (!s.isPlaying()) thisScene.getLayer('clock').alpha = 0.5;
+  else s.stop();
+  return value;
+}",
+        1,
+        ScriptTarget::Origin(1),
+        "{}",
+    );
+    let mut s = scene(vec![dj]);
+    s.sounds.push(lumen_scene::Sound {
+        name: "song.mp3".into(),
+        node: Some(1),
+        tracks: Vec::new(),
+        volume: 1.0,
+        mode: lumen_scene::SoundMode::Loop,
+        start_silent: true,
+    });
+    let mut host = ScriptHost::new(&s, [100, 100], CLOCK).unwrap().unwrap();
+    host.update(&inputs(0.0));
+    // The repeated volume is sent once.
+    assert_eq!(
+        host.take_sound_commands(),
+        [SoundCommand::Volume(0, 0.5), SoundCommand::Play(0)]
+    );
+    // The player reports it plays: the script stops it.
+    host.set_sound_states(vec![true]);
+    host.update(&inputs(0.1));
+    assert_eq!(host.take_sound_commands(), [SoundCommand::Stop(0)]);
+    // It reports it stopped: the script sees that.
+    host.set_sound_states(vec![false]);
+    let changes = host.update(&inputs(0.2));
+    assert_eq!(changes[&0].color.map(|c| c[3]), Some(0.5));
+}

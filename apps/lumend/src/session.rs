@@ -129,6 +129,8 @@ enum Renderer {
         audio: Option<SceneAudio>,
         /// Players feeding the scene's video textures.
         videos: Option<crate::videos::SceneVideos>,
+        /// The scene's sound objects.
+        sounds: Option<crate::sounds::SceneSounds>,
         blit: ImageBlit,
         /// Fills monitor areas the scene does not cover (fit/custom pan), as WE.
         clear: [f32; 4],
@@ -277,6 +279,7 @@ impl Session {
                     crate::scripts::SceneScripts::new(&scene, crate::scripts::now_ms(), true)
                         .map(Box::new);
                 let videos = crate::videos::SceneVideos::start(&scene);
+                let sounds = crate::sounds::SceneSounds::new(&scene);
                 let [r, g, b] = scene.scheme_color;
                 let scene_clear = [r, g, b, 1.0];
                 // CPU copies of textures are not needed once uploaded.
@@ -288,6 +291,7 @@ impl Session {
                     scripts,
                     audio: SceneAudio::start(),
                     videos,
+                    sounds,
                     blit,
                     clear: scene_clear,
                 }
@@ -349,6 +353,14 @@ impl Session {
 
     /// Renders the scene at `time` and presents it (no-op for other content).
     /// `buttons`: mouse state when the cursor is over this wallpaper.
+    /// The scene's sound objects, if it has any.
+    pub fn scene_sounds(&mut self) -> Option<&mut crate::sounds::SceneSounds> {
+        match &mut self.renderer {
+            Renderer::Scene { sounds, .. } => sounds.as_mut(),
+            _ => None,
+        }
+    }
+
     pub fn show_scene_frame(
         &mut self,
         gpu: &Gpu,
@@ -361,6 +373,7 @@ impl Session {
             scripts,
             audio,
             videos,
+            sounds,
             ..
         } = &mut self.renderer
         {
@@ -376,7 +389,7 @@ impl Session {
                     buttons,
                     audio: spectrum,
                 };
-                scripts.frame(gpu, scene, &frame);
+                scripts.frame(gpu, scene, sounds.as_mut(), &frame);
             }
             scene.render(
                 gpu,

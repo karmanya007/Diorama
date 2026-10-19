@@ -1,12 +1,12 @@
-//! Video soundtrack playback: Media Foundation decodes the file's audio stream
-//! to float on a background thread; cpal (WASAPI shared mode) plays it on the
-//! current default output device.
+//! Sound playback (video soundtracks, scene sound layers): Media Foundation
+//! decodes the audio stream to float on a background thread; cpal (WASAPI
+//! shared mode) plays it on the current default output device.
 //!
 //! Failure here never affects video (P10): no device, a lost device or an
 //! unsupported codec just means silence plus a log line.
 
 use std::collections::VecDeque;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
@@ -17,13 +17,12 @@ use windows::Win32::Media::MediaFoundation::{
     IMFAttributes, IMFSourceReader, MF_MT_AUDIO_NUM_CHANNELS, MF_MT_AUDIO_SAMPLES_PER_SECOND,
     MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_SOURCE_READER_ALL_STREAMS,
     MF_SOURCE_READER_FIRST_AUDIO_STREAM, MF_SOURCE_READERF_ENDOFSTREAM, MFAudioFormat_Float,
-    MFCreateAttributes, MFCreateMediaType, MFCreateSourceReaderFromURL, MFMediaType_Audio,
+    MFCreateAttributes, MFCreateMediaType, MFMediaType_Audio,
 };
-use windows::core::HSTRING;
 
-use super::{MfRuntime, os};
+use super::{MfRuntime, os, source_reader};
 use crate::resample::Resampler;
-use crate::{Error, Result};
+use crate::{Error, MediaSource, PlaybackMode, Result};
 
 const AUDIO_STREAM: u32 = MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32;
 /// Decoded audio buffered ahead of the device (seconds).
@@ -38,6 +37,8 @@ struct Shared {
     stop: AtomicBool,
     restart: AtomicBool,
     stream_failed: AtomicBool,
+    /// A `PlaybackMode::Once` list reached its end.
+    finished: AtomicBool,
 }
 
 impl Shared {
@@ -46,20 +47,20 @@ impl Shared {
     }
 }
 
-/// Plays a video file's soundtrack. Create and drop on one thread (cpal streams
-/// are not `Send` on every backend).
+/// Plays a sound list (or a video file's soundtrack). Create and drop on one
+/// thread (cpal streams are not `Send` on every backend).
 pub struct AudioPlayer {
     shared: Arc<Shared>,
     decoder: Option<JoinHandle<()>>,
     device: Option<cpal::DeviceId>,
     _stream: cpal::Stream,
-    path: PathBuf,
+    name: String,
 }
 
 impl std::fmt::Debug for AudioPlayer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AudioPlayer")
-            .field("path", &self.path)
+            .field("name", &self.name)
             .finish_non_exhaustive()
     }
 }
@@ -69,8 +70,26 @@ fn audio_err(e: impl std::fmt::Display) -> Error {
 }
 
 impl AudioPlayer {
-    /// Starts paused; call [`AudioPlayer::set_paused`]`(false)` when video starts.
+    /// A video's soundtrack, looping. Starts paused; call
+    /// [`AudioPlayer::set_paused`]`(false)` when video starts.
     pub fn spawn(path: &Path, volume: f32) -> Result<Self> {
+        Self::spawn_playlist(
+            vec![MediaSource::File(path.to_path_buf())],
+            PlaybackMode::Loop,
+            volume,
+        )
+    }
+
+    /// Plays `tracks` as `mode` says. Starts paused.
+    pub fn spawn_playlist(
+        tracks: Vec<MediaSource>,
+        mode: PlaybackMode,
+        volume: f32,
+    ) -> Result<Self> {
+        if tracks.is_empty() {
+            return Err(Error::Audio("no tracks".into()));
+        }
+        let name = tracks[0].name();
         let host = cpal::default_host();
         let device = host.default_output_device().ok_or(Error::NoAudioDevice)?;
         let config = device.default_output_config().map_err(audio_err)?.config();
@@ -85,15 +104,20 @@ impl AudioPlayer {
             stop: AtomicBool::new(false),
             restart: AtomicBool::new(false),
             stream_failed: AtomicBool::new(false),
+            finished: AtomicBool::new(false),
         });
 
         let decode_shared = Arc::clone(&shared);
-        let decode_path = path.to_path_buf();
         let decoder = std::thread::Builder::new()
             .name("audio-decode".into())
             .spawn(move || {
-                if let Err(e) = decode_loop(&decode_path, dst_rate, dst_channels, &decode_shared) {
-                    tracing::warn!("video audio disabled: {e}");
+                let out = Output {
+                    rate: dst_rate,
+                    channels: dst_channels,
+                };
+                if let Err(e) = decode_loop(&tracks, mode, out, &decode_shared) {
+                    tracing::warn!("audio disabled: {e}");
+                    decode_shared.finished.store(true, Ordering::SeqCst);
                 }
             })
             .map_err(audio_err)?;
@@ -119,12 +143,13 @@ impl AudioPlayer {
             decoder: Some(decoder),
             device: device.id().ok(),
             _stream: stream,
-            path: path.to_path_buf(),
+            name,
         })
     }
 
-    pub fn path(&self) -> &Path {
-        &self.path
+    /// Playing: not paused and not at the end of a `Once` list.
+    pub fn is_playing(&self) -> bool {
+        !self.shared.paused.load(Ordering::Relaxed) && !self.shared.finished.load(Ordering::SeqCst)
     }
 
     pub fn set_volume(&self, volume: f32) {
@@ -137,8 +162,9 @@ impl AudioPlayer {
         self.shared.paused.store(paused, Ordering::Relaxed);
     }
 
-    /// Jump back to the start (the video looped).
+    /// Jump back to the start (the video looped, or a sound is replayed).
     pub fn restart(&self) {
+        self.shared.finished.store(false, Ordering::SeqCst);
         self.shared.restart.store(true, Ordering::SeqCst);
         self.shared.space.notify_all();
     }
@@ -184,20 +210,19 @@ fn fill(shared: &Shared, out: &mut [f32]) {
     shared.space.notify_one();
 }
 
-fn open_audio_reader(path: &HSTRING) -> Result<(IMFSourceReader, u32, usize)> {
+fn open_audio_reader(source: &MediaSource) -> Result<(IMFSourceReader, u32, usize)> {
     // SAFETY: COM calls on interfaces we own; GUID pointers reference constants.
     unsafe {
         let mut attrs: Option<IMFAttributes> = None;
         MFCreateAttributes(&mut attrs, 1).map_err(os("MFCreateAttributes"))?;
         let attrs = attrs.ok_or_else(|| Error::Audio("no attributes".into()))?;
-        let reader = MFCreateSourceReaderFromURL(path, &attrs)
-            .map_err(os("MFCreateSourceReaderFromURL(audio)"))?;
+        let reader = source_reader(source, &attrs)?;
         reader
             .SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS.0 as u32, false)
             .map_err(os("SetStreamSelection(all)"))?;
         reader
             .SetStreamSelection(AUDIO_STREAM, true)
-            .map_err(|_| Error::Audio("file has no audio track".into()))?;
+            .map_err(|_| Error::Audio(format!("{} has no audio track", source.name())))?;
         let wanted = MFCreateMediaType().map_err(os("MFCreateMediaType"))?;
         wanted
             .SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)
@@ -221,34 +246,98 @@ fn open_audio_reader(path: &HSTRING) -> Result<(IMFSourceReader, u32, usize)> {
     }
 }
 
-fn decode_loop(path: &Path, dst_rate: u32, dst_channels: usize, shared: &Shared) -> Result<()> {
+/// The device's format.
+#[derive(Clone, Copy)]
+struct Output {
+    rate: u32,
+    channels: usize,
+}
+
+/// One track being decoded.
+struct Track {
+    index: usize,
+    reader: IMFSourceReader,
+    resampler: Resampler,
+}
+
+impl Track {
+    fn open(tracks: &[MediaSource], index: usize, out: Output) -> Result<Self> {
+        let source = &tracks[index];
+        let (reader, rate, channels) = open_audio_reader(source)?;
+        tracing::info!(
+            track = %source.name(),
+            rate,
+            channels,
+            out_rate = out.rate,
+            out_channels = out.channels,
+            "audio opened"
+        );
+        Ok(Self {
+            index,
+            reader,
+            resampler: Resampler::new(rate, channels, out.rate, out.channels),
+        })
+    }
+}
+
+/// Small xorshift for picking random tracks and gaps.
+struct Rng(u64);
+
+impl Rng {
+    fn new() -> Self {
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0x9E37_79B9, |d| d.as_nanos() as u64);
+        Self(seed | 1)
+    }
+
+    fn next(&mut self) -> f32 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        (self.0 >> 40) as f32 / (1u64 << 24) as f32
+    }
+}
+
+fn first_track(mode: PlaybackMode, count: usize, rng: &mut Rng) -> usize {
+    match mode {
+        PlaybackMode::Random { .. } => ((rng.next() * count as f32) as usize).min(count - 1),
+        _ => 0,
+    }
+}
+
+fn decode_loop(
+    tracks: &[MediaSource],
+    mode: PlaybackMode,
+    out: Output,
+    shared: &Shared,
+) -> Result<()> {
     let _runtime = MfRuntime::start()?;
-    let path = HSTRING::from(path.as_os_str());
-    let (mut reader, src_rate, src_channels) = open_audio_reader(&path)?;
-    let mut resampler = Resampler::new(src_rate, src_channels, dst_rate, dst_channels);
-    tracing::info!(
-        src_rate,
-        src_channels,
-        dst_rate,
-        dst_channels,
-        "video audio opened"
-    );
-    let mut out = Vec::new();
+    let mut rng = Rng::new();
+    let mut track = Track::open(tracks, first_track(mode, tracks.len(), &mut rng), out)?;
+    let mut buf = Vec::new();
 
     while !shared.stop.load(Ordering::SeqCst) {
         if shared.restart.swap(false, Ordering::SeqCst) {
-            (reader, _, _) = open_audio_reader(&path)?;
-            resampler.reset();
+            track = Track::open(tracks, first_track(mode, tracks.len(), &mut rng), out)?;
             if let Ok(mut s) = shared.samples.lock() {
                 s.clear();
             }
+        }
+        if shared.finished.load(Ordering::SeqCst) {
+            // Ended: wait for a restart (or shutdown).
+            if let Ok(s) = shared.samples.lock() {
+                let _ = shared.space.wait_timeout(s, Duration::from_millis(50));
+            }
+            continue;
         }
 
         let mut flags = 0u32;
         let mut sample = None;
         // SAFETY: out-params are valid locals.
         unsafe {
-            reader
+            track
+                .reader
                 .ReadSample(
                     AUDIO_STREAM,
                     0,
@@ -260,14 +349,27 @@ fn decode_loop(path: &Path, dst_rate: u32, dst_channels: usize, shared: &Shared)
                 .map_err(os("ReadSample(audio)"))?;
         }
         if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
-            // Loop on our own too, in case the video loop signal comes late.
-            (reader, _, _) = open_audio_reader(&path)?;
-            resampler.reset();
+            let (r1, r2) = (rng.next(), rng.next());
+            match mode.next_track(track.index, tracks.len(), r1, r2) {
+                Some((next, gap)) => {
+                    // Silence between tracks goes through the queue like sound.
+                    let silence = (gap * out.rate as f32) as usize * out.channels;
+                    for _ in 0..silence.div_ceil(4096) {
+                        buf.clear();
+                        buf.resize(4096, 0.0);
+                        if !push(shared, &buf) {
+                            break;
+                        }
+                    }
+                    track = Track::open(tracks, next, out)?;
+                }
+                None => shared.finished.store(true, Ordering::SeqCst),
+            }
             continue;
         }
         let Some(sample) = sample else { continue };
 
-        out.clear();
+        buf.clear();
         // SAFETY: buffer locked only for the duration of the copy.
         unsafe {
             let buffer = sample
@@ -279,31 +381,35 @@ fn decode_loop(path: &Path, dst_rate: u32, dst_channels: usize, shared: &Shared)
                 .Lock(&mut ptr, None, Some(&mut len))
                 .map_err(os("IMFMediaBuffer::Lock(audio)"))?;
             let floats = std::slice::from_raw_parts(ptr.cast::<f32>(), len as usize / 4);
-            resampler.process(floats, &mut out);
+            track.resampler.process(floats, &mut buf);
             buffer
                 .Unlock()
                 .map_err(os("IMFMediaBuffer::Unlock(audio)"))?;
         }
-
-        // Wait for room; the device callback frees space and notifies.
-        let Ok(mut samples) = shared.samples.lock() else {
-            return Ok(());
-        };
-        while samples.len() + out.len() > shared.capacity
-            && !shared.stop.load(Ordering::SeqCst)
-            && !shared.restart.load(Ordering::SeqCst)
-        {
-            samples = match shared
-                .space
-                .wait_timeout(samples, Duration::from_millis(50))
-            {
-                Ok((s, _)) => s,
-                Err(_) => return Ok(()),
-            };
-        }
-        if !shared.restart.load(Ordering::SeqCst) {
-            samples.extend(out.iter().copied());
-        }
+        push(shared, &buf);
     }
     Ok(())
+}
+
+/// Queues `samples` once there is room. False when stopping or restarting
+/// (the samples are dropped).
+fn push(shared: &Shared, samples: &[f32]) -> bool {
+    let Ok(mut queue) = shared.samples.lock() else {
+        return false;
+    };
+    // Wait for room; the device callback frees space and notifies.
+    while queue.len() + samples.len() > shared.capacity
+        && !shared.stop.load(Ordering::SeqCst)
+        && !shared.restart.load(Ordering::SeqCst)
+    {
+        queue = match shared.space.wait_timeout(queue, Duration::from_millis(50)) {
+            Ok((q, _)) => q,
+            Err(_) => return false,
+        };
+    }
+    if shared.stop.load(Ordering::SeqCst) || shared.restart.load(Ordering::SeqCst) {
+        return false;
+    }
+    queue.extend(samples.iter().copied());
+    true
 }

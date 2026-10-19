@@ -40,6 +40,9 @@
 	let anims = [];
 	let nodes = [], layers = [], scripts = [], dirtyNodes = new Set(), dirtyLayers = new Set();
 	let effectChanges = [], constantChanges = [], timers = [], timerId = 1;
+	// Sound objects by node: { i, volume, playing }, and this frame's commands.
+	const soundByNode = new Map();
+	let soundCommands = [];
 	// Texture animations scripts took control of, by layer.
 	const textureAnims = new Map();
 	const objects = [];
@@ -207,8 +210,19 @@
 			const i = typeof which === 'number' ? which : layers[l].effects.findIndex((e) => e.name === which);
 			return i >= 0 && i < layers[l].effects.length ? new Effect(l, i) : null;
 		}
-		// Particle systems and sounds: not rendered yet.
-		play() {} pause() {} stop() {} isPlaying() { return false; } emit() {}
+		// Sound objects play / pause / stop; particle systems not yet.
+		get __sound() { return soundByNode.get(this.__n); }
+		play() { const s = this.__sound; if (s) { s.playing = true; soundCommands.push([s.i, 'play']); } }
+		pause() { const s = this.__sound; if (s) { s.playing = false; soundCommands.push([s.i, 'pause']); } }
+		stop() { const s = this.__sound; if (s) { s.playing = false; soundCommands.push([s.i, 'stop']); } }
+		isPlaying() { const s = this.__sound; return s ? s.playing : false; }
+		get volume() { const s = this.__sound; return s ? s.volume : 1; }
+		set volume(v) {
+			const s = this.__sound;
+			v = Math.max(0, Math.min(1, Number(v)));
+			if (s && Number.isFinite(v) && v !== s.volume) { s.volume = v; soundCommands.push([s.i, 'volume', v]); }
+		}
+		emit() {}
 		get instance() { return this.__instance || (this.__instance = {}); }
 	}
 
@@ -463,6 +477,9 @@
 		try { engine.userProperties = _Internal.convertUserProperties(state.userProperties); } catch (e) { engine.userProperties = {}; }
 		scripts = state.scripts.map((s, index) => Object.assign(s, { index, value: toScript(s.initial) }));
 		anims = (state.animations || []).map((a) => new Animation(a));
+		(state.sounds || []).forEach((s, i) => {
+			if (s.node !== null && s.node !== undefined) soundByNode.set(s.node, { i, volume: s.volume, playing: !!s.playing });
+		});
 	};
 	L.layerFor = (node) => node === null ? null : objects[node];
 	L.attach = function (index, ns) { scripts[index].ns = ns; };
@@ -515,6 +532,9 @@
 	function pointer(cx, cy, state) {
 		const world = new Vec3(cx, cy, 0);
 		const down = !!state.down;
+		if (Array.isArray(state.sounds)) {
+			for (const s of soundByNode.values()) if (s.i < state.sounds.length) s.playing = !!state.sounds[s.i];
+		}
 		fillAudio(state.audio);
 		const hits = new Map((state.hits || []).map((h) => [h[0], [h[1], h[2]]]));
 		const moved = lastCursor !== cx + ',' + cy;
@@ -569,7 +589,7 @@
 	};
 
 	L.end = function () {
-		const out = { nodes: {}, layers: {}, effects: effectChanges, constants: constantChanges, textureFrames: [], logs: L.logs };
+		const out = { nodes: {}, layers: {}, effects: effectChanges, constants: constantChanges, textureFrames: [], sounds: soundCommands, logs: L.logs };
 		for (const [l, t] of textureAnims) {
 			const f = t.getFrame();
 			if (f !== t.__sent) { t.__sent = f; out.textureFrames.push([l, f]); }
@@ -582,7 +602,7 @@
 			const l = layers[i];
 			out.layers[i] = { alpha: l.alpha, color: l.color, text: l.text };
 		}
-		dirtyNodes = new Set(); dirtyLayers = new Set(); effectChanges = []; constantChanges = []; L.logs = [];
+		dirtyNodes = new Set(); dirtyLayers = new Set(); effectChanges = []; constantChanges = []; soundCommands = []; L.logs = [];
 		return JSON.stringify(out);
 	};
 })();

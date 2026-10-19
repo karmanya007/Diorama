@@ -7,6 +7,8 @@ use lumen_gpu::Gpu;
 use lumen_platform::{DesktopPointer, MediaInfo, MediaPlayback, MediaWatcher};
 use lumen_render::scene::{LayerUpdate, SceneRenderer};
 use lumen_scene::Scene;
+
+use crate::sounds::SceneSounds;
 use lumen_script::{Inputs, ScriptHost, thumbnail_colors};
 use serde_json::json;
 
@@ -87,7 +89,13 @@ impl SceneScripts {
     }
 
     /// Runs one script frame and applies the changes to `renderer`.
-    pub fn frame(&mut self, gpu: &Gpu, renderer: &mut SceneRenderer, frame: &ScriptFrame) {
+    pub fn frame(
+        &mut self,
+        gpu: &Gpu,
+        renderer: &mut SceneRenderer,
+        mut sounds: Option<&mut SceneSounds>,
+        frame: &ScriptFrame,
+    ) {
         let ScriptFrame {
             time,
             clock_ms,
@@ -100,6 +108,9 @@ impl SceneScripts {
         if let Some(media) = &mut self.media {
             media.send_changes(&mut self.host, time);
         }
+        if let Some(sounds) = sounds.as_deref() {
+            self.host.set_sound_states(sounds.playing());
+        }
         let changes = self.host.update(&Inputs {
             clock_ms,
             runtime: f64::from(time),
@@ -110,6 +121,12 @@ impl SceneScripts {
             left_down: buttons.is_some_and(|b| b.left_down),
             audio,
         });
+        for command in self.host.take_sound_commands() {
+            tracing::debug!(?command, "script sound command");
+            if let Some(sounds) = sounds.as_deref_mut() {
+                sounds.command(command);
+            }
+        }
         for (layer, c) in changes {
             tracing::trace!(
                 layer = self.names.get(layer).map(String::as_str),

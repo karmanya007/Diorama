@@ -2,7 +2,7 @@
 //! the frame for the current scene time to the renderer.
 
 use lumen_gpu::Gpu;
-use lumen_media::{Nv12Frame, VideoPlayer, VideoSource};
+use lumen_media::{MediaSource, Nv12Frame, VideoPlayer};
 use lumen_render::scene::SceneRenderer;
 use lumen_scene::Scene;
 use std::time::Duration;
@@ -28,7 +28,11 @@ impl SceneVideos {
             .enumerate()
             .filter_map(|(i, t)| {
                 let mp4 = t.video.clone()?;
-                match VideoPlayer::spawn_source(VideoSource::Memory(mp4)) {
+                let source = MediaSource::Memory {
+                    data: mp4,
+                    name: format!("{}.mp4", t.name),
+                };
+                match VideoPlayer::spawn_source(source) {
                     Ok(player) => Some(VideoTexture {
                         texture: i,
                         player,
