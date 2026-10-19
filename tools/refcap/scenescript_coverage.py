@@ -21,7 +21,7 @@ HOST = [
 ]
 # Present in the prelude but without real behaviour yet.
 STUBS = {
-    "getTextureAnimation", "getVideoTexture", "getAnimationLayer", "getAnimationLayerCount",
+    "getVideoTexture", "getAnimationLayer", "getAnimationLayerCount",
     "setMaterialProperty", "executeMaterialFunction", "getMaterial", "parallaxDepth",
     "play", "pause", "stop", "isPlaying", "emit", "instance", "sortLayer", "destroyLayer",
     "createLayer", "getCameraTransforms", "openUserShortcut", "registerAsset",
@@ -30,6 +30,8 @@ STUBS = {
     "resizeScreen", "applyGeneralSettings",
     "destroy",
 }
+# Real on these interfaces although the same names are stubs elsewhere.
+IMPLEMENTED = {("ITextureAnimation", m) for m in ("play", "pause", "stop", "isPlaying")}
 # Component callbacks the host calls.
 CALLED = {"init", "update", "applyUserProperties", "cursorEnter", "cursorLeave",
           "cursorMove", "cursorDown", "cursorUp", "cursorClick", "mediaStatusChanged",
@@ -75,7 +77,7 @@ def main():
         for m in table.get(name, []):
             if name == "IComponent":
                 status = "yes" if m in CALLED else ("stub" if m in STUBS else "—")
-            elif m in STUBS:
+            elif m in STUBS and (name, m) not in IMPLEMENTED:
                 status = "stub" if re.search(r"\b%s\b" % re.escape(m), prelude) else "—"
             else:
                 status = "yes" if re.search(r"\b%s\b" % re.escape(m), prelude) else "—"

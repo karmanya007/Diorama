@@ -73,6 +73,8 @@ pub struct LayerChange {
     pub effects: Vec<(usize, bool)>,
     /// (effect, pass, uniform, value).
     pub constants: Vec<(usize, usize, String, Vec<f32>)>,
+    /// Animated texture frame set through `getTextureAnimation()`.
+    pub texture_frame: Option<u32>,
 }
 
 /// What the host knows about one layer: placement inputs and what it last
@@ -218,6 +220,7 @@ fn state_json(scene: &Scene, canvas: [u32; 2]) -> String {
                 "text": l.text.as_ref().map(|t| &t.text),
                 "style": l.text.as_ref().map(|t| text_style(scene, t)),
                 "size": l.size,
+                "frames": texture_frames(scene, l),
                 "effects": l.effects.iter()
                     .map(|e| json!({"name": e.name, "visible": e.visible}))
                     .collect::<Vec<_>>(),
@@ -565,8 +568,26 @@ impl ScriptHost {
                 .constants
                 .push((effect, pass, uniform.to_owned(), value));
         }
+        for t in out["textureFrames"].as_array().into_iter().flatten() {
+            if let (Some(l), Some(frame)) = (index(&t[0]), t[1].as_u64()) {
+                changes.entry(l).or_default().texture_frame = u32::try_from(frame).ok();
+            }
+        }
         changes.retain(|_, c| *c != LayerChange::default());
         changes
+    }
+}
+
+/// Frame durations (seconds) of the layer's animated texture (its material's
+/// first texture); empty for still images.
+fn texture_frames(scene: &Scene, layer: &lumen_scene::ImageLayer) -> Vec<f32> {
+    match layer.albedo.textures.get(&0) {
+        Some(lumen_scene::TextureBinding::Asset(id)) => scene
+            .textures
+            .get(id.0)
+            .map(|t| t.frames.iter().map(|f| f.duration).collect())
+            .unwrap_or_default(),
+        _ => Vec::new(),
     }
 }
 

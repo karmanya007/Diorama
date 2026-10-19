@@ -1088,11 +1088,13 @@ impl Importer<'_> {
             if name.starts_with("_rt_") {
                 continue;
             }
-            if let Some(format) = self
-                .texture(name)
-                .and_then(|id| self.texture_formats.get(&id).copied())
-            {
+            let id = self.texture(name);
+            if let Some(format) = id.and_then(|id| self.texture_formats.get(&id).copied()) {
                 combos.insert(format!("TEX{slot}FORMAT"), format);
+            }
+            // Animated textures: shaders read the frame from g_Texture0Translation/Rotation.
+            if *slot == 0 && id.is_some_and(|id| !self.scene.textures[id.0].frames.is_empty()) {
+                combos.insert("SPRITESHEET".to_owned(), 1);
             }
         }
         let program = self.program(&spec.shader, &vertex, &fragment, &combos)?;
@@ -1306,9 +1308,31 @@ impl Importer<'_> {
             mips,
             clamp: h.flags.contains(TexFlags::CLAMP_UVS),
             nearest: h.flags.contains(TexFlags::NO_INTERPOLATION),
+            frames: sprite_frames(&tex),
         };
         Ok((texture, format))
     }
+}
+
+/// TEX sprite-sheet frames in UV of the allocated texture.
+fn sprite_frames(tex: &Tex) -> Vec<lumen_scene::TextureFrame> {
+    let Some(sheet) = &tex.sprite_sheet else {
+        return Vec::new();
+    };
+    let (w, h) = (
+        tex.header.texture_width.max(1) as f32,
+        tex.header.texture_height.max(1) as f32,
+    );
+    sheet
+        .frames
+        .iter()
+        .map(|f| lumen_scene::TextureFrame {
+            origin: [f.x / w, f.y / h],
+            x_axis: [f.width / w, f.width_y / h],
+            y_axis: [f.height_x / w, f.height / h],
+            duration: f.frametime.max(0.0),
+        })
+        .collect()
 }
 
 /// Mip levels below 0: WE's own when the TEX carries a full chain, else a

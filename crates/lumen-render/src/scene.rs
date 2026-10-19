@@ -72,6 +72,9 @@ pub struct LayerUpdate {
     pub effects: Vec<(usize, bool)>,
     /// (effect index, pass index, uniform, value).
     pub constants: Vec<(usize, usize, String, Vec<f32>)>,
+    /// Frame of the layer's animated texture, chosen by a script (it then
+    /// stops following scene time).
+    pub texture_frame: Option<u32>,
 }
 
 /// What scripts may change about a layer; layers are (re)built from this.
@@ -83,6 +86,8 @@ struct LayerState {
     text: Option<String>,
     effects: Vec<bool>,
     constants: BTreeMap<(usize, usize, String), Vec<f32>>,
+    /// Script-chosen animated texture frame (`None`: follows scene time).
+    texture_frame: Option<u32>,
 }
 
 impl Default for FrameInputs {
@@ -149,6 +154,8 @@ struct GpuPass {
     dirty: bool,
     /// (effect, pass) this GPU pass draws; `None` for albedo / composite.
     source: Option<(usize, usize)>,
+    /// Asset whose animation frames drive `g_Texture0Translation/Rotation`.
+    sprite: Option<usize>,
 }
 
 struct GpuLayer {
@@ -222,6 +229,8 @@ pub struct SceneRenderer {
 /// Resources every layer build needs.
 struct Shared {
     assets: Vec<AssetTexture>,
+    /// Animation frames per asset (empty for still textures).
+    frames: Vec<Vec<ir::TextureFrame>>,
     placeholder: AssetTexture,
     samplers: Vec<wgpu::Sampler>,
     uniforms_layout: wgpu::BindGroupLayout,
@@ -431,6 +440,7 @@ impl SceneRenderer {
                 mips: Vec::new(),
                 clamp: true,
                 nearest: false,
+                frames: Vec::new(),
             },
         );
 
@@ -461,6 +471,7 @@ impl SceneRenderer {
 
         let composite = CompositeShared::new(device, format);
         let shared = Arc::new(Shared {
+            frames: scene.textures.iter().map(|t| t.frames.clone()).collect(),
             assets,
             placeholder,
             samplers,
@@ -478,6 +489,7 @@ impl SceneRenderer {
                 text: None,
                 effects: l.effects.iter().map(|e| e.visible).collect(),
                 constants: BTreeMap::new(),
+                texture_frame: None,
             })
             .collect();
         let mut renderer = Self {
@@ -563,6 +575,9 @@ impl SceneRenderer {
         }
         if let Some(v) = update.visible {
             state.visible = v;
+        }
+        if update.texture_frame.is_some() {
+            state.texture_frame = update.texture_frame;
         }
         for (effect, pass, uniform, value) in &update.constants {
             state
@@ -1330,11 +1345,22 @@ impl SceneRenderer {
             ],
         });
 
+        // Animated textures: the shader maps 0..1 onto the current frame.
+        let sprite = match plan.pass.textures.get(&0) {
+            Some(TextureBinding::Asset(id))
+                if program.vs_uniforms.member("g_Texture0Rotation").is_some()
+                    && self.shared.frames.get(id.0).is_some_and(|f| !f.is_empty()) =>
+            {
+                Some(id.0)
+            }
+            _ => None,
+        };
         // Albedo UVs stop at the image inside a padded texture.
-        let albedo = matches!(
-            plan.geometry,
-            Geometry::LayerTarget { .. } | Geometry::Direct { .. }
-        );
+        let albedo = sprite.is_none()
+            && matches!(
+                plan.geometry,
+                Geometry::LayerTarget { .. } | Geometry::Direct { .. }
+            );
         let uv_max = match (albedo, plan.pass.textures.get(&0)) {
             (true, Some(TextureBinding::Asset(id))) => {
                 ctx.assets.get(id.0).map_or([1.0, 1.0], |a| {
@@ -1384,6 +1410,7 @@ impl SceneRenderer {
             },
             dirty: false,
             source: None,
+            sprite,
         })
     }
 
@@ -1626,14 +1653,15 @@ impl SceneRenderer {
         }
         let children_at = layer.children_at.min(layer.passes.len());
         let (before, after) = layer.passes.split_at_mut(children_at);
+        let sprite_frame = self.state.get(layer.index).and_then(|s| s.texture_frame);
         for pass in before {
-            self.encode_pass(encoder, pass, moved, offset, f);
+            self.encode_pass(encoder, pass, (moved, offset), sprite_frame, f);
         }
         for child in &mut layer.children {
             self.encode_layer(encoder, child, f);
         }
         for pass in after {
-            self.encode_pass(encoder, pass, moved, offset, f);
+            self.encode_pass(encoder, pass, (moved, offset), sprite_frame, f);
         }
         if let Some((bind_group, vertices, target, _)) = &layer.composite
             && let Some(pipeline) = self.composite_pipelines.get(&layer.blend)
@@ -1655,8 +1683,8 @@ impl SceneRenderer {
         &self,
         encoder: &mut wgpu::CommandEncoder,
         pass: &mut GpuPass,
-        moved: bool,
-        offset: [f32; 2],
+        (moved, offset): (bool, [f32; 2]),
+        sprite_frame: Option<u32>,
         f: &mut FrameState<'_>,
     ) {
         let Some(Some(program)) = self.programs.get(pass.program) else {
@@ -1677,6 +1705,17 @@ impl SceneRenderer {
             dirty |= layout.write(buf, "g_Daytime", &[inputs.daytime]);
             dirty |= layout.write(buf, "g_PointerPosition", &inputs.pointer);
             dirty |= layout.write(buf, "g_PointerPositionLast", &inputs.pointer);
+            let frames = pass.sprite.and_then(|a| self.shared.frames.get(a));
+            let frame = match sprite_frame {
+                Some(i) => frames.and_then(|f| f.get(i as usize).or(f.last())),
+                None => frames.and_then(|f| ir::TextureFrame::at(f, inputs.time)),
+            };
+            if let Some(frame) = frame {
+                let [x, y] = frame.x_axis;
+                let [u, v] = frame.y_axis;
+                dirty |= layout.write(buf, "g_Texture0Translation", &frame.origin);
+                dirty |= layout.write(buf, "g_Texture0Rotation", &[x, y, u, v]);
+            }
             for (name, values) in &f.audio {
                 dirty |= layout.write(buf, name, values);
             }
@@ -2003,6 +2042,7 @@ fn upload(gpu: &Gpu, t: &ir::Texture) -> AssetTexture {
                 mips: Vec::new(),
                 clamp: true,
                 nearest: false,
+                frames: Vec::new(),
             },
         );
     }

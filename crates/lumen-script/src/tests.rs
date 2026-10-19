@@ -337,3 +337,47 @@ export function update(value) { return audio.left[0].toFixed(2) + ' ' + audio.ri
     // 64 → 16 bands: averages of four.
     assert_eq!(changes[&0].text.as_deref(), Some("0.50 0.20 0.25"));
 }
+
+#[test]
+fn scripts_drive_texture_animations() {
+    let player = script(
+        "export function update(value) {
+  const a = thisLayer.getTextureAnimation();
+  if (engine.runtime === 0) { a.rate = 0; a.setFrame(2); }
+  else a.rate = 4.5;
+  return value;
+}",
+        1,
+        ScriptTarget::Origin(1),
+        "{}",
+    );
+    let mut s = scene(vec![player]);
+    let frame = lumen_scene::TextureFrame {
+        origin: [0.0; 2],
+        x_axis: [0.25, 0.0],
+        y_axis: [0.0, 1.0],
+        duration: 0.1,
+    };
+    s.textures.push(lumen_scene::Texture {
+        name: "sheet".into(),
+        width: 4,
+        height: 1,
+        image_width: 4,
+        image_height: 1,
+        rgba: vec![0; 16],
+        mips: Vec::new(),
+        clamp: true,
+        nearest: true,
+        frames: vec![frame; 4],
+    });
+    s.layers[1].albedo.textures.insert(
+        0,
+        lumen_scene::TextureBinding::Asset(lumen_scene::TextureId(0)),
+    );
+    let mut host = ScriptHost::new(&s, [100, 100], CLOCK).unwrap().unwrap();
+    assert_eq!(host.update(&inputs(0.0))[&1].texture_frame, Some(2));
+    // Rate 0: frame holds; the new rate applies from the next frame.
+    assert!(host.update(&inputs(1.0 / 30.0)).is_empty());
+    // 1/30 s × 4.5 = 0.15 s on from frame 2 (0.2 s) → frame 3.
+    assert_eq!(host.update(&inputs(2.0 / 30.0))[&1].texture_frame, Some(3));
+}

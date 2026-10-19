@@ -81,6 +81,7 @@ fn solid(name: &str, rgba: [u8; 4]) -> Texture {
         mips: vec![rgba.to_vec()],
         clamp: true,
         nearest: true,
+        frames: Vec::new(),
     }
 }
 

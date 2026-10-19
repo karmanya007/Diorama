@@ -258,6 +258,37 @@ pub struct Texture {
     pub mips: Vec<Vec<u8>>,
     pub clamp: bool,
     pub nearest: bool,
+    /// Animation frames (sprite sheets, animated GIFs); empty = still image.
+    pub frames: Vec<TextureFrame>,
+}
+
+/// One frame of an animated texture: the frame's parallelogram in UV
+/// (`uv = origin + u · x_axis + v · y_axis`) and how long it shows.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextureFrame {
+    pub origin: [f32; 2],
+    pub x_axis: [f32; 2],
+    pub y_axis: [f32; 2],
+    /// Seconds.
+    pub duration: f32,
+}
+
+impl TextureFrame {
+    /// The frame showing `time` seconds into a looping animation.
+    pub fn at(frames: &[TextureFrame], time: f32) -> Option<&TextureFrame> {
+        let total: f32 = frames.iter().map(|f| f.duration.max(0.0)).sum();
+        if total <= 0.0 {
+            return frames.first();
+        }
+        let mut t = time.rem_euclid(total);
+        for f in frames {
+            if t < f.duration {
+                return Some(f);
+            }
+            t -= f.duration.max(0.0);
+        }
+        frames.last()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -451,5 +482,29 @@ mod tests {
         // (10, 0) rotated 90° and doubled → (0, 20), plus parent origin.
         assert!((world[4] - 100.0).abs() < 1e-4 && (world[5] - 70.0).abs() < 1e-4);
         assert_eq!(compose(IDENTITY_AFFINE, child), child);
+    }
+
+    #[test]
+    fn texture_frames_loop_by_duration() {
+        let f = |d| TextureFrame {
+            origin: [d, 0.0],
+            x_axis: [0.5, 0.0],
+            y_axis: [0.0, 1.0],
+            duration: d,
+        };
+        let frames = [f(0.1), f(0.3)];
+        assert_eq!(
+            TextureFrame::at(&frames, 0.05).map(|f| f.duration),
+            Some(0.1)
+        );
+        assert_eq!(
+            TextureFrame::at(&frames, 0.2).map(|f| f.duration),
+            Some(0.3)
+        );
+        assert_eq!(
+            TextureFrame::at(&frames, 0.45).map(|f| f.duration),
+            Some(0.1)
+        );
+        assert!(TextureFrame::at(&[], 1.0).is_none());
     }
 }

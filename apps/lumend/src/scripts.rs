@@ -126,6 +126,7 @@ impl SceneScripts {
                     text: c.text,
                     effects: c.effects,
                     constants: c.constants,
+                    texture_frame: c.texture_frame,
                 },
             );
         }

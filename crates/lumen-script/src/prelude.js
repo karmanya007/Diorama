@@ -40,6 +40,8 @@
 	let anims = [];
 	let nodes = [], layers = [], scripts = [], dirtyNodes = new Set(), dirtyLayers = new Set();
 	let effectChanges = [], constantChanges = [], timers = [], timerId = 1;
+	// Texture animations scripts took control of, by layer.
+	const textureAnims = new Map();
 	const objects = [];
 
 	const vec3 = (a) => new Vec3(a[0], a[1], a[2]);
@@ -66,6 +68,44 @@
 		frameCount: 1, rate: 1, duration: 0,
 		getFrame() { return 0; }, setFrame() {}, play() {}, pause() {}, stop() {}, isPlaying() { return false; },
 	};
+
+	// A layer's animated texture under script control: its own clock, advanced
+	// by frametime × rate while playing; the frame goes to the renderer.
+	class TextureAnimation {
+		constructor(l) {
+			this.__l = l;
+			this.__durations = layers[l].frames;
+			this.__t = engine.runtime % Math.max(this.duration, 1e-6);
+			this.__playing = true;
+			this.__sent = -1;
+			this.rate = 1;
+		}
+		get frameCount() { return this.__durations.length; }
+		get duration() { return this.__durations.reduce((a, d) => a + Math.max(d, 0), 0); }
+		play() { this.__playing = true; }
+		pause() { this.__playing = false; }
+		stop() { this.__playing = false; this.__t = 0; }
+		isPlaying() { return this.__playing; }
+		getFrame() {
+			let t = this.__t;
+			for (let i = 0; i < this.__durations.length; i++) {
+				if (t < this.__durations[i]) return i;
+				t -= Math.max(this.__durations[i], 0);
+			}
+			return Math.max(this.__durations.length - 1, 0);
+		}
+		setFrame(n) {
+			n = Math.max(0, Math.min(Math.floor(Number(n) || 0), this.frameCount - 1));
+			let t = 0;
+			for (let i = 0; i < n; i++) t += Math.max(this.__durations[i], 0);
+			this.__t = t;
+		}
+		__advance(dt) {
+			const total = this.duration;
+			if (!this.__playing || total <= 0) return;
+			this.__t = ((this.__t + dt * (Number(this.rate) || 0)) % total + total) % total;
+		}
+	}
 
 	class Layer {
 		constructor(i) { this.__n = i; }
@@ -146,7 +186,12 @@
 		getParent() { const p = nodes[this.__n].parent; return p === null ? null : objects[p]; }
 		getChildren() { return objects.filter((o) => nodes[o.__n].parent === this.__n); }
 		getTransformMatrix() { return Mat4.identity ? Mat4.identity() : null; }
-		getTextureAnimation() { return noopAnimation; }
+		getTextureAnimation() {
+			const l = this.__layer;
+			if (l === null || l === undefined || !layers[l] || !(layers[l].frames || []).length) return noopAnimation;
+			if (!textureAnims.has(l)) textureAnims.set(l, new TextureAnimation(l));
+			return textureAnims.get(l);
+		}
 		// Keyframe animation of one of this object's values (first, or by name).
 		getAnimation(name) {
 			const a = anims.find((x) => x.node === this.__n && (name === undefined || x.name === name));
@@ -505,6 +550,7 @@
 		for (const a of anims) {
 			try { a.apply(runtime); } catch (e) { console.error('animation: ' + e); }
 		}
+		for (const t of textureAnims.values()) t.__advance(frametime);
 		pointer(cx, cy, JSON.parse(pointerJson || '{}'));
 		const due = timers.filter((t) => t.at <= runtime);
 		for (const t of due) {
@@ -523,7 +569,11 @@
 	};
 
 	L.end = function () {
-		const out = { nodes: {}, layers: {}, effects: effectChanges, constants: constantChanges, logs: L.logs };
+		const out = { nodes: {}, layers: {}, effects: effectChanges, constants: constantChanges, textureFrames: [], logs: L.logs };
+		for (const [l, t] of textureAnims) {
+			const f = t.getFrame();
+			if (f !== t.__sent) { t.__sent = f; out.textureFrames.push([l, f]); }
+		}
 		for (const i of dirtyNodes) {
 			const n = nodes[i];
 			out.nodes[i] = { origin: n.origin, scale: n.scale, angles: n.angles, visible: n.visible };
