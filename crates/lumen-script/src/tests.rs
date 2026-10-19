@@ -54,6 +54,8 @@ fn layer(node: usize, text: Option<&str>) -> ImageLayer {
         }),
         particles: None,
         puppet: None,
+        model: None,
+        world: None,
         transform: lumen_scene::affine([0.0, 0.0], 0.0, [1.0, 1.0]),
         visible: true,
         parallax_depth: [1.0; 2],

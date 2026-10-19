@@ -138,6 +138,7 @@ impl SceneScripts {
                 layer,
                 &LayerUpdate {
                     transform: c.transform,
+                    world: c.world,
                     color: c.color,
                     visible: c.visible,
                     text: c.text,

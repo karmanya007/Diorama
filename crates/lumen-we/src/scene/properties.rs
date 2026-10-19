@@ -43,6 +43,10 @@ impl Properties {
             Value::Object(map) => {
                 if let Some(resolved) = self.binding(map) {
                     *scene = resolved;
+                    // A bound script still carries bound script properties.
+                    if let Value::Object(kept) = scene {
+                        kept.values_mut().for_each(|v| self.resolve(v));
+                    }
                     return;
                 }
                 for v in map.values_mut() {
@@ -151,6 +155,17 @@ mod tests {
         props().resolve(&mut v);
         assert_eq!(v["value"], 0.25);
         assert!(v.get("script").is_some() && v.get("user").is_none());
+    }
+
+    #[test]
+    fn bound_scripts_resolve_their_script_properties() {
+        // 3509243656: a bound `visible` script whose `menuEn` setting is
+        // bound to a property that defaults to false.
+        let mut v = json!({"user": "stars", "script": "", "value": true,
+            "scriptproperties": {"menuEn": {"user": "stars", "value": true}}});
+        props().resolve(&mut v);
+        assert_eq!(v["value"], false);
+        assert_eq!(v["scriptproperties"]["menuEn"], false);
     }
 
     #[test]

@@ -92,6 +92,7 @@ pub fn import_with(vfs: &Vfs, limits: &Limits, properties: &Properties) -> Resul
     let objects: Vec<&Value> = json["objects"].as_array().into_iter().flatten().collect();
     let graph = SceneGraph::new(&objects);
     importer.scene.nodes = nodes(&objects);
+    importer.camera_object(&objects);
     // Lights first: lit shaders are generated for the scene's light count.
     for object in &objects {
         importer.light(object, &graph);
@@ -108,6 +109,18 @@ pub fn import_with(vfs: &Vfs, limits: &Limits, properties: &Properties) -> Resul
     }
     if let Err(e) = importer.bloom(&json["general"]) {
         importer.skip(format!("bloom: {e}"));
+    }
+    // Perspective scenes place every layer in 3D.
+    if importer.scene.camera.is_some() {
+        let scene = &mut importer.scene;
+        for layer in &mut scene.layers {
+            if let Some(node) = layer.node {
+                layer.world = Some(lumen_scene::mat4_mul(
+                    lumen_scene::affine_mat4(layer.local),
+                    lumen_scene::node_world_mat4(&scene.nodes, node),
+                ));
+            }
+        }
     }
     Ok(importer.scene)
 }
@@ -318,6 +331,27 @@ impl Importer<'_> {
             .and_then(|z| z.first().copied())
             .filter(|z| *z > 0.01)
             .unwrap_or(1.0);
+        // Without an orthographic projection the scene is 3D: a perspective
+        // camera (WE's `camera` block, or a camera object; see camera_object).
+        if ortho.is_null() {
+            let num = |k: &str, d: f32| {
+                general
+                    .get(k)
+                    .and_then(floats)
+                    .and_then(|v| v.first().copied())
+                    .unwrap_or(d)
+            };
+            let camera = &json["camera"];
+            self.scene.camera = Some(lumen_scene::Camera {
+                node: None,
+                eye: vec_n(camera.get("eye"), [0.0, 0.0, 1.0]),
+                center: vec_n(camera.get("center"), [0.0; 3]),
+                up: vec_n(camera.get("up"), [0.0, 1.0, 0.0]),
+                fov: num("fov", 50.0),
+                near: num("nearz", 0.01),
+                far: num("farz", 10000.0),
+            });
+        }
         if boolean(general.get("cameraparallax"), false) {
             let num = |k: &str, d: f32| {
                 general
@@ -348,6 +382,108 @@ impl Importer<'_> {
                 roughness: num("camerashakeroughness", 1.0),
             });
         }
+    }
+
+    /// A camera object (`"camera": "default"`) views a perspective scene
+    /// from its own placement (capture of 3509243656: eye = its origin).
+    fn camera_object(&mut self, objects: &[&Value]) {
+        let Some(camera) = &mut self.scene.camera else {
+            return;
+        };
+        let found = objects.iter().enumerate().find(|(_, o)| {
+            o.get("camera").is_some_and(|c| !c.is_null()) && boolean(o.get("visible"), true)
+        });
+        if let Some((node, object)) = found {
+            camera.node = Some(node);
+            if let Some(fov) = object
+                .get("fov")
+                .and_then(floats)
+                .and_then(|v| v.first().copied())
+            {
+                camera.fov = fov;
+            }
+        }
+    }
+
+    /// A static 3D model object: its mesh drawn with its material.
+    fn model_layer(
+        &mut self,
+        object: &Value,
+        name: &str,
+        node: usize,
+        graph: &SceneGraph,
+    ) -> Result<()> {
+        let path = object["model"]
+            .as_str()
+            .ok_or_else(|| unsupported("model without a file", name))?;
+        if self.scene.camera.is_none() {
+            return Err(unsupported("model in an orthographic scene", path));
+        }
+        let bytes = self
+            .vfs
+            .read(path)
+            .ok_or_else(|| unsupported("missing model", path))?;
+        let mesh = crate::mdl::MdlMesh::parse(&bytes)?;
+        let material = self.vfs.read_json(&mesh.material)?;
+        let raster = &material["passes"][0];
+        let mut object_constants = serde_json::Map::new();
+        if let Some(v) = object.get("brightness") {
+            object_constants.insert("brightness".to_owned(), unwrap_value(v).clone());
+        }
+        let mut spec = self.pass_spec(&material, None)?;
+        spec.constants.push(&object_constants);
+        let blend = spec.blend;
+        let albedo = self.pass(&spec, None)?;
+        let model = lumen_scene::Model {
+            vertices: mesh
+                .vertices
+                .iter()
+                .map(|v| lumen_scene::ModelVertex {
+                    position: v.position,
+                    normal: v.normal,
+                    tangent: v.tangent,
+                    uv: v.uv,
+                })
+                .collect(),
+            indices: mesh.indices,
+            cull: match raster["cullmode"].as_str() {
+                Some("nocull") => lumen_scene::Cull::None,
+                _ => lumen_scene::Cull::Back,
+            },
+            depth_test: raster["depthtest"].as_str() != Some("disabled"),
+            depth_write: raster["depthwrite"].as_str() != Some("disabled"),
+        };
+        let (transform, visible) = graph.world(object);
+        let [r, g, b] = vec_n(object.get("color"), [1.0; 3]);
+        let alpha = object
+            .get("alpha")
+            .and_then(floats)
+            .and_then(|a| a.first().copied())
+            .unwrap_or(1.0);
+        self.scene.layers.push(ImageLayer {
+            name: name.to_owned(),
+            size: [1, 1],
+            node: Some(node),
+            local: lumen_scene::IDENTITY_AFFINE,
+            text: None,
+            particles: None,
+            puppet: None,
+            model: Some(std::sync::Arc::new(model)),
+            world: None,
+            transform,
+            visible,
+            kind: LayerKind::Image,
+            group: None,
+            parallax_depth: [0.0, 0.0],
+            color: [r, g, b, alpha],
+            blend,
+            albedo,
+            mesh: None,
+            copy_background: false,
+            composite: None,
+            effects: Vec::new(),
+        });
+        Ok(())
     }
 
     fn skip(&mut self, what: String) {
@@ -574,6 +710,8 @@ impl Importer<'_> {
             text: None,
             particles: None,
             puppet: None,
+            model: None,
+            world: None,
             transform: lumen_scene::affine(centre, 0.0, [1.0, 1.0]),
             visible: true,
             parallax_depth: [0.0, 0.0],
@@ -662,6 +800,11 @@ impl Importer<'_> {
                 }
             }
             (None, Some("sound")) => self.sound(object, &name, node, graph),
+            (None, Some("model")) => {
+                if let Err(e) = self.model_layer(object, &name, node, graph) {
+                    self.skip(format!("model {name:?}: {e}"));
+                }
+            }
             (None, Some(kind)) => self.skip(format!("{kind} objects")),
             (None, None) => {}
         }
@@ -943,6 +1086,8 @@ impl Importer<'_> {
             text: None,
             particles: None,
             puppet: None,
+            model: None,
+            world: None,
             transform,
             visible,
             parallax_depth: vec_n(object.get("parallaxDepth"), [1.0, 1.0]),
@@ -1216,6 +1361,19 @@ impl Importer<'_> {
                 && textures.contains_key(slot)
             {
                 combos.entry(combo.to_owned()).or_insert(1);
+                // Packed component maps (generic4's PBR mask: metallic,
+                // roughness, reflection, emissive channels) switch on each
+                // component; 3509243656's stars glow only through the
+                // emissive alpha.
+                let components = d
+                    .annotation
+                    .as_ref()
+                    .and_then(|a| a["components"].as_array());
+                for c in components.into_iter().flatten() {
+                    if let Some(combo) = c["combo"].as_str() {
+                        combos.entry(combo.to_owned()).or_insert(1);
+                    }
+                }
             }
         }
 

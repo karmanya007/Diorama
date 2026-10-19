@@ -66,6 +66,8 @@ pub struct Inputs {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct LayerChange {
     pub transform: Option<[f32; 6]>,
+    /// 3D placement (perspective scenes only).
+    pub world: Option<lumen_scene::Mat4>,
     pub color: Option<[f32; 4]>,
     pub visible: Option<bool>,
     pub text: Option<String>,
@@ -101,6 +103,7 @@ struct LayerSlot {
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct LayerShown {
     transform: [f32; 6],
+    world: Option<lumen_scene::Mat4>,
     visible: bool,
 }
 
@@ -385,6 +388,7 @@ impl ScriptHost {
                 text: l.text.as_ref().map(|t| t.text.clone()),
                 shown: LayerShown {
                     transform: l.transform,
+                    world: l.world,
                     visible: l.visible,
                 },
             })
@@ -538,6 +542,12 @@ impl ScriptHost {
                 let (world, visible) = node_world(&self.nodes, node);
                 let now = LayerShown {
                     transform: lumen_scene::compose(world, slot.local),
+                    world: slot.shown.world.map(|_| {
+                        lumen_scene::mat4_mul(
+                            lumen_scene::affine_mat4(slot.local),
+                            lumen_scene::node_world_mat4(&self.nodes, node),
+                        )
+                    }),
                     visible,
                 };
                 let shown = &mut slot.shown;
@@ -545,6 +555,9 @@ impl ScriptHost {
                     let c = changes.entry(i).or_default();
                     if now.transform != shown.transform {
                         c.transform = Some(now.transform);
+                    }
+                    if now.world != shown.world {
+                        c.world = now.world;
                     }
                     if now.visible != shown.visible {
                         c.visible = Some(now.visible);

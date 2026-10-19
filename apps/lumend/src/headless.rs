@@ -37,8 +37,25 @@ pub fn load_scene(
             "applying the wallpaper's WE property choices"
         );
     }
-    let scene = lumen_we::scene::import_with_choices(dir, assets, &Limits::default(), &choices)
+    let mut scene = lumen_we::scene::import_with_choices(dir, assets, &Limits::default(), &choices)
         .with_context(|| format!("importing {}", dir.display()))?;
+    // Debugging aid: `LUMEN_HIDE_LAYERS` / `LUMEN_ONLY_LAYERS` (comma-separated
+    // layer indices or name fragments) drop some layers / all others.
+    let matches = |var: &str, i: usize, name: &str| {
+        std::env::var(var).ok().map(|v| {
+            v.split(',')
+                .any(|p| p.parse::<usize>().map_or(name.contains(p), |n| n == i))
+        })
+    };
+    for (i, l) in scene.layers.iter_mut().enumerate() {
+        if matches("LUMEN_HIDE_LAYERS", i, &l.name) == Some(true)
+            || matches("LUMEN_ONLY_LAYERS", i, &l.name) == Some(false)
+        {
+            // Unbuildable rather than hidden: scripts may show hidden layers.
+            l.albedo.program = lumen_scene::ProgramId(usize::MAX);
+            l.particles = None;
+        }
+    }
     tracing::info!(
         layers = scene.layers.len(),
         programs = scene.programs.len(),
@@ -46,8 +63,37 @@ pub fn load_scene(
         ms = started.elapsed().as_millis(),
         "scene imported"
     );
-    for l in &scene.layers {
+    // Debugging aid: `LUMEN_DUMP_PROGRAM=<name>` prints that program's HLSL.
+    if let Ok(name) = std::env::var("LUMEN_DUMP_PROGRAM") {
+        for p in scene.programs.iter().filter(|p| p.name == name) {
+            println!(
+                "// {} vertex
+{}
+// fragment
+{}",
+                p.name, p.vertex_hlsl, p.fragment_hlsl
+            );
+        }
+    }
+    if let Some(camera) = &scene.camera {
+        tracing::debug!(?camera, view = ?camera.view(&scene.nodes), "perspective camera");
+    }
+    for (i, l) in scene.layers.iter().enumerate() {
+        for (e, effect) in l.effects.iter().enumerate() {
+            for (k, pass) in effect.passes.iter().enumerate() {
+                tracing::trace!(
+                    layer = i,
+                    effect = e,
+                    pass = k,
+                    name = %effect.name,
+                    program = scene.programs.get(pass.program.0).map_or("?", |p| p.name.as_str()),
+                    constants = ?pass.constants,
+                    "effect pass"
+                );
+            }
+        }
         tracing::debug!(
+            i,
             name = %l.name,
             size = ?l.size,
             transform = ?l.transform,
@@ -55,6 +101,16 @@ pub fn load_scene(
             color = ?l.color,
             blend = ?l.blend,
             effects = ?l.effects.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
+            program = scene.programs.get(l.albedo.program.0).map_or("?", |p| p.name.as_str()),
+            textures = ?l.albedo.textures.iter().map(|(slot, t)| match t {
+                lumen_scene::TextureBinding::Asset(id) => {
+                    format!("{slot}:{}", scene.textures.get(id.0).map_or("?", |t| t.name.as_str()))
+                }
+                other => format!("{slot}:{other:?}"),
+            }).collect::<Vec<_>>(),
+            attributes = ?scene.programs.get(l.albedo.program.0).map(|p| {
+                p.attributes.iter().map(|a| (a.name.as_str(), a.location, a.components)).collect::<Vec<_>>()
+            }),
             "layer"
         );
     }
@@ -104,9 +160,10 @@ pub fn render_to_png(
     let mut renderer = SceneRenderer::new(&gpu, &scene, &compiler, output)?;
     tracing::info!(ms = started.elapsed().as_millis(), "scene renderer built");
     if let Some(mut scripts) = crate::scripts::SceneScripts::new(&scene, clock_ms, false) {
-        // A couple of seconds of frames first: scripts that ease or count
-        // frames settle like they would have while playing.
-        let warm_up = 2.0f32.min(time);
+        // Run scripts from the scene's start (up to a minute back) at 30 fps:
+        // scripts that ease, integrate or count frames end where they would
+        // have while playing (3509243656 spins its sky by 3°/s of runtime).
+        let warm_up = 60.0f32.min(time);
         let frames = (warm_up * 30.0).ceil() as u32;
         for i in 0..=frames {
             let t = time - warm_up + warm_up * i as f32 / frames.max(1) as f32;

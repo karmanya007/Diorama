@@ -241,7 +241,10 @@ fn instance(v: Option<&Value>, to_local: impl Fn([f32; 3]) -> [f32; 3]) -> Insta
     let Some(v) = v.filter(|v| v.is_object()) else {
         return o;
     };
-    o.rate = num(v, "rate", 1.0);
+    // `rate` is not applied: live counts in three captures match the
+    // un-overridden emission (ash 10/s × 0.5 → 85 alive over 7–10 s,
+    // raindrops 25/s × 2 → 97 over 3–5 s, 3509243656's nebula 20/s × 0.5 →
+    // 79/83 over 3–5 s).
     o.count = num(v, "count", 1.0);
     o.size = num(v, "size", 1.0);
     o.lifetime = num(v, "lifetime", 1.0);
@@ -294,6 +297,8 @@ impl Importer<'_> {
             text: None,
             particles: None,
             puppet: None,
+            model: None,
+            world: None,
             transform,
             visible,
             parallax_depth: vec_n(object.get("parallaxDepth"), [1.0, 1.0]),

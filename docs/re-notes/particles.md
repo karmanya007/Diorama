@@ -35,12 +35,23 @@ WE's `genericparticle` / `common_particles.h` shaders, and RenderDoc captures
   perspective projection whose z = 0 plane equals the 2D view; the eye sits
   0.9163 × half the scene height away (P11 = 0.9163 in every captured case).
   Lumen applies this on the CPU (position and size scale by D / (D − z)).
-- Instance overrides (`instanceoverride` on the scene object): `rate`,
-  `count` (max count), `size`, `lifetime`, `speed`, `alpha`, `colorn`
+- Instance overrides (`instanceoverride` on the scene object): `rate` has
+  **no effect** on emission (live counts match the plain emitter rate in
+  three captures: ash 10/s × 0.5 → 85 alive over 7–10 s lifetimes, raindrops
+  25/s × 2 → 97 over 3–5 s, 3509243656's nebula 20/s × 0.5 → 79/83 over
+  3–5 s); `count` (max count), `size`, `lifetime`, `speed`, `alpha`, `colorn`
   (× `brightness`), `controlpointN` (scene positions) — multipliers on the
   system; children inherit them.
 - Control point `flags & 1` follows the cursor (fireflies flee it through
   `controlpointattract` with a negative scale).
+
+## Perspective (3D) scenes
+In scenes with a perspective camera (3509243656) particles are drawn through
+the real camera (`g_ModelViewProjectionMatrix` = system world × view ×
+projection) and billboarded along `g_OrientationRight/Up/Forward` = the
+camera's right, up and backward axes in the system's local space (captured:
+right = (0.883, 0, 0.470) for a system turned 28° about y). Lumen sets these
+every frame and skips its 2D perspective emulation there.
 
 ## Defaults Lumen assumes where keys are absent
 Taken from the editor's defaults where known, otherwise chosen to match the

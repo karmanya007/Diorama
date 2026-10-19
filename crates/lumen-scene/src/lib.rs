@@ -15,7 +15,9 @@ use std::sync::Arc;
 
 pub mod particles;
 pub mod puppet;
+pub mod space;
 pub use particles::ParticleSystem;
+pub use space::{Camera, IDENTITY_MAT4, Mat4, affine_mat4, mat4_mul, node_world_mat4};
 
 /// Index into [`Scene::textures`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -30,6 +32,9 @@ pub struct Scene {
     /// Size of the scene's orthographic projection in scene pixels.
     pub width: u32,
     pub height: u32,
+    /// Perspective scenes: the camera (layers are then placed by
+    /// [`ImageLayer::world`] in 3D world units).
+    pub camera: Option<Camera>,
     pub clear_color: [f32; 4],
     /// The project's scheme colour: WE fills monitor areas the scene does not
     /// cover with it (fit/custom alignment); also the theme colour.
@@ -351,6 +356,12 @@ pub struct ImageLayer {
     pub particles: Option<Box<ParticleSystem>>,
     /// Puppet warp: the albedo is this skinned mesh instead of the quad.
     pub puppet: Option<Box<puppet::Puppet>>,
+    /// A 3D mesh drawn by the albedo (model space → `world`) instead of the
+    /// quad; perspective scenes only.
+    pub model: Option<Arc<Model>>,
+    /// Perspective scenes: layer-local pixels (or model units) → world,
+    /// `node_world ∘ local` in 3D. `None` in orthographic scenes.
+    pub world: Option<Mat4>,
     /// Layer-local pixels (centred, y up) → scene pixels (origin bottom-left,
     /// y up), parents already applied: `x' = m0·x + m2·y + m4`,
     /// `y' = m1·x + m3·y + m5`.
@@ -381,6 +392,36 @@ pub struct ImageLayer {
     /// `Previous`. `None` = plain blended copy.
     pub composite: Option<Pass>,
     pub effects: Vec<Effect>,
+}
+
+/// A static triangle mesh with its material's raster state.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Model {
+    pub vertices: Vec<ModelVertex>,
+    /// Triangle list into `vertices`.
+    pub indices: Vec<u32>,
+    pub cull: Cull,
+    pub depth_test: bool,
+    pub depth_write: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ModelVertex {
+    pub position: [f32; 3],
+    pub normal: [f32; 3],
+    /// xyz + handedness.
+    pub tangent: [f32; 4],
+    pub uv: [f32; 2],
+}
+
+/// Which faces a model hides (WE `cullmode`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Cull {
+    /// Back faces (`normal`).
+    #[default]
+    Back,
+    /// None (`nocull`).
+    None,
 }
 
 /// One textured quad of a [`ImageLayer::mesh`].

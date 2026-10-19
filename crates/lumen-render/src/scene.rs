@@ -27,6 +27,8 @@ use crate::text::TextState;
 pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// ...or half floats for HDR scenes, where values above 1 feed the bloom.
 pub const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+/// Scene depth buffer of perspective scenes (reversed: near = 1).
+const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SceneError {
@@ -64,6 +66,8 @@ fn fold_bands(bands: &[f32; 64], n: usize) -> Vec<f32> {
 pub struct LayerUpdate {
     /// Layer transform (`node_world ∘ local`, see [`ir::ImageLayer`]).
     pub transform: Option<[f32; 6]>,
+    /// 3D placement in perspective scenes ([`ir::ImageLayer::world`]).
+    pub world: Option<Rows>,
     /// Object colour and alpha (`g_Color4`).
     pub color: Option<[f32; 4]>,
     pub visible: Option<bool>,
@@ -81,6 +85,8 @@ pub struct LayerUpdate {
 #[derive(Debug, Clone)]
 struct LayerState {
     transform: [f32; 6],
+    /// 3D placement in perspective scenes.
+    world: Option<Rows>,
     color: [f32; 4],
     visible: bool,
     text: Option<String>,
@@ -149,7 +155,11 @@ struct GpuPass {
     load: bool,
     /// Placement and camera of a pass drawn into the scene or a group target
     /// (moved by parallax each frame); `None` for passes into layer targets.
-    placement: Option<([f32; 6], Rows)>,
+    placement: Option<(Rows, Rows)>,
+    /// Indexed draw (models): `vertex_count` is then the index count.
+    indices: Option<wgpu::Buffer>,
+    /// Draws with the scene depth buffer (models).
+    depth: bool,
     /// Uniform data changed outside the frame loop; upload before drawing.
     dirty: bool,
     /// (effect, pass) this GPU pass draws; `None` for albedo / composite.
@@ -188,7 +198,8 @@ struct GpuLayer {
     /// Samples `_rt_FullFrameBuffer`: snapshot the scene before running.
     needs_framebuffer: bool,
     size: [u32; 2],
-    transform: [f32; 6],
+    /// Layer-local → scene (pixels, or world units in perspective scenes).
+    transform: Rows,
     parallax_depth: [f32; 2],
     /// Parallax offset currently baked into uniforms / vertices.
     offset: [f32; 2],
@@ -207,8 +218,15 @@ pub struct SceneRenderer {
     /// Smoothed cursor used for parallax, and the time it was last updated.
     parallax_pointer: [f32; 2],
     last_time: Option<f32>,
-    /// Scene pixels → clip space.
+    /// Scene pixels (world units in perspective scenes) → clip space.
     camera: Rows,
+    /// `g_EyePosition` of perspective scenes.
+    eye: Option<[f32; 3]>,
+    /// Camera right, up and backward axes in world space (perspective
+    /// scenes): particles face the camera along them.
+    camera_axes: Option<[[f32; 3]; 3]>,
+    /// Depth buffer of the scene target (perspective scenes).
+    depth: Option<wgpu::TextureView>,
     clear: wgpu::Color,
     targets: Vec<Target>,
     programs: Vec<Option<Program>>,
@@ -235,6 +253,7 @@ struct Shared {
     /// Animation frames per asset (empty for still textures).
     frames: Vec<Vec<ir::TextureFrame>>,
     placeholder: AssetTexture,
+    empty: AssetTexture,
     samplers: Vec<wgpu::Sampler>,
     uniforms_layout: wgpu::BindGroupLayout,
     composite_layout: wgpu::BindGroupLayout,
@@ -316,8 +335,16 @@ fn ortho_rows(w: f32, h: f32) -> Rows {
 
 /// The scene camera: ortho over the whole scene. (`general.zoom` is not a
 /// plain ortho zoom: applying it either way lowers SSIM on capture 914.)
-fn camera_rows(scene: &ir::Scene) -> Rows {
-    ortho_rows(scene.width as f32, scene.height as f32)
+fn camera_rows(scene: &ir::Scene, output: [u32; 2]) -> Rows {
+    match scene.camera {
+        // WE renders perspective scenes at the swapchain's aspect.
+        Some(camera) => {
+            let (view, _) = camera.view(&scene.nodes);
+            let aspect = output[0] as f32 / output[1].max(1) as f32;
+            mat_mul(view, camera.projection(aspect))
+        }
+        None => ortho_rows(scene.width as f32, scene.height as f32),
+    }
 }
 
 /// Centred `-w/2..w/2 × -h/2..h/2` → clip space (layer targets of lit
@@ -392,6 +419,8 @@ enum Source {
     Target(usize),
     Atlas,
     Placeholder,
+    /// Transparent black: another layer's image that is not drawn.
+    Empty,
 }
 
 impl SceneRenderer {
@@ -448,6 +477,23 @@ impl SceneRenderer {
             },
         );
 
+        let empty = upload(
+            gpu,
+            &ir::Texture {
+                name: "empty".into(),
+                width: 1,
+                height: 1,
+                image_width: 1,
+                image_height: 1,
+                rgba: vec![0; 4],
+                mips: Vec::new(),
+                clamp: true,
+                nearest: false,
+                frames: Vec::new(),
+                video: None,
+            },
+        );
+
         let uniforms_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("we uniforms"),
             entries: &[0, 1].map(|binding| wgpu::BindGroupLayoutEntry {
@@ -478,6 +524,7 @@ impl SceneRenderer {
             frames: scene.textures.iter().map(|t| t.frames.clone()).collect(),
             assets,
             placeholder,
+            empty,
             samplers,
             uniforms_layout,
             composite_layout: composite.layout,
@@ -488,6 +535,7 @@ impl SceneRenderer {
             .iter()
             .map(|l| LayerState {
                 transform: l.transform,
+                world: l.world,
                 color: l.color,
                 visible: l.visible,
                 text: None,
@@ -503,7 +551,32 @@ impl SceneRenderer {
             parallax: scene.parallax,
             parallax_pointer: [0.5, 0.5],
             last_time: None,
-            camera: camera_rows(scene),
+            camera: camera_rows(scene, output),
+            eye: scene.camera.map(|c| c.view(&scene.nodes).1),
+            camera_axes: scene.camera.and_then(|c| {
+                let world = lumen_scene::space::invert_mat4(c.view(&scene.nodes).0)?;
+                Some(std::array::from_fn(|r| {
+                    [world[r][0], world[r][1], world[r][2]]
+                }))
+            }),
+            depth: scene.camera.map(|_| {
+                device
+                    .create_texture(&wgpu::TextureDescriptor {
+                        label: Some("scene depth"),
+                        size: wgpu::Extent3d {
+                            width: output[0],
+                            height: output[1],
+                            depth_or_array_layers: 1,
+                        },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: DEPTH_FORMAT,
+                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                        view_formats: &[],
+                    })
+                    .create_view(&wgpu::TextureViewDescriptor::default())
+            }),
             clear: wgpu::Color {
                 r: f64::from(scene.clear_color[0]),
                 g: f64::from(scene.clear_color[1]),
@@ -535,11 +608,17 @@ impl SceneRenderer {
             scene: &ir,
             assets: &shared.assets,
             placeholder: &shared.placeholder,
+            empty: &shared.empty,
             samplers: &shared.samplers,
             uniforms_layout: &shared.uniforms_layout,
         };
-        for (i, layer) in ir.layers.iter().enumerate() {
-            if layer.group.is_none()
+        // Opaque models draw first (capture of 3509243656: every model
+        // before the image layers listed above it in the scene).
+        let later = |l: &ir::ImageLayer| !(l.model.is_some() && l.albedo.blend == Blend::Opaque);
+        let mut order: Vec<usize> = (0..ir.layers.len()).collect();
+        order.sort_by_key(|&i| later(&ir.layers[i]));
+        for i in order {
+            if ir.layers[i].group.is_none()
                 && let Some(gpu_layer) =
                     renderer.build_layer(&ctx, i, top, &shared.composite_layout)
             {
@@ -574,6 +653,10 @@ impl SceneRenderer {
         if let Some(t) = update.transform {
             state.transform = t;
         }
+        if let Some(w) = update.world {
+            state.world = Some(w);
+        }
+        let placement = state.world.unwrap_or_else(|| model_rows(state.transform));
         if let Some(c) = update.color {
             state.color = c;
         }
@@ -601,8 +684,8 @@ impl SceneRenderer {
         if let Some(v) = update.visible {
             layer.visible = v;
         }
-        if let Some(t) = update.transform {
-            let t = lumen_scene::compose(t, anchor);
+        if update.transform.is_some() || update.world.is_some() {
+            let t = mat_mul(model_rows(anchor), placement);
             layer.transform = t;
             for pass in &mut layer.passes {
                 if let Some((base, _)) = &mut pass.placement {
@@ -684,6 +767,7 @@ impl SceneRenderer {
             scene: &ir,
             assets: &shared.assets,
             placeholder: &shared.placeholder,
+            empty: &shared.empty,
             samplers: &shared.samplers,
             uniforms_layout: &shared.uniforms_layout,
         };
@@ -750,12 +834,13 @@ impl SceneRenderer {
                 target: frame.target,
                 geometry: Geometry::Direct {
                     size: [1, 1],
-                    transform: layer.transform,
+                    model: placement(layer),
                     camera: frame.camera,
                 },
                 color: [1.0; 4],
                 mesh: None,
                 puppet: None,
+                model: None,
                 atlas: None,
             };
             let Some(mut pass) = self.build_pass(ctx, &plan) else {
@@ -828,7 +913,7 @@ impl SceneRenderer {
             blend: layer.blend,
             needs_framebuffer,
             size: layer.size,
-            transform: layer.transform,
+            transform: placement(layer),
             parallax_depth: layer.parallax_depth,
             offset: [0.0, 0.0],
         })
@@ -840,6 +925,7 @@ impl SceneRenderer {
         let mut layer = scene.layers[index].clone();
         let state = &self.state[index];
         layer.transform = state.transform;
+        layer.world = state.world;
         layer.color = state.color;
         layer.visible = state.visible;
         for (e, visible) in layer.effects.iter_mut().zip(&state.effects) {
@@ -863,10 +949,9 @@ impl SceneRenderer {
             if let Some(t) = text_state {
                 let laid = t.layout(gpu, spec, text);
                 layer.size = laid.size;
-                layer.transform = lumen_scene::compose(
-                    layer.transform,
-                    lumen_scene::affine(laid.centre, 0.0, [1.0, 1.0]),
-                );
+                let centre = lumen_scene::affine(laid.centre, 0.0, [1.0, 1.0]);
+                layer.transform = lumen_scene::compose(layer.transform, centre);
+                layer.world = layer.world.map(|w| mat_mul(model_rows(centre), w));
                 layer.mesh = Some(laid.mesh);
             } else {
                 layer.mesh = Some(Vec::new());
@@ -893,6 +978,14 @@ impl SceneRenderer {
         composite_layout: &wgpu::BindGroupLayout,
     ) -> Option<GpuLayer> {
         let layer = &self.effective_layer(ctx.gpu, ctx.scene, index);
+        // Fullscreen layers cover the scene's own rectangle, also in
+        // perspective scenes.
+        let camera = if layer.kind == LayerKind::Fullscreen && frame.target == SCENE {
+            let [w, h] = self.size.map(|v| v as f32);
+            ortho_rows(w, h)
+        } else {
+            frame.camera
+        };
         if let Some(tree) = crate::particles::tree(layer) {
             return self.build_particles(ctx, index, frame, layer, tree);
         }
@@ -927,13 +1020,14 @@ impl SceneRenderer {
                     LayerKind::Fullscreen => Geometry::Fullscreen,
                     LayerKind::Image | LayerKind::Compose => Geometry::Direct {
                         size: layer.size,
-                        transform: layer.transform,
-                        camera: frame.camera,
+                        model: placement(layer),
+                        camera,
                     },
                 },
                 color: layer.color,
                 mesh: layer.mesh.as_deref(),
                 puppet: layer.puppet.as_deref(),
+                model: layer.model.as_deref(),
                 atlas,
             };
             let mut pass = self.build_pass(ctx, &plan)?;
@@ -952,7 +1046,7 @@ impl SceneRenderer {
                 blend: layer.blend,
                 needs_framebuffer,
                 size: layer.size,
-                transform: layer.transform,
+                transform: placement(layer),
                 parallax_depth: layer.parallax_depth,
                 offset: [0.0, 0.0],
             });
@@ -981,19 +1075,20 @@ impl SceneRenderer {
                 LayerKind::Fullscreen => Geometry::Fullscreen,
                 LayerKind::Image => Geometry::LayerTarget {
                     size: layer.size,
-                    transform: layer.transform,
+                    model: placement(layer),
                 },
                 // Placed in the scene for its frame-buffer lookup; the shader
                 // itself fills the target from texcoords.
                 LayerKind::Compose => Geometry::Direct {
                     size: layer.size,
-                    transform: layer.transform,
-                    camera: frame.camera,
+                    model: placement(layer),
+                    camera,
                 },
             },
             color: layer.color,
             mesh: layer.mesh.as_deref(),
             puppet: layer.puppet.as_deref(),
+            model: layer.model.as_deref(),
             atlas,
         };
         let mut albedo = self.build_pass(ctx, &albedo)?;
@@ -1016,13 +1111,13 @@ impl SceneRenderer {
                     },
                 ],
             });
-            let quad = background_quad(layer.size, layer.transform, frame.camera);
+            let quad = background_quad(layer.size, placement(layer), camera);
             let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("background quad"),
                 contents: bytemuck::cast_slice(&quad),
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             });
-            (bind_group, vertices, ping[0], frame.camera)
+            (bind_group, vertices, ping[0], camera)
         });
 
         // Children of a composition layer draw into its target (scene
@@ -1086,6 +1181,7 @@ impl SceneRenderer {
                     color: [1.0; 4],
                     mesh: None,
                     puppet: None,
+                    model: None,
                     atlas: None,
                 };
                 if let Some(mut p) = self.build_pass(ctx, &plan) {
@@ -1107,13 +1203,14 @@ impl SceneRenderer {
                 target: frame.target,
                 geometry: Geometry::Direct {
                     size: layer.size,
-                    transform: layer.transform,
-                    camera: frame.camera,
+                    model: placement(layer),
+                    camera,
                 },
                 // Colour and alpha were applied by the albedo pass.
                 color: [1.0; 4],
                 mesh: None,
                 puppet: None,
+                model: None,
                 atlas: None,
             };
             if let Some(mut p) = self.build_pass(ctx, &plan) {
@@ -1133,7 +1230,7 @@ impl SceneRenderer {
                     blend: layer.blend,
                     needs_framebuffer,
                     size: layer.size,
-                    transform: layer.transform,
+                    transform: placement(layer),
                     parallax_depth: layer.parallax_depth,
                     offset: [0.0, 0.0],
                 });
@@ -1156,11 +1253,7 @@ impl SceneRenderer {
         });
         let composite_vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("composite quad"),
-            contents: bytemuck::cast_slice(&composite_quad(
-                layer.size,
-                layer.transform,
-                frame.camera,
-            )),
+            contents: bytemuck::cast_slice(&composite_quad(layer.size, placement(layer), camera)),
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
         Some(GpuLayer {
@@ -1171,13 +1264,13 @@ impl SceneRenderer {
             passes,
             background,
             particles: None,
-            composite: Some((composite, composite_vertices, frame.target, frame.camera)),
+            composite: Some((composite, composite_vertices, frame.target, camera)),
             children,
             children_at,
             blend: layer.blend,
             needs_framebuffer,
             size: layer.size,
-            transform: layer.transform,
+            transform: placement(layer),
             parallax_depth: layer.parallax_depth,
             offset: [0.0, 0.0],
         })
@@ -1196,7 +1289,9 @@ impl SceneRenderer {
             let source = match plan.pass.textures.get(slot) {
                 Some(TextureBinding::Asset(id)) => Source::Asset(id.0),
                 Some(TextureBinding::Previous) => {
-                    plan.previous.map_or(Source::Placeholder, Source::Target)
+                    // Without a running image (an albedo sampling another,
+                    // undrawn layer's `_rt_imageLayerComposite_*`): empty.
+                    plan.previous.map_or(Source::Empty, Source::Target)
                 }
                 Some(TextureBinding::Fbo(name)) => plan
                     .fbos
@@ -1247,6 +1342,11 @@ impl SceneRenderer {
                         ctx.placeholder.resolution,
                     ),
                 },
+                Source::Empty => (
+                    &ctx.empty.view,
+                    &ctx.samplers[CLAMP_LINEAR],
+                    ctx.empty.resolution,
+                ),
                 Source::Placeholder => (
                     &ctx.placeholder.view,
                     &ctx.samplers[CLAMP_LINEAR],
@@ -1283,9 +1383,7 @@ impl SceneRenderer {
             Geometry::LayerTarget { size: [w, h], .. } => {
                 (IDENTITY_ROWS, centred_ortho_rows(w as f32, h as f32))
             }
-            Geometry::Direct {
-                transform, camera, ..
-            } => (model_rows(transform), camera),
+            Geometry::Direct { model, camera, .. } => (model, camera),
             Geometry::Effect | Geometry::Fullscreen => (IDENTITY_ROWS, EFFECT_ROWS),
         };
         let mvp = upload_matrix(mat_mul(model, view_projection));
@@ -1321,9 +1419,7 @@ impl SceneRenderer {
             );
             // Scene placement for lighting while drawing into a layer target.
             let alt_model = match plan.geometry {
-                Geometry::LayerTarget { transform, .. } | Geometry::Direct { transform, .. } => {
-                    model_rows(transform)
-                }
+                Geometry::LayerTarget { model, .. } | Geometry::Direct { model, .. } => model,
                 Geometry::Effect | Geometry::Fullscreen => IDENTITY_ROWS,
             };
             layout.write(buf, "g_AltModelMatrix", &upload_matrix(alt_model));
@@ -1333,7 +1429,9 @@ impl SceneRenderer {
                 &upload_matrix(scene_ortho),
             );
             // Observed in capture 914: eye above the scene centre at z = 2000.
-            layout.write(buf, "g_EyePosition", &[sw / 2.0, sh / 2.0, 2000.0]);
+            let eye = self.eye.unwrap_or([sw / 2.0, sh / 2.0, 2000.0]);
+            layout.write(buf, "g_EyePosition", &eye);
+            layout.write(buf, "g_NormalModelMatrix", &normal_matrix(model));
             let lights = &ctx.scene.point_lights;
             let origins: Vec<f32> = lights
                 .iter()
@@ -1414,19 +1512,46 @@ impl SceneRenderer {
                 Geometry::LayerTarget { .. } | Geometry::Direct { .. }
             )
         });
-        let data = match skinned {
-            Some(p) => {
+        let mesh = plan
+            .model
+            .filter(|_| matches!(plan.geometry, Geometry::Direct { .. }));
+        let data = match (skinned, mesh) {
+            (_, Some(m)) => model_vertices(&program.attributes, m),
+            (Some(p), None) => {
                 let bind: Vec<[f32; 2]> = p.vertices.iter().map(|v| v.position).collect();
                 puppet_vertices(&program.attributes, p, &bind, uv_max)
             }
-            None => pass_vertices(&program.attributes, plan.geometry, uv_max, plan.mesh),
+            (None, None) => pass_vertices(&program.attributes, plan.geometry, uv_max, plan.mesh),
         };
         let stride: usize = program
             .attributes
             .iter()
             .map(|a| a.components.clamp(1, 4) as usize)
             .sum();
-        let vertex_count = (data.len() / stride.max(1)) as u32;
+        let mut vertex_count = (data.len() / stride.max(1)) as u32;
+        let indices = mesh.map(|m| {
+            vertex_count = u32::try_from(m.indices.len()).unwrap_or(0);
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("model indices"),
+                contents: bytemuck::cast_slice(&m.indices),
+                usage: wgpu::BufferUsages::INDEX,
+            })
+        });
+        let depth = mesh.is_some() && self.depth.is_some();
+        let pipeline = match mesh {
+            Some(m) if depth => create_pipeline(
+                device,
+                program,
+                plan.blend,
+                self.format,
+                Some(ModelRaster {
+                    cull: m.cull,
+                    test: m.depth_test,
+                    write: m.depth_write,
+                }),
+            ),
+            _ => pipeline,
+        };
         // An empty mesh (blank text) still clears its target; wgpu needs a
         // non-empty buffer to bind.
         let mut contents = data;
@@ -1451,11 +1576,11 @@ impl SceneRenderer {
             target: plan.target,
             load: plan.blend != Blend::Opaque && plan.pass.target.is_some(),
             placement: match plan.geometry {
-                Geometry::Direct {
-                    transform, camera, ..
-                } => Some((transform, camera)),
+                Geometry::Direct { model, camera, .. } => Some((model, camera)),
                 _ => None,
             },
+            indices,
+            depth,
             dirty: false,
             source: None,
             puppet_uv: skinned.map(|_| uv_max),
@@ -1572,6 +1697,7 @@ impl SceneRenderer {
             shift,
             shake,
             scene_load: &mut scene_load,
+            depth_load: wgpu::LoadOp::Clear(0.0),
         };
         for layer in &mut layers {
             self.encode_layer(&mut encoder, layer, &mut frame);
@@ -1602,6 +1728,8 @@ struct FrameState<'a> {
     shift: [f32; 2],
     shake: [f32; 2],
     scene_load: &'a mut wgpu::LoadOp<wgpu::Color>,
+    /// The scene depth buffer is cleared by the first model drawn.
+    depth_load: wgpu::LoadOp<f32>,
 }
 
 impl SceneRenderer {
@@ -1621,7 +1749,7 @@ impl SceneRenderer {
             // Cursor in the system's local pixels (pointer-following control points).
             let [w, h] = self.size.map(|v| v as f32);
             let scene = [f.inputs.pointer[0] * w, (1.0 - f.inputs.pointer[1]) * h];
-            let [a, b, c, d, e, g] = layer.transform;
+            let [a, b, c, d, e, g] = rows_affine(layer.transform);
             let det = a * d - b * c;
             if det.abs() > 1e-9 {
                 let (x, y) = (scene[0] - e, scene[1] - g);
@@ -1639,14 +1767,37 @@ impl SceneRenderer {
                 else {
                     continue;
                 };
-                let view = crate::particles::view(layer.transform, self.size);
+                // 3D scenes project particles through the camera; 2D ones
+                // fake WE's perspective systems on the CPU.
+                let view = crate::particles::view(rows_affine(layer.transform), self.size);
+                let view = self.camera_axes.is_none().then_some(&view);
+                if let Some(axes) = self.camera_axes {
+                    let [right, up, forward] = facing(layer.transform, axes);
+                    for (layout, buf) in [
+                        (&program.vs_uniforms, &mut pass.vs_data),
+                        (&program.fs_uniforms, &mut pass.fs_data),
+                    ] {
+                        layout.write(buf, "g_OrientationRight", &right);
+                        layout.write(buf, "g_OrientationUp", &up);
+                        layout.write(buf, "g_OrientationForward", &forward);
+                        layout.write(buf, "g_ViewRight", &right);
+                        layout.write(buf, "g_ViewUp", &up);
+                    }
+                    pass.dirty = true;
+                }
                 let n = crate::particles::fill(
                     &program.attributes,
                     system,
                     pg.sim.particles(draw.system),
                     draw.capacity,
-                    Some(&view),
+                    view,
                     &mut pg.scratch,
+                );
+                tracing::trace!(
+                    layer = layer.index,
+                    system = draw.system,
+                    particles = n / 6,
+                    "particles drawn"
                 );
                 if n > 0 {
                     gpu.queue
@@ -1764,10 +1915,11 @@ impl SceneRenderer {
         ] {
             let mut dirty = layout.write(buf, "g_Time", &[inputs.time]);
             if let (true, Some((base, camera))) = (moved, pass.placement) {
-                let model = model_rows(offset_transform(base, offset));
+                let model = offset_transform(base, offset);
                 let mvp = upload_matrix(mat_mul(model, camera));
                 dirty |= layout.write(buf, "g_ModelViewProjectionMatrix", &mvp);
                 dirty |= layout.write(buf, "g_ModelMatrix", &upload_matrix(model));
+                dirty |= layout.write(buf, "g_NormalModelMatrix", &normal_matrix(model));
             }
             dirty |= layout.write(buf, "g_Daytime", &[inputs.daytime]);
             dirty |= layout.write(buf, "g_PointerPosition", &inputs.pointer);
@@ -1798,18 +1950,47 @@ impl SceneRenderer {
         } else {
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
         };
-        let mut rp = scene_pass(
-            encoder,
-            &self.targets[pass.target].view,
-            load,
-            &program.name,
-        );
+        let depth = match (&self.depth, pass.depth) {
+            (Some(view), true) => {
+                let load = std::mem::replace(&mut f.depth_load, wgpu::LoadOp::Load);
+                Some((view, load))
+            }
+            _ => None,
+        };
+        let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some(&program.name),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &self.targets[pass.target].view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: depth.map(|(view, load)| {
+                wgpu::RenderPassDepthStencilAttachment {
+                    view,
+                    depth_ops: Some(wgpu::Operations {
+                        load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }
+            }),
+            ..Default::default()
+        });
         rp.set_pipeline(&pass.pipeline);
         rp.set_bind_group(0, &pass.uniforms, &[]);
         rp.set_bind_group(1, &pass.textures, &[]);
         rp.set_vertex_buffer(0, pass.vertices.slice(..));
-        if pass.vertex_count > 0 {
-            rp.draw(0..pass.vertex_count, 0..1);
+        match &pass.indices {
+            Some(indices) if pass.vertex_count > 0 => {
+                rp.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
+                rp.draw_indexed(0..pass.vertex_count, 0, 0..1);
+            }
+            None if pass.vertex_count > 0 => rp.draw(0..pass.vertex_count, 0..1),
+            _ => {}
         }
     }
 
@@ -1889,10 +2070,86 @@ fn drift(t: f32, seed: u32, roughness: f32) -> f32 {
     (octave(t, seed) + rough * octave(t * 2.7 + 13.0, seed ^ 0x5bd1)) / (1.0 + rough)
 }
 
-fn offset_transform(mut t: [f32; 6], offset: [f32; 2]) -> [f32; 6] {
-    t[4] += offset[0];
-    t[5] += offset[1];
+fn offset_transform(mut t: Rows, offset: [f32; 2]) -> Rows {
+    t[3][0] += offset[0];
+    t[3][1] += offset[1];
     t
+}
+
+/// Camera axes (world) in a layer's local space, normalised: the directions
+/// WE's particle shaders expand billboards along (`g_OrientationRight/Up/
+/// Forward`; capture of 3509243656: right = (0.883, 0, 0.470) for a system
+/// turned 28° about y).
+fn facing(model: Rows, axes: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
+    let inverse = lumen_scene::space::invert_mat4(model).unwrap_or(IDENTITY_ROWS);
+    axes.map(|a| {
+        let v: [f32; 3] = std::array::from_fn(|c| {
+            a[0] * inverse[0][c] + a[1] * inverse[1][c] + a[2] * inverse[2][c]
+        });
+        let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        if len > 1e-9 { v.map(|x| x / len) } else { a }
+    })
+}
+
+/// A layer's placement: its 3D world matrix in perspective scenes, else its
+/// 2D transform.
+fn placement(layer: &ir::ImageLayer) -> Rows {
+    layer.world.unwrap_or_else(|| model_rows(layer.transform))
+}
+
+/// The 2D part of a placement (`[m0..m5]`, see [`ir::ImageLayer::transform`]).
+fn rows_affine(t: Rows) -> [f32; 6] {
+    [t[0][0], t[0][1], t[1][0], t[1][1], t[3][0], t[3][1]]
+}
+
+/// `g_NormalModelMatrix`: inverse transpose of the model's 3×3 (row-vector),
+/// in upload (column) order.
+fn normal_matrix(model: Rows) -> [f32; 9] {
+    let m = |r: usize, c: usize| model[r][c];
+    let cof = |r: usize, c: usize| {
+        let (r0, r1) = ((r + 1) % 3, (r + 2) % 3);
+        let (c0, c1) = ((c + 1) % 3, (c + 2) % 3);
+        m(r0, c0) * m(r1, c1) - m(r0, c1) * m(r1, c0)
+    };
+    let det = m(0, 0) * cof(0, 0) + m(0, 1) * cof(0, 1) + m(0, 2) * cof(0, 2);
+    let inv = if det.abs() < 1e-20 { 0.0 } else { 1.0 / det };
+    // (M⁻¹)ᵀ = cofactor matrix / det; upload columns.
+    std::array::from_fn(|i| cof(i % 3, i / 3) * inv)
+}
+
+/// Raster state of a model draw.
+#[derive(Debug, Clone, Copy)]
+struct ModelRaster {
+    cull: ir::Cull,
+    test: bool,
+    write: bool,
+}
+
+/// Vertices of a model, one per mesh vertex (drawn indexed), attributes
+/// filled by name.
+fn model_vertices(attributes: &[ir::Attribute], model: &ir::Model) -> Vec<f32> {
+    let stride: usize = attributes
+        .iter()
+        .map(|a| a.components.clamp(1, 4) as usize)
+        .sum();
+    let mut out = Vec::with_capacity(model.vertices.len() * stride);
+    for v in &model.vertices {
+        let [x, y, z] = v.position;
+        let [nx, ny, nz] = v.normal;
+        for a in attributes {
+            let n = a.components.clamp(1, 4) as usize;
+            let values = match a.name.as_str() {
+                "a_Position" => [x, y, z, 1.0],
+                "a_Normal" => [nx, ny, nz, 0.0],
+                "a_Tangent4" | "a_Tangent" => v.tangent,
+                "a_TexCoord" => [v.uv[0], v.uv[1], 0.0, 0.0],
+                "a_Color" | "a_Color4u" => [1.0; 4],
+                _ => [0.0; 4],
+            };
+            out.extend_from_slice(&values[..n]);
+        }
+    }
+    out
 }
 
 fn scene_pass<'e>(
@@ -1921,6 +2178,7 @@ struct BuildContext<'a> {
     scene: &'a ir::Scene,
     assets: &'a [AssetTexture],
     placeholder: &'a AssetTexture,
+    empty: &'a AssetTexture,
     samplers: &'a [wgpu::Sampler],
     uniforms_layout: &'a wgpu::BindGroupLayout,
 }
@@ -1939,6 +2197,8 @@ struct PassPlan<'a> {
     mesh: Option<&'a [ir::MeshQuad]>,
     /// Skinned mesh replacing the albedo's quad (re-posed every frame).
     puppet: Option<&'a ir::puppet::Puppet>,
+    /// 3D mesh replacing the albedo's quad (drawn with depth).
+    model: Option<&'a ir::Model>,
     /// The layer's glyph atlas and its resolution (text layers).
     atlas: Option<(&'a wgpu::TextureView, [f32; 4])>,
 }
@@ -1946,14 +2206,14 @@ struct PassPlan<'a> {
 #[derive(Debug, Clone, Copy)]
 enum Geometry {
     /// Albedo into the layer's own target: centred quad through a centred
-    /// ortho MVP; `transform` places it in the scene for lighting
+    /// ortho MVP; `model` places it in the scene for lighting
     /// (`g_AltModelMatrix`, WE's PRELIGHTING path).
-    LayerTarget { size: [u32; 2], transform: [f32; 6] },
-    /// Albedo placed by `transform` and drawn through `camera` (the scene's,
+    LayerTarget { size: [u32; 2], model: Rows },
+    /// Albedo placed by `model` and drawn through `camera` (the scene's,
     /// or a composition group's when drawing into its target): centred quad.
     Direct {
         size: [u32; 2],
-        transform: [f32; 6],
+        model: Rows,
         camera: Rows,
     },
     /// Effect pass: clip-space quad.
@@ -2048,19 +2308,22 @@ fn puppet_vertices(
 }
 
 /// Layer quad in the scene's clip space: pos.xy + uv per vertex (strip order).
-fn composite_quad(size: [u32; 2], t: [f32; 6], camera: Rows) -> [f32; 16] {
+fn composite_quad(size: [u32; 2], t: Rows, camera: Rows) -> [f32; 16] {
     let half = size.map(|v| v as f32 * 0.5);
+    let m = mat_mul(t, camera);
     let mut out = [0.0; 16];
     for (i, (x, y)) in [(-1.0f32, -1.0f32), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)]
         .into_iter()
         .enumerate()
     {
         let (lx, ly) = (x * half[0], y * half[1]);
-        let px = t[0] * lx + t[2] * ly + t[4];
-        let py = t[1] * lx + t[3] * ly + t[5];
+        let clip: [f32; 4] = std::array::from_fn(|c| lx * m[0][c] + ly * m[1][c] + m[3][c]);
+        // Perspective scenes: project the corner (uv then interpolates
+        // affinely across the quad).
+        let w = if clip[3].abs() > 1e-9 { clip[3] } else { 1.0 };
         out[i * 4..i * 4 + 4].copy_from_slice(&[
-            px * camera[0][0] + py * camera[1][0] + camera[3][0],
-            px * camera[0][1] + py * camera[1][1] + camera[3][1],
+            clip[0] / w,
+            clip[1] / w,
             (x + 1.0) * 0.5,
             (1.0 - y) * 0.5,
         ]);
@@ -2101,6 +2364,8 @@ fn stripped(scene: &ir::Scene) -> ir::Scene {
         shake: scene.shake,
         parallax: scene.parallax,
         point_lights: scene.point_lights.clone(),
+        camera: scene.camera,
+        nodes: scene.nodes.clone(),
         layers: scene.layers.clone(),
         textures: Vec::new(),
         fonts: scene.fonts.clone(),
@@ -2111,7 +2376,7 @@ fn stripped(scene: &ir::Scene) -> ir::Scene {
 /// Fills a layer target with the frame under the layer: a quad over the whole
 /// target sampling the frame snapshot where `composite_quad` would land
 /// (strip order, pos.xy + uv).
-fn background_quad(size: [u32; 2], t: [f32; 6], camera: Rows) -> [f32; 16] {
+fn background_quad(size: [u32; 2], t: Rows, camera: Rows) -> [f32; 16] {
     let placed = composite_quad(size, t, camera);
     let mut out = [0.0; 16];
     for (i, (x, y)) in [(-1.0f32, -1.0f32), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)]
@@ -2283,7 +2548,7 @@ fn build_program(
         pipelines: HashMap::new(),
     };
     for blend in [Blend::Opaque, Blend::Translucent, Blend::Additive] {
-        let pipeline = create_pipeline(device, &program, blend, format);
+        let pipeline = create_pipeline(device, &program, blend, format, None);
         program.pipelines.insert(blend, pipeline);
     }
     if let Some(e) = pollster::block_on(scope.pop()) {
@@ -2297,6 +2562,7 @@ fn create_pipeline(
     p: &Program,
     blend: Blend,
     format: wgpu::TextureFormat,
+    model: Option<ModelRaster>,
 ) -> wgpu::RenderPipeline {
     let mut offset = 0;
     let attributes: Vec<wgpu::VertexAttribute> = p
@@ -2344,9 +2610,27 @@ fn create_pipeline(
         }),
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleList,
+            // Counter-clockwise fronts: 3509243656's sky is two shells, the
+            // inner one (shown by WE) wound CCW towards the camera.
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: match model.map(|m| m.cull) {
+                Some(ir::Cull::Back) => Some(wgpu::Face::Back),
+                _ => None,
+            },
             ..Default::default()
         },
-        depth_stencil: None,
+        // Reversed depth (near = 1), cleared to 0.
+        depth_stencil: model.map(|m| wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: Some(m.write),
+            depth_compare: Some(if m.test {
+                wgpu::CompareFunction::GreaterEqual
+            } else {
+                wgpu::CompareFunction::Always
+            }),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
         cache: None,
@@ -2464,6 +2748,29 @@ mod tests {
     }
 
     #[test]
+    fn particles_face_the_camera_in_local_space() {
+        // 3509243656: a nebula system turned 28° about y and scaled 1.5,
+        // camera unrotated → right = (0.883, 0, 0.470) as captured.
+        let model =
+            lumen_scene::space::trs_mat4([0.0; 3], [0.0, 28f32.to_radians(), 0.0], [1.5; 3]);
+        let axes = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        let [right, up, forward] = facing(model, axes);
+        let close = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-3);
+        assert!(close(right, [0.8829, 0.0, 0.4695]), "{right:?}");
+        assert!(close(up, [0.0, 1.0, 0.0]));
+        assert!(close(forward, [-0.4695, 0.0, 0.8829]), "{forward:?}");
+    }
+
+    #[test]
+    fn normal_matrix_undoes_non_uniform_scale() {
+        // Scale (2, 1, 1): a normal along x stays along x, (1, 1, 0) tilts
+        // towards y (inverse transpose), in column upload order.
+        let model = lumen_scene::space::trs_mat4([5.0, 0.0, 0.0], [0.0; 3], [2.0, 1.0, 1.0]);
+        let n = normal_matrix(model);
+        assert_eq!(n, [0.5, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
     fn matrices_upload_as_columns() {
         let m = upload_matrix(mat_mul(IDENTITY_ROWS, ortho_rows(3840.0, 2160.0)));
         // Column 0 = (2/w, 0, 0, -1): x' = 2x/w - 1.
@@ -2497,7 +2804,7 @@ mod tests {
         ];
         let geometry = Geometry::LayerTarget {
             size: [100, 50],
-            transform: lumen_scene::IDENTITY_AFFINE,
+            model: IDENTITY_ROWS,
         };
         let q = pass_vertices(&attrs, geometry, [0.5, 1.0], None);
         assert_eq!(q.len(), 6 * 5);
