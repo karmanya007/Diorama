@@ -45,6 +45,18 @@ pub struct FrameInputs {
     pub daytime: f32,
     /// Cursor in scene UV, 0..1, y down (`g_PointerPosition`).
     pub pointer: [f32; 2],
+    /// Audio spectrum, 64 bands per channel (left, right), 0..1, bass first
+    /// (`g_AudioSpectrum{16,32,64}{Left,Right}`, audio-driven emitters).
+    pub audio: [[f32; 64]; 2],
+}
+
+/// The 64 bands folded to `n` by averaging neighbours.
+fn fold_bands(bands: &[f32; 64], n: usize) -> Vec<f32> {
+    let group = 64 / n.clamp(1, 64);
+    bands
+        .chunks(group.max(1))
+        .map(|c| c.iter().sum::<f32>() / c.len() as f32)
+        .collect()
 }
 
 /// Runtime changes to one layer (from scripts). `None` / empty = unchanged.
@@ -79,6 +91,7 @@ impl Default for FrameInputs {
             time: 0.0,
             daytime: 0.5,
             pointer: [0.5, 0.5],
+            audio: [[0.0; 64]; 2],
         }
     }
 }
@@ -1465,9 +1478,21 @@ impl SceneRenderer {
         // The scene target is cleared by whichever pass touches it first.
         let mut scene_load = wgpu::LoadOp::Clear(self.clear);
         let mut layers = std::mem::take(&mut self.layers);
+        let mut audio = Vec::with_capacity(6);
+        for (n, left, right) in [
+            (16, "g_AudioSpectrum16Left", "g_AudioSpectrum16Right"),
+            (32, "g_AudioSpectrum32Left", "g_AudioSpectrum32Right"),
+            (64, "g_AudioSpectrum64Left", "g_AudioSpectrum64Right"),
+        ] {
+            audio.push((left, fold_bands(&inputs.audio[0], n)));
+            audio.push((right, fold_bands(&inputs.audio[1], n)));
+        }
+        let audio_level = inputs.audio.iter().flatten().sum::<f32>() / 128.0;
         let mut frame = FrameState {
             gpu,
             inputs,
+            audio,
+            audio_level,
             shift,
             shake,
             scene_load: &mut scene_load,
@@ -1494,6 +1519,10 @@ struct Frame {
 struct FrameState<'a> {
     gpu: &'a Gpu,
     inputs: &'a FrameInputs,
+    /// Spectrum uniforms for this frame (name, values).
+    audio: Vec<(&'static str, Vec<f32>)>,
+    /// Mean audio level 0..1 (audio-driven particle emitters).
+    audio_level: f32,
     shift: [f32; 2],
     shake: [f32; 2],
     scene_load: &'a mut wgpu::LoadOp<wgpu::Color>,
@@ -1523,6 +1552,7 @@ impl SceneRenderer {
                 pg.sim
                     .set_pointer(Some([(d * x - c * y) / det, (-b * x + a * y) / det, 0.0]));
             }
+            pg.sim.set_audio_level(f.audio_level);
             pg.sim.advance_to(f.inputs.time);
             for draw in &pg.draws {
                 let Some(pass) = layer.passes.get_mut(draw.pass) else {
@@ -1647,6 +1677,9 @@ impl SceneRenderer {
             dirty |= layout.write(buf, "g_Daytime", &[inputs.daytime]);
             dirty |= layout.write(buf, "g_PointerPosition", &inputs.pointer);
             dirty |= layout.write(buf, "g_PointerPositionLast", &inputs.pointer);
+            for (name, values) in &f.audio {
+                dirty |= layout.write(buf, name, values);
+            }
             if dirty || pass.dirty {
                 f.gpu.queue.write_buffer(gpu_buf, 0, buf);
             }

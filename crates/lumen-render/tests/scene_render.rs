@@ -338,3 +338,39 @@ fn copy_background_fills_colour_but_not_alpha() {
     assert_eq!(px(&img, 64, 16, 16), [255, 0, 0, 255], "gap with copy");
     assert_eq!(px(&img, 64, 8, 16), [0, 255, 0, 255], "glyph with copy");
 }
+
+/// Paints the first bass band of the left spectrum as red.
+const SPECTRUM: &str = r"
+cbuffer WeVertexUniforms : register(b0, space0) { float4x4 g_ModelViewProjectionMatrix; };
+cbuffer WeFragmentUniforms : register(b1, space0) { float g_AudioSpectrum16Left[16]; };
+Texture2D g_Texture0 : register(t0, space1);
+SamplerState g_Texture0SamplerState : register(s1, space1);
+struct VsIn { [[vk::location(0)]] float3 pos : ATTRIBUTE0; [[vk::location(1)]] float2 uv : ATTRIBUTE1; };
+struct VsOut { float4 position : SV_Position; [[vk::location(0)]] float2 uv : TEXCOORD0; };
+VsOut vs(VsIn i) { VsOut o; o.position = mul(float4(i.pos, 1.0), g_ModelViewProjectionMatrix); o.uv = i.uv; return o; }
+float4 ps(VsOut i) : SV_Target0 { return float4(g_AudioSpectrum16Left[0] + 0.0 * g_Texture0.Sample(g_Texture0SamplerState, i.uv).r, 0.0, 0.0, 1.0); }
+";
+
+#[test]
+fn audio_spectrum_reaches_shaders() {
+    let Some((gpu, compiler)) = setup() else {
+        return;
+    };
+    let mut s = scene();
+    s.programs.push(program("spectrum", SPECTRUM));
+    s.layers.truncate(1);
+    s.layers[0].albedo = pass(3, TextureBinding::Asset(TextureId(0)), Blend::Opaque);
+    let mut r = SceneRenderer::new(&gpu, &s, &compiler, None).unwrap();
+    let mut audio = [[0.0f32; 64]; 2];
+    audio[0][..4].copy_from_slice(&[0.5; 4]);
+    r.render(
+        &gpu,
+        &FrameInputs {
+            audio,
+            ..FrameInputs::default()
+        },
+    );
+    let img = r.read_output(&gpu).unwrap();
+    let red = px(&img, 64, 16, 16)[0];
+    assert!((126..=129).contains(&red), "{red}");
+}

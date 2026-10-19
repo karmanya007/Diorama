@@ -58,6 +58,8 @@ pub struct Inputs {
     pub pointer_active: bool,
     /// Left mouse button held on the desktop.
     pub left_down: bool,
+    /// Audio spectrum, 64 bands per channel (left, right), 0..1.
+    pub audio: [[f32; 64]; 2],
 }
 
 /// What changed about one layer this frame. `None` / empty = unchanged.
@@ -398,6 +400,7 @@ impl ScriptHost {
                 "down": inputs.left_down,
                 "hits": self.hits(inputs),
                 "events": events,
+                "audio": [inputs.audio[0].to_vec(), inputs.audio[1].to_vec()],
             })
             .to_string();
             let args = (

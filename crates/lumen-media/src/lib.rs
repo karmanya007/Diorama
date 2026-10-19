@@ -15,13 +15,16 @@ use std::time::Duration;
 // Only the Windows audio backend resamples so far; the tests run everywhere.
 #[cfg_attr(not(windows), allow(dead_code))]
 mod resample;
+pub mod spectrum;
 #[cfg(windows)]
 mod windows;
 
 #[cfg(not(windows))]
-pub use unsupported_audio::AudioPlayer;
+pub use unsupported_audio::{AudioCapture, AudioPlayer};
 #[cfg(windows)]
 pub use windows::audio::AudioPlayer;
+#[cfg(windows)]
+pub use windows::capture::AudioCapture;
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
@@ -291,6 +294,22 @@ mod unsupported_audio {
     /// Uninhabited until a non-Windows audio backend exists.
     #[derive(Debug)]
     pub enum AudioPlayer {}
+
+    /// Uninhabited until a non-Windows capture backend exists.
+    #[derive(Debug)]
+    pub enum AudioCapture {}
+
+    impl AudioCapture {
+        pub fn start() -> Result<Self> {
+            Err(Error::Unsupported)
+        }
+        pub fn spectrum(&self, _dt: f32) -> crate::spectrum::AudioSpectrum {
+            match *self {}
+        }
+        pub fn needs_reopen(&self) -> bool {
+            match *self {}
+        }
+    }
 
     impl AudioPlayer {
         pub fn spawn(_path: &Path, _volume: f32) -> Result<Self> {

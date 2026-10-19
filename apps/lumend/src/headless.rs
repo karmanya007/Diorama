@@ -111,7 +111,14 @@ pub fn render_to_png(
         for i in 0..=frames {
             let t = time - warm_up + warm_up * i as f32 / frames.max(1) as f32;
             let clock = clock_ms - f64::from(time - t) * 1000.0;
-            scripts.frame(&gpu, &mut renderer, t, clock, pointer, None);
+            let frame = crate::scripts::ScriptFrame {
+                time: t,
+                clock_ms: clock,
+                pointer,
+                buttons: None,
+                audio: [[0.0; 64]; 2],
+            };
+            scripts.frame(&gpu, &mut renderer, &frame);
         }
     }
     renderer.render(
@@ -120,6 +127,7 @@ pub fn render_to_png(
             time,
             pointer,
             daytime: crate::scripts::day_fraction_at(clock_ms),
+            ..FrameInputs::default()
         },
     );
     if dump_targets {

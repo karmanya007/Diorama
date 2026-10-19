@@ -193,7 +193,29 @@
 		getCameraTransforms() { return { eye: new Vec3(0, 0, 0), center: new Vec3(0, 0, -1), up: new Vec3(0, 1, 0) }; },
 	};
 
-	const audio = (n) => ({ left: new Float32Array(n), right: new Float32Array(n), average: new Float32Array(n), resolution: n });
+	// Audio buffers scripts registered; refilled every frame from the host's
+	// 64-band spectrum.
+	const audioBuffers = [];
+	const audio = (n) => {
+		n = [16, 32, 64].includes(Number(n)) ? Number(n) : 16;
+		const b = { left: new Float32Array(n), right: new Float32Array(n), average: new Float32Array(n), resolution: n };
+		audioBuffers.push(b);
+		return b;
+	};
+	function fillAudio(spectrum) {
+		if (!Array.isArray(spectrum) || spectrum.length < 2) return;
+		const [l, r] = spectrum;
+		for (const b of audioBuffers) {
+			const group = 64 / b.resolution;
+			for (let i = 0; i < b.resolution; i++) {
+				let sl = 0, sr = 0;
+				for (let k = 0; k < group; k++) { sl += l[i * group + k] || 0; sr += r[i * group + k] || 0; }
+				b.left[i] = sl / group;
+				b.right[i] = sr / group;
+				b.average[i] = (b.left[i] + b.right[i]) / 2;
+			}
+		}
+	}
 	const engine = {
 		frametime: 0, runtime: 0, timeOfDay: 0,
 		userProperties: {},
@@ -448,6 +470,7 @@
 	function pointer(cx, cy, state) {
 		const world = new Vec3(cx, cy, 0);
 		const down = !!state.down;
+		fillAudio(state.audio);
 		const hits = new Map((state.hits || []).map((h) => [h[0], [h[1], h[2]]]));
 		const moved = lastCursor !== cx + ',' + cy;
 		lastCursor = cx + ',' + cy;

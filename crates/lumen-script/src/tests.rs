@@ -117,6 +117,7 @@ fn inputs(runtime: f64) -> Inputs {
         daytime: 0.5,
         pointer_active: false,
         left_down: false,
+        audio: [[0.0; 64]; 2],
     }
 }
 
@@ -311,4 +312,28 @@ fn events_reach_every_script_with_a_handler() {
     );
     let changes = host.update(&inputs(0.0));
     assert_eq!(changes[&0].text.as_deref(), Some("true true 0.5"));
+}
+
+#[test]
+fn audio_buffers_follow_the_spectrum() {
+    let meter = script(
+        "let audio = engine.registerAudioBuffers(16);
+export function update(value) { return audio.left[0].toFixed(2) + ' ' + audio.right[15].toFixed(2) + ' ' + audio.average[0].toFixed(2); }",
+        0,
+        ScriptTarget::Text(0),
+        "{}",
+    );
+    let mut host = ScriptHost::new(&scene(vec![meter]), [100, 100], CLOCK)
+        .unwrap()
+        .unwrap();
+    let mut left = [0.0; 64];
+    left[..4].copy_from_slice(&[1.0, 1.0, 0.0, 0.0]);
+    let mut right = [0.0; 64];
+    right[60..].copy_from_slice(&[0.2; 4]);
+    let changes = host.update(&Inputs {
+        audio: [left, right],
+        ..inputs(0.0)
+    });
+    // 64 → 16 bands: averages of four.
+    assert_eq!(changes[&0].text.as_deref(), Some("0.50 0.20 0.25"));
 }

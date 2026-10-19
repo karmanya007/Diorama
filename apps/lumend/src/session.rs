@@ -125,10 +125,53 @@ enum Renderer {
     Scene {
         scene: Box<SceneRenderer>,
         scripts: Option<Box<crate::scripts::SceneScripts>>,
+        /// What the system plays, for audio-reactive scenes.
+        audio: Option<SceneAudio>,
         blit: ImageBlit,
         /// Fills monitor areas the scene does not cover (fit/custom pan), as WE.
         clear: [f32; 4],
     },
+}
+
+/// Loopback capture of the system's audio for a scene, reopened when the
+/// default output device changes.
+pub struct SceneAudio {
+    capture: Option<lumen_media::AudioCapture>,
+    last_time: Option<f32>,
+    next_check: f32,
+}
+
+impl SceneAudio {
+    fn start() -> Option<Self> {
+        let capture = match lumen_media::AudioCapture::start() {
+            Ok(c) => Some(c),
+            Err(e) => {
+                tracing::info!("audio capture unavailable: {e}");
+                None
+            }
+        };
+        Some(Self {
+            capture,
+            last_time: None,
+            next_check: 2.0,
+        })
+    }
+
+    /// (left, right) 64-band spectrum at scene time `time`.
+    fn spectrum(&mut self, time: f32) -> [[f32; 64]; 2] {
+        let dt = self.last_time.map_or(0.0, |t| (time - t).max(0.0));
+        self.last_time = Some(time);
+        if time >= self.next_check {
+            self.next_check = time + 2.0;
+            if self.capture.as_ref().is_none_or(|c| c.needs_reopen()) {
+                self.capture = lumen_media::AudioCapture::start().ok();
+            }
+        }
+        self.capture.as_ref().map_or([[0.0; 64]; 2], |c| {
+            let s = c.spectrum(dt);
+            [s.left, s.right]
+        })
+    }
 }
 
 /// One monitor's wallpaper. Field order matters: the surface must drop before its window.
@@ -240,6 +283,7 @@ impl Session {
                 Renderer::Scene {
                     scene: Box::new(renderer),
                     scripts,
+                    audio: SceneAudio::start(),
                     blit,
                     clear: scene_clear,
                 }
@@ -308,9 +352,23 @@ impl Session {
         pointer: [f32; 2],
         buttons: Option<lumen_platform::DesktopPointer>,
     ) -> Result<()> {
-        if let Renderer::Scene { scene, scripts, .. } = &mut self.renderer {
+        if let Renderer::Scene {
+            scene,
+            scripts,
+            audio,
+            ..
+        } = &mut self.renderer
+        {
+            let spectrum = audio.as_mut().map_or([[0.0; 64]; 2], |a| a.spectrum(time));
             if let Some(scripts) = scripts {
-                scripts.frame(gpu, scene, time, crate::scripts::now_ms(), pointer, buttons);
+                let frame = crate::scripts::ScriptFrame {
+                    time,
+                    clock_ms: crate::scripts::now_ms(),
+                    pointer,
+                    buttons,
+                    audio: spectrum,
+                };
+                scripts.frame(gpu, scene, &frame);
             }
             scene.render(
                 gpu,
@@ -318,6 +376,7 @@ impl Session {
                     time,
                     pointer,
                     daytime: lumen_platform::day_fraction(),
+                    audio: spectrum,
                 },
             );
             self.present_all(gpu)?;

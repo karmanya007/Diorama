@@ -10,6 +10,21 @@ use lumen_scene::Scene;
 use lumen_script::{Inputs, ScriptHost, thumbnail_colors};
 use serde_json::json;
 
+/// What one script frame sees.
+#[derive(Debug, Clone, Copy)]
+pub struct ScriptFrame {
+    /// Scene time, seconds.
+    pub time: f32,
+    /// Wall clock, Unix milliseconds.
+    pub clock_ms: f64,
+    /// Cursor in scene UV (y down).
+    pub pointer: [f32; 2],
+    /// Mouse on the wallpaper; `None` when the cursor is elsewhere.
+    pub buttons: Option<DesktopPointer>,
+    /// (left, right) 64-band audio spectrum.
+    pub audio: [[f32; 64]; 2],
+}
+
 pub struct SceneScripts {
     host: ScriptHost,
     /// Layer names, for logs.
@@ -71,18 +86,15 @@ impl SceneScripts {
         }
     }
 
-    /// Runs one script frame at scene time `time` and applies the changes.
-    /// `pointer` is the cursor in scene UV (y down); `buttons` is `None`
-    /// when the cursor is not on the wallpaper (no cursor events).
-    pub fn frame(
-        &mut self,
-        gpu: &Gpu,
-        renderer: &mut SceneRenderer,
-        time: f32,
-        clock_ms: f64,
-        pointer: [f32; 2],
-        buttons: Option<DesktopPointer>,
-    ) {
+    /// Runs one script frame and applies the changes to `renderer`.
+    pub fn frame(&mut self, gpu: &Gpu, renderer: &mut SceneRenderer, frame: &ScriptFrame) {
+        let ScriptFrame {
+            time,
+            clock_ms,
+            pointer,
+            buttons,
+            audio,
+        } = *frame;
         let frametime = self.last_time.map_or(0.0, |t| (time - t).max(0.0));
         self.last_time = Some(time);
         if let Some(media) = &mut self.media {
@@ -96,6 +108,7 @@ impl SceneScripts {
             daytime: day_fraction_at(clock_ms),
             pointer_active: buttons.is_some_and(|b| b.over_desktop),
             left_down: buttons.is_some_and(|b| b.left_down),
+            audio,
         });
         for (layer, c) in changes {
             tracing::trace!(
