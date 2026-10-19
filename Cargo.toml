@@ -7,6 +7,7 @@ members = [
     "crates/lumen-gpu",
     "crates/lumen-ipc",
     "crates/lumen-media",
+    "crates/lumen-particles",
     "crates/lumen-platform",
     "crates/lumen-render",
     "crates/lumen-scene",
@@ -32,6 +33,7 @@ lumen-we = { path = "crates/lumen-we", version = "0.0.1" }
 lumen-gpu = { path = "crates/lumen-gpu", version = "0.0.1" }
 lumen-ipc = { path = "crates/lumen-ipc", version = "0.0.1" }
 lumen-media = { path = "crates/lumen-media", version = "0.0.1" }
+lumen-particles = { path = "crates/lumen-particles", version = "0.0.1" }
 lumen-platform = { path = "crates/lumen-platform", version = "0.0.1" }
 lumen-render = { path = "crates/lumen-render", version = "0.0.1" }
 lumen-scene = { path = "crates/lumen-scene", version = "0.0.1" }

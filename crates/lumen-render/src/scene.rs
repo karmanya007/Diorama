@@ -158,6 +158,8 @@ struct GpuLayer {
     /// Layers drawn into this composition layer's target, after the first
     /// `children_at` passes (its albedo) and before its effects.
     children: Vec<GpuLayer>,
+    /// Particle simulation feeding this layer's passes (one per system).
+    particles: Option<crate::particles::ParticleGpu>,
     children_at: usize,
     blend: Blend,
     /// Samples `_rt_FullFrameBuffer`: snapshot the scene before running.
@@ -664,6 +666,114 @@ impl SceneRenderer {
         index
     }
 
+    /// A particle layer: one draw per system of the tree, each with a vertex
+    /// buffer the simulation refills every frame.
+    fn build_particles(
+        &mut self,
+        ctx: &BuildContext<'_>,
+        index: usize,
+        frame: Frame,
+        layer: &ir::ImageLayer,
+        tree: &ir::ParticleSystem,
+    ) -> Option<GpuLayer> {
+        use crate::particles::{self as pt, ParticleGpu, SystemDraw};
+        let device = &ctx.gpu.device;
+        let mut passes = Vec::new();
+        let mut draws = Vec::new();
+        let mut needs_framebuffer = false;
+        let sim = lumen_particles::Simulation::new(tree, pt::seed(index, &layer.name));
+        for (system_index, system) in pt::systems(tree).into_iter().enumerate() {
+            let plan = PassPlan {
+                pass: &system.draw,
+                blend: system.draw.blend,
+                previous: None,
+                fbos: &HashMap::new(),
+                target: frame.target,
+                geometry: Geometry::Direct {
+                    size: [1, 1],
+                    transform: layer.transform,
+                    camera: frame.camera,
+                },
+                color: [1.0; 4],
+                mesh: None,
+                atlas: None,
+            };
+            let Some(mut pass) = self.build_pass(ctx, &plan) else {
+                continue;
+            };
+            let Some(Some(program)) = self.programs.get(pass.program) else {
+                continue;
+            };
+            needs_framebuffer |= system
+                .draw
+                .textures
+                .values()
+                .any(|t| *t == TextureBinding::FrameBuffer);
+            pass.load |= frame.target != SCENE;
+            let stride: u64 = program
+                .attributes
+                .iter()
+                .map(|a| u64::from(a.components.clamp(1, 4)))
+                .sum();
+            let capacity = u32::try_from(sim.capacity(system_index))
+                .unwrap_or(u32::MAX)
+                .clamp(1, 1 << 20)
+                .saturating_mul(6);
+            pass.vertices = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("particle vertices"),
+                size: u64::from(capacity) * stride.max(1) * 4,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            pass.vertex_count = 0;
+            let (var0, var1) = pt::render_vars(system);
+            let inverse = upload_matrix(inverse_model_rows(layer.transform));
+            for (layout, buf) in [
+                (&program.vs_uniforms, &mut pass.vs_data),
+                (&program.fs_uniforms, &mut pass.fs_data),
+            ] {
+                layout.write(buf, "g_RenderVar0", &var0);
+                layout.write(buf, "g_RenderVar1", &var1);
+                // Screen-facing quads in an orthographic view.
+                layout.write(buf, "g_OrientationRight", &[1.0, 0.0, 0.0]);
+                layout.write(buf, "g_OrientationUp", &[0.0, 1.0, 0.0]);
+                layout.write(buf, "g_OrientationForward", &[0.0, 0.0, 1.0]);
+                layout.write(buf, "g_ViewRight", &[1.0, 0.0, 0.0]);
+                layout.write(buf, "g_ViewUp", &[0.0, 1.0, 0.0]);
+                layout.write(buf, "g_ModelMatrixInverse", &inverse);
+            }
+            pass.dirty = true;
+            draws.push(SystemDraw {
+                system: system_index,
+                pass: passes.len(),
+                capacity,
+            });
+            passes.push(pass);
+        }
+        Some(GpuLayer {
+            index,
+            frame,
+            visible: layer.visible,
+            owned: Vec::new(),
+            passes,
+            background: None,
+            particles: Some(ParticleGpu {
+                sim,
+                draws,
+                scratch: Vec::new(),
+            }),
+            composite: None,
+            children: Vec::new(),
+            children_at: 0,
+            blend: layer.blend,
+            needs_framebuffer,
+            size: layer.size,
+            transform: layer.transform,
+            parallax_depth: layer.parallax_depth,
+            offset: [0.0, 0.0],
+        })
+    }
+
     /// Layer `index` as it should be built now: IR plus script state, with
     /// text laid out (size, centred transform, glyph mesh).
     fn effective_layer(&mut self, gpu: &Gpu, scene: &ir::Scene, index: usize) -> ir::ImageLayer {
@@ -723,6 +833,9 @@ impl SceneRenderer {
         composite_layout: &wgpu::BindGroupLayout,
     ) -> Option<GpuLayer> {
         let layer = &self.effective_layer(ctx.gpu, ctx.scene, index);
+        if let Some(tree) = crate::particles::tree(layer) {
+            return self.build_particles(ctx, index, frame, layer, tree);
+        }
         let atlas = self
             .texts
             .get(&index)
@@ -771,6 +884,7 @@ impl SceneRenderer {
                 owned,
                 passes: vec![pass],
                 background: None,
+                particles: None,
                 composite: None,
                 children: Vec::new(),
                 children_at: 0,
@@ -948,6 +1062,7 @@ impl SceneRenderer {
                     owned,
                     passes,
                     background,
+                    particles: None,
                     composite: None,
                     children,
                     children_at,
@@ -991,6 +1106,7 @@ impl SceneRenderer {
             owned,
             passes,
             background,
+            particles: None,
             composite: Some((composite, composite_vertices, frame.target, frame.camera)),
             children,
             children_at,
@@ -1396,6 +1512,43 @@ impl SceneRenderer {
             return;
         }
         let gpu = f.gpu;
+        if let Some(pg) = &mut layer.particles {
+            // Cursor in the system's local pixels (pointer-following control points).
+            let [w, h] = self.size.map(|v| v as f32);
+            let scene = [f.inputs.pointer[0] * w, (1.0 - f.inputs.pointer[1]) * h];
+            let [a, b, c, d, e, g] = layer.transform;
+            let det = a * d - b * c;
+            if det.abs() > 1e-9 {
+                let (x, y) = (scene[0] - e, scene[1] - g);
+                pg.sim
+                    .set_pointer(Some([(d * x - c * y) / det, (-b * x + a * y) / det, 0.0]));
+            }
+            pg.sim.advance_to(f.inputs.time);
+            for draw in &pg.draws {
+                let Some(pass) = layer.passes.get_mut(draw.pass) else {
+                    continue;
+                };
+                let (Some(Some(program)), Some(system)) =
+                    (self.programs.get(pass.program), pg.sim.system(draw.system))
+                else {
+                    continue;
+                };
+                let view = crate::particles::view(layer.transform, self.size);
+                let n = crate::particles::fill(
+                    &program.attributes,
+                    system,
+                    pg.sim.particles(draw.system),
+                    draw.capacity,
+                    Some(&view),
+                    &mut pg.scratch,
+                );
+                if n > 0 {
+                    gpu.queue
+                        .write_buffer(&pass.vertices, 0, bytemuck::cast_slice(&pg.scratch));
+                }
+                pass.vertex_count = n;
+            }
+        }
         let offset = [
             f.shift[0] * layer.parallax_depth[0] + f.shake[0],
             f.shift[1] * layer.parallax_depth[1] + f.shake[1],

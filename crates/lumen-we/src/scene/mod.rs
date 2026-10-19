@@ -5,6 +5,7 @@
 //! shader translation to HLSL and texture decoding. See
 //! `docs/re-notes/renderdoc-captures.md` for the pass structure this mirrors.
 
+mod particles;
 pub mod properties;
 mod text;
 pub mod values;
@@ -80,6 +81,7 @@ pub fn import_with(vfs: &Vfs, limits: &Limits, properties: &Properties) -> Resul
         zoom: 1.0,
         groups: HashMap::new(),
         fonts: HashMap::new(),
+        texture_formats: HashMap::new(),
     };
     importer.scene_header(&json);
     importer.scene.user_properties = user_properties_json(vfs, properties);
@@ -258,6 +260,9 @@ struct Importer<'a> {
     groups: HashMap<i64, usize>,
     /// Fonts by scene name (`None` = not loadable).
     fonts: HashMap<String, Option<usize>>,
+    /// WE format id (`FORMAT_*` in common_fragment.h) of loaded textures
+    /// that shaders must convert (`TEX<n>FORMAT` combos).
+    texture_formats: HashMap<TextureId, i64>,
 }
 
 /// A synthetic pass of an engine post-processing chain (bloom).
@@ -567,6 +572,7 @@ impl Importer<'_> {
             node: None,
             local: lumen_scene::affine(centre, 0.0, [1.0, 1.0]),
             text: None,
+            particles: None,
             transform: lumen_scene::affine(centre, 0.0, [1.0, 1.0]),
             visible: true,
             parallax_depth: [0.0, 0.0],
@@ -649,13 +655,17 @@ impl Importer<'_> {
                     self.skip(format!("text layer {name:?}: {e}"));
                 }
             }
+            (None, Some("particle")) => {
+                if let Err(e) = self.particle_layer(object, &name, node, graph) {
+                    self.skip(format!("particle system {name:?}: {e}"));
+                }
+            }
             (None, Some(kind)) => self.skip(format!("{kind} objects")),
             (None, None) => {}
         }
-        // The object's own layer, if it made one.
-        let layer = (self.scene.layers.len() > layers_before)
-            .then(|| self.scene.layers.len() - 1)
-            .filter(|&l| self.scene.layers[l].node == Some(node));
+        // The object's own layer, if it made one (fullscreen layers have no
+        // node but still own their effects' scripted constants).
+        let layer = (self.scene.layers.len() > layers_before).then(|| self.scene.layers.len() - 1);
         for (key, value) in object.as_object().into_iter().flatten() {
             let target = match (key.as_str(), layer) {
                 ("origin", _) => ScriptTarget::Origin(node),
@@ -884,6 +894,7 @@ impl Importer<'_> {
             node: layer_node,
             local,
             text: None,
+            particles: None,
             transform,
             visible,
             parallax_depth: vec_n(object.get("parallaxDepth"), [1.0, 1.0]),
@@ -1072,6 +1083,18 @@ impl Importer<'_> {
             }
         }
 
+        // One- and two-channel textures: the engine tells shaders their format.
+        for (slot, name) in &textures {
+            if name.starts_with("_rt_") {
+                continue;
+            }
+            if let Some(format) = self
+                .texture(name)
+                .and_then(|id| self.texture_formats.get(&id).copied())
+            {
+                combos.insert(format!("TEX{slot}FORMAT"), format);
+            }
+        }
         let program = self.program(&spec.shader, &vertex, &fragment, &combos)?;
 
         // Defaults only for samplers the selected variant actually uses.
@@ -1231,9 +1254,12 @@ impl Importer<'_> {
         }
         let result = self.load_texture(name);
         let id = match result {
-            Ok(t) => {
+            Ok((t, format)) => {
                 let id = TextureId(self.scene.textures.len());
                 self.scene.textures.push(t);
+                if let Some(f) = format {
+                    self.texture_formats.insert(id, f);
+                }
                 Some(id)
             }
             Err(e) => {
@@ -1245,7 +1271,9 @@ impl Importer<'_> {
         id
     }
 
-    fn load_texture(&self, name: &str) -> Result<Texture> {
+    /// The decoded texture and, for one- and two-channel formats, the WE
+    /// format id shaders convert with (`ConvertTexture0Format`).
+    fn load_texture(&self, name: &str) -> Result<(Texture, Option<i64>)> {
         let stem = name.strip_suffix(".tex").unwrap_or(name);
         let path = format!("materials/{stem}.tex");
         let bytes = self
@@ -1262,7 +1290,13 @@ impl Importer<'_> {
         let image = mip_to_rgba8(&tex, mip)?;
         let mips = mip_chain(&tex, image.width, image.height, &image.pixels);
         let h = &tex.header;
-        Ok(Texture {
+        // FORMAT_RG88 = 8, FORMAT_R8 = 9 (common_fragment.h).
+        let format = match h.format {
+            crate::tex::TexFormat::Rg88 => Some(8),
+            crate::tex::TexFormat::R8 => Some(9),
+            _ => None,
+        };
+        let texture = Texture {
             name: stem.to_owned(),
             width: image.width,
             height: image.height,
@@ -1272,7 +1306,8 @@ impl Importer<'_> {
             mips,
             clamp: h.flags.contains(TexFlags::CLAMP_UVS),
             nearest: h.flags.contains(TexFlags::NO_INTERPOLATION),
-        })
+        };
+        Ok((texture, format))
     }
 }
 

@@ -861,6 +861,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-particles"
+version = "0.0.1"
+dependencies = [
+ "lumen-scene",
+]
+
+[[package]]
 name = "lumen-platform"
 version = "0.0.1"
 dependencies = [
@@ -876,6 +883,7 @@ version = "0.0.1"
 dependencies = [
  "bytemuck",
  "lumen-gpu",
+ "lumen-particles",
  "lumen-scene",
  "lumen-text",
  "pollster",

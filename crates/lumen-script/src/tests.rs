@@ -52,6 +52,7 @@ fn layer(node: usize, text: Option<&str>) -> ImageLayer {
             ellipsis: false,
             padding: [0.0; 2],
         }),
+        particles: None,
         transform: lumen_scene::affine([0.0, 0.0], 0.0, [1.0, 1.0]),
         visible: true,
         parallax_depth: [1.0; 2],

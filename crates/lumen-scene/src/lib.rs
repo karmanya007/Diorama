@@ -13,6 +13,9 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+pub mod particles;
+pub use particles::ParticleSystem;
+
 /// Index into [`Scene::textures`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TextureId(pub usize);
@@ -281,6 +284,9 @@ pub struct ImageLayer {
     /// Text content; the renderer builds the glyph mesh and atlas from it
     /// (and centres the text box on `transform`).
     pub text: Option<TextSpec>,
+    /// A particle system drawn at `transform` instead of the albedo quad
+    /// (each system of the tree with its own `draw` pass).
+    pub particles: Option<Box<ParticleSystem>>,
     /// Layer-local pixels (centred, y up) → scene pixels (origin bottom-left,
     /// y up), parents already applied: `x' = m0·x + m2·y + m4`,
     /// `y' = m1·x + m3·y + m5`.

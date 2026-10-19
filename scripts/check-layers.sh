@@ -15,6 +15,7 @@ rules=(
   "lumen-we:lumen-gpu lumen-runtime lumen-render lumen-platform"
   "lumen-gpu:lumen-we lumen-runtime lumen-render lumen-platform"
   "lumen-runtime:lumen-we lumen-platform"
+  "lumen-particles:lumen-we lumen-gpu lumen-render lumen-platform lumen-media lumen-script"
   "lumen-script:lumen-we lumen-gpu lumen-render lumen-platform lumen-media"
   "lumen-render:lumen-we lumen-runtime lumen-platform lumen-media"
   "lumen-media:lumen-we lumen-gpu lumen-runtime lumen-render lumen-platform"

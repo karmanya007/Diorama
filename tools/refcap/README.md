@@ -33,3 +33,8 @@ that event (`<capture>.ev<event>.res<id>.png`, alpha kept).
 
 `golden.sh` passes the capture's wall clock (`.rdc` modification time) to
 `lumend --clock`, so scripted clocks and dates show what WE showed.
+
+Particles: `qrenderdoc.exe --python tools\refcap\particledraws.py` (same
+`REFCAP_CAPTURES` variable) writes `<capture>.particles.json`: every
+geometry-shader particle draw with its constants and the raw particles
+(vertex-shader output). See `docs/re-notes/particles.md`.

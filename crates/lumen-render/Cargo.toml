@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 bytemuck.workspace = true
 lumen-gpu.workspace = true
+lumen-particles.workspace = true
 lumen-scene.workspace = true
 lumen-text.workspace = true
 pollster.workspace = true

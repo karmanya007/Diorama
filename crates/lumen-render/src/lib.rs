@@ -1,6 +1,7 @@
 //! Rendering (L3): image/video blits over each output (Phase 1) and the
 //! scene IR renderer (Phase 2, [`scene`]).
 
+mod particles;
 pub mod scene;
 mod text;
 mod video;
