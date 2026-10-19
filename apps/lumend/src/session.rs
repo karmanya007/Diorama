@@ -127,6 +127,8 @@ enum Renderer {
         scripts: Option<Box<crate::scripts::SceneScripts>>,
         /// What the system plays, for audio-reactive scenes.
         audio: Option<SceneAudio>,
+        /// Players feeding the scene's video textures.
+        videos: Option<crate::videos::SceneVideos>,
         blit: ImageBlit,
         /// Fills monitor areas the scene does not cover (fit/custom pan), as WE.
         clear: [f32; 4],
@@ -274,6 +276,7 @@ impl Session {
                 let scripts =
                     crate::scripts::SceneScripts::new(&scene, crate::scripts::now_ms(), true)
                         .map(Box::new);
+                let videos = crate::videos::SceneVideos::start(&scene);
                 let [r, g, b] = scene.scheme_color;
                 let scene_clear = [r, g, b, 1.0];
                 // CPU copies of textures are not needed once uploaded.
@@ -284,6 +287,7 @@ impl Session {
                     scene: Box::new(renderer),
                     scripts,
                     audio: SceneAudio::start(),
+                    videos,
                     blit,
                     clear: scene_clear,
                 }
@@ -356,9 +360,13 @@ impl Session {
             scene,
             scripts,
             audio,
+            videos,
             ..
         } = &mut self.renderer
         {
+            if let Some(videos) = videos {
+                videos.frame(gpu, scene, time);
+            }
             let spectrum = audio.as_mut().map_or([[0.0; 64]; 2], |a| a.spectrum(time));
             if let Some(scripts) = scripts {
                 let frame = crate::scripts::ScriptFrame {

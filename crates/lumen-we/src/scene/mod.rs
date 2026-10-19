@@ -1284,7 +1284,7 @@ impl Importer<'_> {
             .ok_or_else(|| unsupported("missing texture", &path))?;
         let tex = Tex::parse(&bytes, self.limits)?;
         if tex.is_video {
-            return Err(unsupported("video texture", name));
+            return video_texture(&tex, stem, self.limits.max_texture_dim).map(|t| (t, None));
         }
         let mip = tex
             .first_mip()
@@ -1309,9 +1309,38 @@ impl Importer<'_> {
             clamp: h.flags.contains(TexFlags::CLAMP_UVS),
             nearest: h.flags.contains(TexFlags::NO_INTERPOLATION),
             frames: sprite_frames(&tex),
+            video: None,
         };
         Ok((texture, format))
     }
+}
+
+/// A TEX holding an MP4: black until the player's first frame arrives.
+fn video_texture(tex: &Tex, stem: &str, max_dim: u32) -> Result<Texture> {
+    let h = &tex.header;
+    let mp4 = tex
+        .first_mip()
+        .map(|m| m.data.as_slice())
+        .filter(|d| !d.is_empty())
+        .ok_or_else(|| unsupported("video texture without data", stem))?;
+    let (width, height) = (h.texture_width.max(1), h.texture_height.max(1));
+    if width > max_dim || height > max_dim {
+        return Err(unsupported("video texture too large", stem));
+    }
+    let rgba = [0, 0, 0, 255].repeat(width as usize * height as usize);
+    Ok(Texture {
+        name: stem.to_owned(),
+        width,
+        height,
+        image_width: h.image_width.clamp(1, width),
+        image_height: h.image_height.clamp(1, height),
+        rgba,
+        mips: Vec::new(),
+        clamp: h.flags.contains(TexFlags::CLAMP_UVS),
+        nearest: h.flags.contains(TexFlags::NO_INTERPOLATION),
+        frames: Vec::new(),
+        video: Some(mp4.into()),
+    })
 }
 
 /// TEX sprite-sheet frames in UV of the allocated texture.

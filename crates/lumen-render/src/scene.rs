@@ -109,7 +109,7 @@ struct Target {
 }
 
 struct AssetTexture {
-    _texture: wgpu::Texture,
+    texture: wgpu::Texture,
     view: wgpu::TextureView,
     /// Allocation size, then meaningful image size (`g_TextureNResolution`).
     resolution: [f32; 4],
@@ -441,6 +441,7 @@ impl SceneRenderer {
                 clamp: true,
                 nearest: false,
                 frames: Vec::new(),
+                video: None,
             },
         );
 
@@ -631,6 +632,33 @@ impl SceneRenderer {
                 write(p, uniform, value);
             }
         }
+    }
+
+    /// Replaces the pixels of scene texture `texture` (a video frame), tightly
+    /// packed RGBA8 of `width × height`, clipped to the texture's size.
+    pub fn write_texture(&self, gpu: &Gpu, texture: usize, width: u32, height: u32, rgba: &[u8]) {
+        let Some(asset) = self.shared.assets.get(texture) else {
+            return;
+        };
+        let size = asset.texture.size();
+        let (w, h) = (width.min(size.width), height.min(size.height));
+        if w == 0 || h == 0 || rgba.len() < (width as usize) * (height as usize) * 4 {
+            return;
+        }
+        gpu.queue.write_texture(
+            asset.texture.as_image_copy(),
+            rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 4),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
     }
 
     /// Offset from a text layer's anchor to the centre of its text box.
@@ -2043,6 +2071,7 @@ fn upload(gpu: &Gpu, t: &ir::Texture) -> AssetTexture {
                 clamp: true,
                 nearest: false,
                 frames: Vec::new(),
+                video: None,
             },
         );
     }
@@ -2080,7 +2109,7 @@ fn upload(gpu: &Gpu, t: &ir::Texture) -> AssetTexture {
     );
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     AssetTexture {
-        _texture: texture,
+        texture,
         view,
         resolution: [
             t.width as f32,

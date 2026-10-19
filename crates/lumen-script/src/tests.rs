@@ -369,6 +369,7 @@ fn scripts_drive_texture_animations() {
         clamp: true,
         nearest: true,
         frames: vec![frame; 4],
+        video: None,
     });
     s.layers[1].albedo.textures.insert(
         0,

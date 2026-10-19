@@ -121,6 +121,9 @@ pub fn render_to_png(
             scripts.frame(&gpu, &mut renderer, &frame);
         }
     }
+    if let Some(mut videos) = crate::videos::SceneVideos::start(&scene) {
+        videos.seek(&gpu, &renderer, time);
+    }
     renderer.render(
         &gpu,
         &FrameInputs {

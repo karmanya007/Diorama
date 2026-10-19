@@ -260,6 +260,9 @@ pub struct Texture {
     pub nearest: bool,
     /// Animation frames (sprite sheets, animated GIFs); empty = still image.
     pub frames: Vec<TextureFrame>,
+    /// A looping MP4 video shown in this texture; `rgba` is then only the
+    /// (black) content until the first decoded frame.
+    pub video: Option<Arc<[u8]>>,
 }
 
 /// One frame of an animated texture: the frame's parallelogram in UV

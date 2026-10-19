@@ -13,6 +13,7 @@ mod policy;
 mod scripts;
 mod session;
 mod state;
+mod videos;
 
 use std::path::PathBuf;
 use std::sync::Arc;

@@ -82,6 +82,7 @@ fn solid(name: &str, rgba: [u8; 4]) -> Texture {
         clamp: true,
         nearest: true,
         frames: Vec::new(),
+        video: None,
     }
 }
 

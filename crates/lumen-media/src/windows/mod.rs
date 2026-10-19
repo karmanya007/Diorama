@@ -8,7 +8,6 @@
 pub(crate) mod audio;
 pub(crate) mod capture;
 
-use std::path::Path;
 use std::time::Duration;
 
 use windows::Win32::Foundation::HMODULE;
@@ -19,18 +18,21 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 use windows::Win32::Graphics::Dxgi::IDXGIAdapter;
 use windows::Win32::Media::MediaFoundation::{
-    IMFAttributes, IMFDXGIDeviceManager, IMFSourceReader, MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_RATE,
-    MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
-    MF_SOURCE_READER_ALL_STREAMS, MF_SOURCE_READER_D3D_MANAGER,
-    MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, MF_SOURCE_READER_FIRST_VIDEO_STREAM,
-    MF_SOURCE_READERF_ENDOFSTREAM, MF_VERSION, MFCreateAttributes, MFCreateDXGIDeviceManager,
-    MFCreateMediaType, MFCreateSourceReaderFromURL, MFMediaType_Video, MFSTARTUP_FULL, MFShutdown,
-    MFStartup, MFVideoFormat_NV12,
+    IMF2DBuffer2, IMFAttributes, IMFDXGIDeviceManager, IMFSourceReader, MF_BYTESTREAM_CONTENT_TYPE,
+    MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE,
+    MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, MF_SOURCE_READER_ALL_STREAMS,
+    MF_SOURCE_READER_D3D_MANAGER, MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING,
+    MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_SOURCE_READERF_ENDOFSTREAM, MF_VERSION,
+    MF2DBuffer_LockFlags_Read, MFCreateAttributes, MFCreateDXGIDeviceManager,
+    MFCreateMFByteStreamOnStream, MFCreateMediaType, MFCreateSourceReaderFromByteStream,
+    MFCreateSourceReaderFromURL, MFMediaType_Video, MFSTARTUP_FULL, MFShutdown, MFStartup,
+    MFVideoFormat_NV12,
 };
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
+use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::core::{HSTRING, Interface};
 
-use crate::{Error, Nv12Frame, Result, VideoDecoder, VideoInfo};
+use crate::{Error, Nv12Frame, Result, VideoDecoder, VideoInfo, VideoSource};
 
 const VIDEO_STREAM: u32 = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
 
@@ -120,7 +122,7 @@ pub(crate) struct MfDecoder {
     // Field order: the reader must be released before the D3D manager and Media Foundation.
     reader: IMFSourceReader,
     hw: Option<HwDecode>,
-    path: HSTRING,
+    source: VideoSource,
     info: VideoInfo,
     stride: u32,
     _runtime: MfRuntime,
@@ -131,20 +133,19 @@ pub(crate) struct MfDecoder {
 unsafe impl Send for MfDecoder {}
 
 impl MfDecoder {
-    pub(crate) fn open(path: &Path) -> Result<Self> {
+    pub(crate) fn open(source: &VideoSource) -> Result<Self> {
         let runtime = MfRuntime::start()?;
-        let path = HSTRING::from(path.as_os_str());
         let hw = HwDecode::create()
             .inspect_err(|e| {
                 tracing::warn!("hardware video decode unavailable, using software: {e}")
             })
             .ok();
-        let (reader, info, stride) = match open_reader(&path, hw.as_ref()) {
+        let (reader, info, stride) = match open_reader(source, hw.as_ref()) {
             Ok(r) => r,
             // Some codecs/drivers refuse the D3D path; software still works.
             Err(e) if hw.is_some() => {
                 tracing::warn!("hardware decode setup failed ({e}); retrying in software");
-                open_reader(&path, None)?
+                open_reader(source, None)?
             }
             Err(e) => return Err(e),
         };
@@ -158,7 +159,7 @@ impl MfDecoder {
         Ok(Self {
             reader,
             hw,
-            path,
+            source: source.clone(),
             info,
             stride,
             _runtime: runtime,
@@ -166,7 +167,10 @@ impl MfDecoder {
     }
 }
 
-fn open_reader(path: &HSTRING, hw: Option<&HwDecode>) -> Result<(IMFSourceReader, VideoInfo, u32)> {
+fn open_reader(
+    source: &VideoSource,
+    hw: Option<&HwDecode>,
+) -> Result<(IMFSourceReader, VideoInfo, u32)> {
     // SAFETY: COM calls on interfaces we own; GUID pointers reference constants.
     unsafe {
         let mut attrs: Option<IMFAttributes> = None;
@@ -186,15 +190,35 @@ fn open_reader(path: &HSTRING, hw: Option<&HwDecode>) -> Result<(IMFSourceReader
             .SetUINT32(&MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, 1)
             .map_err(os("SetUINT32(video processing)"))?;
 
-        let reader =
-            MFCreateSourceReaderFromURL(path, &attrs).map_err(os("MFCreateSourceReaderFromURL"))?;
+        let reader = match source {
+            VideoSource::File(path) => {
+                MFCreateSourceReaderFromURL(&HSTRING::from(path.as_os_str()), &attrs)
+                    .map_err(os("MFCreateSourceReaderFromURL"))?
+            }
+            VideoSource::Memory(bytes) => {
+                // SHCreateMemStream copies the bytes into its own stream.
+                let stream = SHCreateMemStream(Some(bytes))
+                    .ok_or_else(|| Error::BadFrame("SHCreateMemStream failed".into()))?;
+                let byte_stream = MFCreateMFByteStreamOnStream(&stream)
+                    .map_err(os("MFCreateMFByteStreamOnStream"))?;
+                // Without a name or MIME type the source resolver may not find the MP4 parser.
+                if let Ok(a) = byte_stream.cast::<IMFAttributes>() {
+                    let _ = a.SetString(&MF_BYTESTREAM_CONTENT_TYPE, &HSTRING::from("video/mp4"));
+                }
+                MFCreateSourceReaderFromByteStream(&byte_stream, &attrs)
+                    .map_err(os("MFCreateSourceReaderFromByteStream"))?
+            }
+        };
         // Video only: never touch audio streams or devices.
         reader
             .SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS.0 as u32, false)
             .map_err(os("SetStreamSelection(all)"))?;
-        reader
-            .SetStreamSelection(VIDEO_STREAM, true)
-            .map_err(|_| Error::NoVideo(path.to_string().into()))?;
+        reader.SetStreamSelection(VIDEO_STREAM, true).map_err(|_| {
+            Error::NoVideo(match source {
+                VideoSource::File(p) => p.clone(),
+                VideoSource::Memory(_) => "<memory>".into(),
+            })
+        })?;
 
         let wanted = MFCreateMediaType().map_err(os("MFCreateMediaType"))?;
         wanted
@@ -265,11 +289,38 @@ impl VideoDecoder for MfDecoder {
             // Stream ticks / format changes can arrive without a sample.
             let Some(sample) = sample else { continue };
 
-            // SAFETY: buffer locked only for the duration of the copy below.
+            let pts = Duration::from_nanos((timestamp.max(0) as u64) * 100);
+            // SAFETY: buffers locked only for the duration of the copies below.
             unsafe {
                 let buffer = sample
                     .ConvertToContiguousBuffer()
                     .map_err(os("ConvertToContiguousBuffer"))?;
+                // 2D buffers know their real row pitch: decoders pad rows
+                // (e.g. 1028 → 1088 bytes), which the media type may not say.
+                if let Ok(b2) = buffer.cast::<IMF2DBuffer2>() {
+                    let (mut scan0, mut pitch) = (std::ptr::null_mut(), 0i32);
+                    let (mut start, mut len) = (std::ptr::null_mut(), 0u32);
+                    if b2
+                        .Lock2DSize(
+                            MF2DBuffer_LockFlags_Read,
+                            &mut scan0,
+                            &mut pitch,
+                            &mut start,
+                            &mut len,
+                        )
+                        .is_ok()
+                    {
+                        // Top-down rows only (NV12 from MF is top-down in practice).
+                        let ok = pitch > 0 && scan0 == start;
+                        let bytes =
+                            ok.then(|| std::slice::from_raw_parts(start, len as usize).to_vec());
+                        b2.Unlock2D().map_err(os("IMF2DBuffer::Unlock2D"))?;
+                        if let Some(bytes) = bytes {
+                            self.stride = pitch.unsigned_abs();
+                            return nv12_from_buffer(bytes, self.info, self.stride, pts).map(Some);
+                        }
+                    }
+                }
                 let mut ptr = std::ptr::null_mut();
                 let mut len = 0u32;
                 buffer
@@ -277,20 +328,14 @@ impl VideoDecoder for MfDecoder {
                     .map_err(os("IMFMediaBuffer::Lock"))?;
                 let bytes = std::slice::from_raw_parts(ptr, len as usize).to_vec();
                 buffer.Unlock().map_err(os("IMFMediaBuffer::Unlock"))?;
-                return nv12_from_buffer(
-                    bytes,
-                    self.info,
-                    self.stride,
-                    Duration::from_nanos((timestamp.max(0) as u64) * 100),
-                )
-                .map(Some);
+                return nv12_from_buffer(bytes, self.info, self.stride, pts).map(Some);
             }
         }
     }
 
     fn restart(&mut self) -> Result<()> {
         // Reopening is simpler and as fast as seeking for looping wallpapers.
-        let (reader, info, stride) = open_reader(&self.path, self.hw.as_ref())?;
+        let (reader, info, stride) = open_reader(&self.source, self.hw.as_ref())?;
         self.reader = reader;
         self.info = info;
         self.stride = stride;

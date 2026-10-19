@@ -124,15 +124,28 @@ pub trait VideoDecoder: Send {
     fn restart(&mut self) -> Result<()>;
 }
 
+/// Where a video comes from.
+#[derive(Debug, Clone)]
+pub enum VideoSource {
+    File(PathBuf),
+    /// A whole MP4 file in memory (e.g. a video texture inside a package).
+    Memory(Arc<[u8]>),
+}
+
 /// Opens `path` with the platform decoder.
 pub fn open(path: &Path) -> Result<Box<dyn VideoDecoder>> {
+    open_source(&VideoSource::File(path.to_path_buf()))
+}
+
+/// Opens `source` with the platform decoder.
+pub fn open_source(source: &VideoSource) -> Result<Box<dyn VideoDecoder>> {
     #[cfg(windows)]
     {
-        windows::MfDecoder::open(path).map(|d| Box::new(d) as Box<dyn VideoDecoder>)
+        windows::MfDecoder::open(source).map(|d| Box::new(d) as Box<dyn VideoDecoder>)
     }
     #[cfg(not(windows))]
     {
-        let _ = path;
+        let _ = source;
         Err(Error::Unsupported)
     }
 }
@@ -153,16 +166,19 @@ const QUEUE_DEPTH: usize = 3;
 
 impl VideoPlayer {
     pub fn spawn(path: &Path) -> Result<Self> {
+        Self::spawn_source(VideoSource::File(path.to_path_buf()))
+    }
+
+    pub fn spawn_source(source: VideoSource) -> Result<Self> {
         let (tx, rx) = sync_channel(QUEUE_DEPTH);
         // The decoder is opened on its own thread (COM/MF state is per thread);
         // the open result comes back here so errors are still reported synchronously.
         let (opened_tx, opened_rx) = sync_channel::<Result<VideoInfo>>(1);
         let stop = Arc::new(AtomicBool::new(false));
         let thread_stop = Arc::clone(&stop);
-        let path = path.to_path_buf();
         let thread = std::thread::Builder::new()
             .name("video-decode".into())
-            .spawn(move || match open(&path) {
+            .spawn(move || match open_source(&source) {
                 Ok(decoder) => {
                     let _ = opened_tx.send(Ok(decoder.info()));
                     decode_loop(decoder, &tx, &thread_stop);
