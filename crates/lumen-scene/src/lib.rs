@@ -50,6 +50,8 @@ pub struct Scene {
     pub parallax: Option<Parallax>,
     /// Dynamic lights, in the order shaders index them (`g_LPoint_*[i]`).
     pub point_lights: Vec<PointLight>,
+    /// Tube lights (`g_LTube_*[i]`): light from the nearest point of a segment.
+    pub tube_lights: Vec<TubeLight>,
     /// Back to front.
     pub layers: Vec<ImageLayer>,
     pub textures: Vec<Texture>,
@@ -243,6 +245,19 @@ pub struct Shake {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PointLight {
     pub origin: [f32; 3],
+    /// Colour already multiplied by intensity.
+    pub color: [f32; 3],
+    pub radius: f32,
+    /// Falloff exponent.
+    pub exponent: f32,
+}
+
+/// A tube light in scene space (`g_LTube_OriginA/OriginB/Color`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TubeLight {
+    /// Segment ends.
+    pub a: [f32; 3],
+    pub b: [f32; 3],
     /// Colour already multiplied by intensity.
     pub color: [f32; 3],
     pub radius: f32,

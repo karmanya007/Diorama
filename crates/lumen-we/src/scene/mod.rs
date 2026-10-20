@@ -98,6 +98,7 @@ pub fn import_with(vfs: &Vfs, limits: &Limits, properties: &Properties) -> Resul
         importer.light(object, &graph);
     }
     importer.engine.point_lights = importer.scene.point_lights.len();
+    importer.engine.tube_lights = importer.scene.tube_lights.len();
     for (node, object) in objects.into_iter().enumerate() {
         importer.object(object, node, &graph);
     }
@@ -750,31 +751,30 @@ impl Importer<'_> {
         if !visible {
             return;
         }
-        if kind != "lpoint" {
-            self.skip(format!("{kind} lights"));
-            return;
-        }
+        let number = |key: &str, default: f32| {
+            object
+                .get(key)
+                .and_then(floats)
+                .and_then(|v| v.first().copied())
+                .unwrap_or(default)
+        };
         let z = vec_n(object.get("origin"), [0.0; 3])[2];
-        let color = vec_n(object.get("color"), [1.0; 3]);
-        let intensity = object
-            .get("intensity")
-            .and_then(floats)
-            .and_then(|v| v.first().copied())
-            .unwrap_or(1.0);
-        self.scene.point_lights.push(lumen_scene::PointLight {
-            origin: [transform[4], transform[5], z],
-            color: color.map(|c| c * intensity),
-            radius: object
-                .get("radius")
-                .and_then(floats)
-                .and_then(|v| v.first().copied())
-                .unwrap_or(1000.0),
-            exponent: object
-                .get("exponent")
-                .and_then(floats)
-                .and_then(|v| v.first().copied())
-                .unwrap_or(1.0),
-        });
+        let color = vec_n(object.get("color"), [1.0; 3]).map(|c| c * number("intensity", 1.0));
+        let origin = [transform[4], transform[5], z];
+        let (radius, exponent) = (number("radius", 1000.0), number("exponent", 1.0));
+        match kind {
+            "lpoint" => self.scene.point_lights.push(lumen_scene::PointLight {
+                origin,
+                color,
+                radius,
+                exponent,
+            }),
+            // Tube lights render (`TubeLight`), but how WE derives the
+            // segment from `origin`, `angles` and `controlpoint` is not
+            // captured yet; origin → controlpoint blew out 3323674297.
+            "ltube" => self.skip("ltube lights (segment ends not captured yet)".into()),
+            other => self.skip(format!("{other} lights")),
+        }
     }
 
     fn object(&mut self, object: &Value, node: usize, graph: &SceneGraph) {
@@ -1492,9 +1492,8 @@ impl Importer<'_> {
         )?;
         for r in &prepared.requires {
             match r.as_str() {
-                "LightingV1" => {
-                    self.skip("lit materials: ambient only (no scene lights yet)".into())
-                }
+                // Generated with the scene's lights (none: ambient only, as WE).
+                "LightingV1" => {}
                 other => self.skip(format!("#require {other}")),
             }
         }

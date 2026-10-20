@@ -35,18 +35,27 @@ pub const REQUIRE_MARKER: &str = "lumen-require:";
 pub struct EngineContext {
     /// Point lights in the scene (`g_LPoint_*` array length).
     pub point_lights: usize,
+    /// Tube lights in the scene (`g_LTube_*` array length).
+    pub tube_lights: usize,
 }
 
 /// `#require LightingV1`: WE's engine generates `PerformLighting_V1` per
 /// scene as one unrolled block per light (string fragments in
-/// `wallpaper64.exe`). Lumen emits point lights; shadows, cookies, spot,
-/// tube and directional lights are not generated yet.
+/// `wallpaper64.exe`). Lumen emits point and tube lights; shadows, cookies,
+/// spot and directional lights (none in the corpus) are not generated yet.
 fn lighting_v1(engine: &EngineContext) -> String {
     let n = engine.point_lights;
+    let tubes = engine.tube_lights;
     let mut out = String::new();
     if n > 0 {
         out.push_str(&format!(
             "uniform vec4 g_LPoint_Origin[{n}];\nuniform vec4 g_LPoint_Color[{n}];\n"
+        ));
+    }
+    if tubes > 0 {
+        out.push_str(&format!(
+            "uniform vec4 g_LTube_OriginA[{tubes}];\nuniform vec4 g_LTube_OriginB[{tubes}];\n\
+             uniform vec4 g_LTube_Color[{tubes}];\n"
         ));
     }
     out.push_str(
@@ -60,6 +69,16 @@ fn lighting_v1(engine: &EngineContext) -> String {
              \tvec3 lightDelta = g_LPoint_Origin[i].xyz - worldPos;\n\
              \tlight += ComputePBRLightShadow(normal, lightDelta, viewVector, color, \
              g_LPoint_Color[i].rgb, g_LPoint_Color[i].w, g_LPoint_Origin[i].w, specularTint, \
+             ambient, roughness, metallic, 1.0);\n\t}}\n"
+        ));
+    }
+    for i in 0..tubes {
+        out.push_str(&format!(
+            "\t{{\n\tconst uint i = {i};\n\
+             \tvec3 lightDelta = PointSegmentDelta(worldPos, g_LTube_OriginA[i].xyz, \
+             g_LTube_OriginB[i].xyz);\n\
+             \tlight += ComputePBRLightShadow(normal, lightDelta, viewVector, color, \
+             g_LTube_Color[i].rgb, g_LTube_Color[i].w, g_LTube_OriginA[i].w, specularTint, \
              ambient, roughness, metallic, 1.0);\n\t}}\n"
         ));
     }
@@ -150,4 +169,25 @@ pub fn prepare_pair(
         vertex: splice_requires(&vs.text, engine),
         fragment: splice_requires(&fs.text, engine),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lighting_v1_unrolls_one_block_per_light() {
+        let none = lighting_v1(&EngineContext::default());
+        assert!(!none.contains("uniform") && none.contains("return light;"));
+        let src = lighting_v1(&EngineContext {
+            point_lights: 2,
+            tube_lights: 1,
+        });
+        assert!(src.contains("uniform vec4 g_LPoint_Origin[2];"));
+        assert!(src.contains("uniform vec4 g_LTube_OriginB[1];"));
+        assert_eq!(src.matches("ComputePBRLightShadow(").count(), 3);
+        // WE's fragment: tube radius in Color.w, exponent in OriginA.w.
+        assert!(src.contains("g_LTube_Color[i].w, g_LTube_OriginA[i].w"));
+        assert!(src.contains("PointSegmentDelta(worldPos, g_LTube_OriginA[i].xyz"));
+    }
 }

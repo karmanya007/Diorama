@@ -1443,6 +1443,21 @@ impl SceneRenderer {
                 .collect();
             layout.write(buf, "g_LPoint_Origin", &origins);
             layout.write(buf, "g_LPoint_Color", &colors);
+            let tubes = &ctx.scene.tube_lights;
+            let pack = |f: fn(&ir::TubeLight) -> [f32; 4]| -> Vec<f32> {
+                tubes.iter().flat_map(f).collect()
+            };
+            let [a, b] = [
+                pack(|l| [l.a[0], l.a[1], l.a[2], l.exponent]),
+                pack(|l| [l.b[0], l.b[1], l.b[2], 0.0]),
+            ];
+            layout.write(buf, "g_LTube_OriginA", &a);
+            layout.write(buf, "g_LTube_OriginB", &b);
+            layout.write(
+                buf,
+                "g_LTube_Color",
+                &pack(|l| [l.color[0], l.color[1], l.color[2], l.radius]),
+            );
             for (slot, res) in &resolutions {
                 layout.write(buf, &format!("g_Texture{slot}Resolution"), res);
             }
@@ -2364,6 +2379,7 @@ fn stripped(scene: &ir::Scene) -> ir::Scene {
         shake: scene.shake,
         parallax: scene.parallax,
         point_lights: scene.point_lights.clone(),
+        tube_lights: scene.tube_lights.clone(),
         camera: scene.camera,
         nodes: scene.nodes.clone(),
         layers: scene.layers.clone(),
