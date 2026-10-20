@@ -413,3 +413,28 @@ fn created_layers_draw_with_their_own_resources_and_order() {
     // A placeholder keeps numbering without drawing.
     assert_eq!(r.add_placeholder_layer(), 2);
 }
+
+#[test]
+fn system_textures_show_host_images() {
+    let Some((gpu, compiler)) = setup() else {
+        return;
+    };
+    let mut s = scene();
+    s.layers.truncate(1);
+    s.layers[0]
+        .albedo
+        .textures
+        .insert(0, TextureBinding::System("mediaThumbnail".into()));
+    let mut r = SceneRenderer::new(&gpu, &s, &compiler, None).unwrap();
+    assert!(r.uses_system_texture("mediaThumbnail"));
+    let frame = |r: &mut SceneRenderer| {
+        r.render(&gpu, &FrameInputs::default());
+        r.read_output(&gpu).unwrap()
+    };
+    // White until the host provides the album art.
+    assert_eq!(px(&frame(&mut r), 64, 16, 16), [255, 255, 255, 255]);
+    let n = lumen_render::scene::SYSTEM_TEXTURE_SIZE as usize;
+    let blue: Vec<u8> = [0u8, 0, 255, 255].repeat(n * n);
+    r.set_system_texture(&gpu, "mediaThumbnail", &blue);
+    assert_eq!(px(&frame(&mut r), 64, 16, 16), [0, 0, 255, 255]);
+}

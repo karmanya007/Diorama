@@ -254,6 +254,9 @@ struct Shared {
     frames: Vec<Vec<ir::TextureFrame>>,
     placeholder: AssetTexture,
     empty: AssetTexture,
+    /// Host-provided images by name ([`ir::TextureBinding::System`]), each
+    /// [`SYSTEM_TEXTURE_SIZE`] square.
+    system: HashMap<String, AssetTexture>,
     samplers: Vec<wgpu::Sampler>,
     uniforms_layout: wgpu::BindGroupLayout,
     composite_layout: wgpu::BindGroupLayout,
@@ -421,6 +424,8 @@ enum Source {
     Placeholder,
     /// Transparent black: another layer's image that is not drawn.
     Empty,
+    /// A host-provided image ([`ir::TextureBinding::System`]).
+    System(String),
 }
 
 impl SceneRenderer {
@@ -494,6 +499,13 @@ impl SceneRenderer {
             },
         );
 
+        let mut system = HashMap::new();
+        for name in system_names(scene.layers.iter()) {
+            system
+                .entry(name.clone())
+                .or_insert_with(|| system_texture(gpu, &name));
+        }
+
         let uniforms_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("we uniforms"),
             entries: &[0, 1].map(|binding| wgpu::BindGroupLayoutEntry {
@@ -525,6 +537,7 @@ impl SceneRenderer {
             assets,
             placeholder,
             empty,
+            system,
             samplers,
             uniforms_layout,
             composite_layout: composite.layout,
@@ -609,6 +622,7 @@ impl SceneRenderer {
             assets: &shared.assets,
             placeholder: &shared.placeholder,
             empty: &shared.empty,
+            system: &shared.system,
             samplers: &shared.samplers,
             uniforms_layout: &shared.uniforms_layout,
         };
@@ -736,12 +750,20 @@ impl SceneRenderer {
         below: Option<usize>,
     ) -> usize {
         let index = self.ir.layers.len();
-        if !textures.is_empty() {
+        let system: Vec<String> = system_names(std::iter::once(&layer))
+            .into_iter()
+            .filter(|n| !self.shared.system.contains_key(n))
+            .collect();
+        if !textures.is_empty() || !system.is_empty() {
             match Arc::get_mut(&mut self.shared) {
                 Some(shared) => {
                     for t in textures {
                         shared.assets.push(upload(gpu, t));
                         shared.frames.push(t.frames.clone());
+                    }
+                    for name in system {
+                        let t = system_texture(gpu, &name);
+                        shared.system.insert(name, t);
                     }
                 }
                 None => tracing::warn!("textures of a created layer could not be added"),
@@ -783,6 +805,7 @@ impl SceneRenderer {
             assets: &shared.assets,
             placeholder: &shared.placeholder,
             empty: &shared.empty,
+            system: &shared.system,
             samplers: &shared.samplers,
             uniforms_layout: &shared.uniforms_layout,
         };
@@ -854,6 +877,38 @@ impl SceneRenderer {
         self.layers.insert(at, moved);
     }
 
+    /// Replaces host-provided image `name` (e.g. `mediaThumbnail`) with
+    /// `rgba`, tightly packed [`SYSTEM_TEXTURE_SIZE`]² RGBA8. Unused names
+    /// are ignored.
+    pub fn set_system_texture(&self, gpu: &Gpu, name: &str, rgba: &[u8]) {
+        let n = SYSTEM_TEXTURE_SIZE;
+        let Some(t) = self.shared.system.get(name) else {
+            return;
+        };
+        if rgba.len() != (n * n * 4) as usize {
+            return;
+        }
+        gpu.queue.write_texture(
+            t.texture.as_image_copy(),
+            rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(n * 4),
+                rows_per_image: Some(n),
+            },
+            wgpu::Extent3d {
+                width: n,
+                height: n,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
+    /// Whether some layer shows host-provided image `name`.
+    pub fn uses_system_texture(&self, name: &str) -> bool {
+        self.shared.system.contains_key(name)
+    }
+
     /// Replaces the pixels of scene texture `texture` (a video frame), tightly
     /// packed RGBA8 of `width × height`, clipped to the texture's size.
     pub fn write_texture(&self, gpu: &Gpu, texture: usize, width: u32, height: u32, rgba: &[u8]) {
@@ -902,6 +957,7 @@ impl SceneRenderer {
             assets: &shared.assets,
             placeholder: &shared.placeholder,
             empty: &shared.empty,
+            system: &shared.system,
             samplers: &shared.samplers,
             uniforms_layout: &shared.uniforms_layout,
         };
@@ -1433,6 +1489,7 @@ impl SceneRenderer {
                     .map_or(Source::Placeholder, |t| Source::Target(*t)),
                 Some(TextureBinding::FrameBuffer) => Source::Target(FRAMEBUFFER),
                 Some(TextureBinding::TextAtlas) if plan.atlas.is_some() => Source::Atlas,
+                Some(TextureBinding::System(name)) => Source::System(name.clone()),
                 Some(TextureBinding::TextAtlas) | None => Source::Placeholder,
             };
             let source = match source {
@@ -1476,6 +1533,10 @@ impl SceneRenderer {
                         ctx.placeholder.resolution,
                     ),
                 },
+                Source::System(name) => {
+                    let t = ctx.system.get(name).unwrap_or(ctx.placeholder);
+                    (&t.view, &ctx.samplers[CLAMP_LINEAR], t.resolution)
+                }
                 Source::Empty => (
                     &ctx.empty.view,
                     &ctx.samplers[CLAMP_LINEAR],
@@ -2352,6 +2413,7 @@ struct BuildContext<'a> {
     assets: &'a [AssetTexture],
     placeholder: &'a AssetTexture,
     empty: &'a AssetTexture,
+    system: &'a HashMap<String, AssetTexture>,
     samplers: &'a [wgpu::Sampler],
     uniforms_layout: &'a wgpu::BindGroupLayout,
 }
@@ -2561,6 +2623,50 @@ fn background_quad(size: [u32; 2], t: Rows, camera: Rows) -> [f32; 16] {
         out[i * 4..i * 4 + 4].copy_from_slice(&[x, y, (cx + 1.0) * 0.5, (1.0 - cy) * 0.5]);
     }
     out
+}
+
+/// Side of every host-provided image ([`SceneRenderer::set_system_texture`]).
+pub const SYSTEM_TEXTURE_SIZE: u32 = 512;
+
+/// Names of the host-provided images `layers` sample.
+fn system_names<'a>(layers: impl Iterator<Item = &'a ir::ImageLayer>) -> Vec<String> {
+    let mut names = Vec::new();
+    for l in layers {
+        let passes = std::iter::once(&l.albedo)
+            .chain(l.composite.as_ref())
+            .chain(l.effects.iter().flat_map(|e| &e.passes));
+        for p in passes {
+            for t in p.textures.values() {
+                if let TextureBinding::System(name) = t
+                    && !names.contains(name)
+                {
+                    names.push(name.clone());
+                }
+            }
+        }
+    }
+    names
+}
+
+/// A white host-provided image until the host sets it.
+fn system_texture(gpu: &Gpu, name: &str) -> AssetTexture {
+    let n = SYSTEM_TEXTURE_SIZE;
+    upload(
+        gpu,
+        &ir::Texture {
+            name: name.to_owned(),
+            width: n,
+            height: n,
+            image_width: n,
+            image_height: n,
+            rgba: vec![255; (n * n * 4) as usize],
+            mips: Vec::new(),
+            clamp: true,
+            nearest: false,
+            frames: Vec::new(),
+            video: None,
+        },
+    )
 }
 
 fn upload(gpu: &Gpu, t: &ir::Texture) -> AssetTexture {

@@ -118,6 +118,9 @@ impl Drop for SceneScripts {
 struct Media {
     watcher: MediaWatcher,
     last: Option<MediaInfo>,
+    /// The album art shown now (`mediaThumbnail` texture), kept so the next
+    /// track can show it as `mediaPreviousThumbnail`.
+    art: Option<Vec<u8>>,
     /// Scene time the last timeline event went out.
     timeline_at: f32,
 }
@@ -167,6 +170,7 @@ impl SceneScripts {
                     media: live.then(|| Media {
                         watcher: MediaWatcher::start(),
                         last: None,
+                        art: None,
                         timeline_at: f32::NEG_INFINITY,
                     }),
                     factory,
@@ -198,8 +202,11 @@ impl SceneScripts {
         } = *frame;
         let frametime = self.last_time.map_or(0.0, |t| (time - t).max(0.0));
         self.last_time = Some(time);
-        if let Some(media) = &mut self.media {
-            media.send_changes(&mut self.host, time);
+        if let Some(media) = &mut self.media
+            && media.send_changes(&mut self.host, time)
+            && renderer.uses_system_texture("mediaThumbnail")
+        {
+            media.show_art(gpu, renderer);
         }
         if let Some(sounds) = sounds.as_deref() {
             self.host.set_sound_states(sounds.playing());
@@ -292,12 +299,13 @@ impl SceneScripts {
 impl Media {
     /// Turns what changed in the system's now-playing state into WE's media
     /// events (`mediaStatusChanged`, `mediaPropertiesChanged`, …).
-    fn send_changes(&mut self, host: &mut ScriptHost, time: f32) {
+    /// Returns whether the thumbnail changed.
+    fn send_changes(&mut self, host: &mut ScriptHost, time: f32) -> bool {
         let now = self.watcher.latest();
         // The watcher's first read takes a moment; don't announce "nothing
         // playing" before it (scripts would log an empty track).
         if self.last.is_none() && !now.enabled && time < 3.0 {
-            return;
+            return false;
         }
         let last = self.last.take();
         let first = last.is_none();
@@ -333,10 +341,10 @@ impl Media {
             };
             host.send("mediaPlaybackChanged", json!({"state": state}));
         }
-        if first
+        let thumbnail = first
             || now.thumbnail_key != last.thumbnail_key
-            || now.thumbnail.is_some() != last.thumbnail.is_some()
-        {
+            || now.thumbnail.is_some() != last.thumbnail.is_some();
+        if thumbnail {
             host.send("mediaThumbnailChanged", thumbnail_event(&now));
         }
         // "Sent frequently while media is playing."
@@ -349,6 +357,28 @@ impl Media {
             );
         }
         self.last = Some(now);
+        thumbnail
+    }
+
+    /// Puts the current album art into the scene's `mediaThumbnail` texture
+    /// (white without one) and the one before into `mediaPreviousThumbnail`.
+    fn show_art(&mut self, gpu: &Gpu, renderer: &SceneRenderer) {
+        let n = lumen_render::scene::SYSTEM_TEXTURE_SIZE;
+        let art = self
+            .last
+            .as_ref()
+            .and_then(|m| m.thumbnail.as_ref())
+            .and_then(|bytes| image::load_from_memory(bytes).ok())
+            .map(|img| {
+                img.resize_exact(n, n, image::imageops::FilterType::Triangle)
+                    .to_rgba8()
+                    .into_raw()
+            })
+            .unwrap_or_else(|| vec![255; (n * n * 4) as usize]);
+        if let Some(previous) = self.art.replace(art.clone()) {
+            renderer.set_system_texture(gpu, "mediaPreviousThumbnail", &previous);
+        }
+        renderer.set_system_texture(gpu, "mediaThumbnail", &art);
     }
 }
 

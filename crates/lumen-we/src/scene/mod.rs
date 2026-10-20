@@ -439,7 +439,10 @@ impl Importer<'_> {
         if let Some(v) = object.get("brightness") {
             object_constants.insert("brightness".to_owned(), unwrap_value(v).clone());
         }
-        let mut spec = self.pass_spec(&material, None)?;
+        // An instanced model's object carries its material instance
+        // (textures, combos, constants), e.g. 3415190399's dock icons.
+        let instance = object.get("instance").filter(|i| i.is_object());
+        let mut spec = self.pass_spec(&material, instance)?;
         spec.constants.push(&object_constants);
         let blend = spec.blend;
         let albedo = self.pass(&spec, None)?;
@@ -1017,7 +1020,10 @@ impl Importer<'_> {
         if let Some(v) = object.get("brightness") {
             object_constants.insert("brightness".to_owned(), unwrap_value(v).clone());
         }
-        let mut spec = self.pass_spec(&material, None)?;
+        // An instanced model's object carries its material instance
+        // (textures, combos, constants), e.g. 3415190399's dock icons.
+        let instance = object.get("instance").filter(|i| i.is_object());
+        let mut spec = self.pass_spec(&material, instance)?;
         spec.constants.push(&object_constants);
         // Lit layers rendered into their own target light themselves with
         // the scene placement (g_AltModelMatrix) instead of the target MVP.
@@ -1323,6 +1329,22 @@ impl Importer<'_> {
                     textures.insert(slot, name.to_owned());
                 }
             }
+            // System user textures (`{"name": "$mediaThumbnail", "type":
+            // "system"}`) take their slot; user-chosen images are not
+            // supported and keep the material's texture.
+            for (i, u) in source["usertextures"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .enumerate()
+            {
+                if let (Some("system"), Some(name), Ok(slot)) =
+                    (u["type"].as_str(), u["name"].as_str(), u32::try_from(i))
+                    && name.starts_with('$')
+                {
+                    textures.insert(slot, name.to_owned());
+                }
+            }
         }
         for source in scene_pass.into_iter().chain([m]) {
             if let Some(map) = source["constantshadervalues"].as_object() {
@@ -1387,7 +1409,7 @@ impl Importer<'_> {
 
         // One- and two-channel textures: the engine tells shaders their format.
         for (slot, name) in &textures {
-            if name.starts_with("_rt_") {
+            if name.starts_with("_rt_") || name.starts_with('$') {
                 continue;
             }
             let id = self.texture(name);
@@ -1416,6 +1438,8 @@ impl Importer<'_> {
         for (slot, name) in &textures {
             let binding = if name.starts_with("_rt_") {
                 self.rt_binding(name, fbos.unwrap_or_default())
+            } else if let Some(system) = name.strip_prefix('$') {
+                TextureBinding::System(system.to_owned())
             } else {
                 match self.texture(name) {
                     Some(id) => TextureBinding::Asset(id),

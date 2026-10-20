@@ -490,6 +490,10 @@ pub enum TextureBinding {
     FrameBuffer,
     /// The glyph atlas of the layer's text (built by the renderer).
     TextAtlas,
+    /// An image the host provides and updates at runtime, by name
+    /// (`mediaThumbnail`, `mediaPreviousThumbnail`: WE's `$`-prefixed
+    /// system user textures). White until the host sets it.
+    System(String),
 }
 
 #[derive(Debug, Clone)]
