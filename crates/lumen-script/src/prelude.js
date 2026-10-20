@@ -15,7 +15,9 @@
 'use strict';
 (function () {
 	const L = globalThis.__lumen = globalThis.__lumen || {};
-	L.clock = Date.now();
+	// The host sets the clock first: module top levels (`let start = Date.now()`)
+	// must see the same clock as their update() calls.
+	if (typeof L.clock !== 'number') L.clock = Date.now();
 	L.logs = [];
 
 	// Deterministic, host-driven wall clock (`new Date()`, `Date.now()`).

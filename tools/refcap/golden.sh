@@ -25,6 +25,9 @@ for entry in json.load(open(caps / "manifest.json")):
     t = max((cb["g_Time"][0] for a in data["actions"]
              for k in ("vs_cbuffers", "ps_cbuffers")
              for cb in (a.get(k) or {}).values() if "g_Time" in cb and 0 <= cb["g_Time"][0] < 1e5), default=0.0)
+    # Frames without a timed shader: capture.py lets each scene run 10 s
+    # (SCENE_SETTLE_S) before capturing; scripts and videos need that time.
+    t = t or 10.0
     # Cursor (if recorded) as a fraction of the captured swapchain: a
     # 3000x1920 swapchain spans this machine's desktop from (-1080, -546).
     sw, sh = data["swapchains"][0]["size"]

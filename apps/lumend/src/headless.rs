@@ -184,14 +184,17 @@ pub fn render_to_png(
     tracing::info!(ms = started.elapsed().as_millis(), "scene renderer built");
     let factory =
         layer_factory(scene_dir, assets, we_config, &scene).map(|f| (f, compiler.clone()));
+    // Run scripts from the scene's start (up to a minute back) at 30 fps:
+    // scripts that ease, integrate or count frames end where they would have
+    // while playing (3509243656 spins its sky by 3°/s of runtime). They load
+    // at the warm-up's wall clock (3129248394 times its log by `Date.now()`
+    // taken at module load).
+    let warm_up = 60.0f32.min(time);
+    let start_clock = clock_ms - f64::from(warm_up) * 1000.0;
     // Headless frames never read or write saved localStorage.
     if let Some(mut scripts) =
-        crate::scripts::SceneScripts::new(&scene, clock_ms, false, factory, None)
+        crate::scripts::SceneScripts::new(&scene, start_clock, false, factory, None)
     {
-        // Run scripts from the scene's start (up to a minute back) at 30 fps:
-        // scripts that ease, integrate or count frames end where they would
-        // have while playing (3509243656 spins its sky by 3°/s of runtime).
-        let warm_up = 60.0f32.min(time);
         let frames = (warm_up * 30.0).ceil() as u32;
         for i in 0..=frames {
             let t = time - warm_up + warm_up * i as f32 / frames.max(1) as f32;
