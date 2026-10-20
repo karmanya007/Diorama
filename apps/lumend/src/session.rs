@@ -255,7 +255,10 @@ impl Session {
                 } else {
                     image::imageops::resize(image, w, h, image::imageops::FilterType::Lanczos3)
                 };
-                Renderer::Image(ImageBlit::new(gpu, format, pixels.as_raw(), w, h))
+                Renderer::Image(
+                    ImageBlit::new(gpu, format, pixels.as_raw(), w, h)
+                        .with_fit_size(image.dimensions()),
+                )
             }
             Content::Video(player) => {
                 let info = player.info();
@@ -295,10 +298,12 @@ impl Session {
                 let sounds = crate::sounds::SceneSounds::new(&scene);
                 let [r, g, b] = scene.scheme_color;
                 let scene_clear = [r, g, b, 1.0];
+                let scene_size = (scene.width, scene.height);
                 // CPU copies of textures are not needed once uploaded.
                 drop(scene);
                 let [w, h] = renderer.size();
-                let blit = ImageBlit::from_view(gpu, format, renderer.output(), w, h);
+                let blit = ImageBlit::from_view(gpu, format, renderer.output(), w, h)
+                    .with_fit_size(scene_size);
                 Renderer::Scene {
                     scene: Box::new(renderer),
                     scripts,

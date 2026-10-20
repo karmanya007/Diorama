@@ -249,7 +249,8 @@ pub fn render_to_png(
                 renderer.output(),
                 sw,
                 sh,
-            );
+            )
+            .with_fit_size((scene.width, scene.height));
             let rect = Rect {
                 x: 0,
                 y: 0,

@@ -126,6 +126,28 @@ pub fn node_world(nodes: &[Node], index: usize) -> ([f32; 6], bool) {
     (transform, visible)
 }
 
+/// Depth (world z) of `nodes[index]`'s origin.
+pub fn node_depth(nodes: &[Node], index: usize) -> f32 {
+    let Some(node) = nodes.get(index) else {
+        return 0.0;
+    };
+    let mut z = node.origin[2];
+    let mut parent = node.parent;
+    for _ in 0..64 {
+        let Some(p) = parent.and_then(|p| nodes.get(p)) else {
+            break;
+        };
+        z = p.origin[2] + p.scale[2] * z;
+        parent = p.parent;
+    }
+    z
+}
+
+/// Depth range an orthographic scene draws: WE's ortho camera maps world z
+/// to `0.5 + z / 2000` in D3D's 0..1 clip depth (captures), so layers moved
+/// further away are clipped (3000562427 hides its vinyl at z = 6000).
+pub const ORTHO_DEPTH: f32 = 1000.0;
+
 #[derive(Debug, Clone)]
 pub struct FontData {
     pub name: String,
@@ -575,6 +597,23 @@ mod tests {
         // (10, 0) rotated 90° and doubled → (0, 20), plus parent origin.
         assert!((world[4] - 100.0).abs() < 1e-4 && (world[5] - 70.0).abs() < 1e-4);
         assert_eq!(compose(IDENTITY_AFFINE, child), child);
+    }
+
+    #[test]
+    fn depth_follows_parents() {
+        let node = |z: f32, sz: f32, parent| Node {
+            name: String::new(),
+            id: -1,
+            parent,
+            origin: [0.0, 0.0, z],
+            scale: [1.0, 1.0, sz],
+            angles: [0.0; 3],
+            visible: true,
+        };
+        let nodes = [node(100.0, 2.0, None), node(6000.0, 1.0, Some(0))];
+        assert_eq!(node_depth(&nodes, 1), 12_100.0);
+        assert_eq!(node_depth(&nodes, 0), 100.0);
+        assert_eq!(node_depth(&nodes, 9), 0.0);
     }
 
     #[test]

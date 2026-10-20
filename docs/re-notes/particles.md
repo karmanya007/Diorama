@@ -84,6 +84,27 @@ sizechange 1 → 0, oscillators frequency 0–10, sphere distance 0–256 and
 directions (1, 1, 0), box ±256. Movement only happens with a `movement`
 operator; rotation only with `angularmovement`.
 
+## `colorn` instance override (open)
+Vertex colours in 21 captured systems with a `colorn` override
+(`scratch/colorn.py` compares each system's captured colours with `colorn`
+and `colorn²`, both × `brightness`):
+
+- `colorn²` exactly in 16 systems over scene versions 0–4, e.g. 3195058405's
+  `Shooting_Star_01`: `colorrandom` 180 144 61 .. 193 93 218 with `colorn`
+  1 0 0.553 gives exactly (1, 0, 0.306) for every particle, so the override
+  replaces the initializer's random colour rather than multiplying it.
+  1569133561's Torch (no colour initializer, a `colorchange` operator) is
+  squared as well.
+- `colorn` once in 4: Birds in 2915844448 and 3413921910 and 2208593521's
+  rain (no colour initializer, only `movement`), and 3509243656's nebula
+  (`colorrandom` white, scene version 5, HDR, `brightness` 0.3).
+- 2915844448's fireflies match neither: green stays 1, red and blue vary
+  around `colorn`.
+
+None of scene version, HDR, blending, material, `alpha` override or system
+flags separates the groups. Lumen applies `colorn` once until a rule fits
+all of them.
+
 ## Not reproduced yet
 Rope trails (drawn as sprite trails), sprite-sheet blending, refraction and
 lit particles, `turbulentvelocityrandom`'s noise field, vortex details,

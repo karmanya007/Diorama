@@ -250,9 +250,12 @@ fn fit_factor(mode: FitMode, image: (u32, u32), targets: &[(u32, u32)]) -> f32 {
                 FitMode::Fill => sx.max(sy),
                 FitMode::Fit => sx.min(sy),
                 FitMode::Stretch => sx.max(sy),
-                // Custom zoom is absolute in the image's own pixels, so the
-                // image must keep its native size for the blit to apply it.
-                FitMode::Custom { .. } | FitMode::Native { .. } => 1.0,
+                // Custom zoom shows the image at a fixed scale of its own
+                // pixels; rendering at that scale keeps pixel art sharp (WE
+                // renders straight into its swapchain). The blit fits by the
+                // scene's own size ([`ImageBlit::with_fit_size`]).
+                FitMode::Custom { zoom, .. } => custom_scale(zoom),
+                FitMode::Native { .. } => 1.0,
             }
         })
         .fold(0.0_f32, f32::max)
@@ -282,6 +285,8 @@ pub struct ImageBlit {
     pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
     params: wgpu::Buffer,
+    /// Size the fit mode places on the canvas: the texture's own size
+    /// unless [`ImageBlit::with_fit_size`] says otherwise.
     image_size: (u32, u32),
 }
 
@@ -419,6 +424,14 @@ impl ImageBlit {
             params,
             image_size: (width, height),
         }
+    }
+
+    /// Fits the image as if it were `size` pixels (a scene rendered at
+    /// another size than its own, see [`render_size`]).
+    #[must_use]
+    pub fn with_fit_size(mut self, size: (u32, u32)) -> Self {
+        self.image_size = size;
+        self
     }
 
     /// Draws the image onto `target`, which shows the `target_rect` part of
@@ -658,20 +671,36 @@ mod tests {
     }
 
     #[test]
-    fn custom_keeps_native_size() {
+    fn custom_renders_at_its_zoom() {
+        // Zoom 100 is one image pixel per screen pixel.
         let mode = FitMode::Custom {
             x: 50,
             y: 50,
-            zoom: 97,
+            zoom: 100,
         };
         assert_eq!(
             render_size(mode, (3840, 2160), &[(3000, 1920)], 8192),
             (3840, 2160)
         );
+        // 3000562427: a 480×270 pixel-art scene zoomed 4× renders at 1920×1080
+        // (nearest-filtered textures stay sharp), capped by the device.
+        let mode = FitMode::Custom {
+            x: 50,
+            y: 50,
+            zoom: 131,
+        };
+        let s = custom_scale(131);
+        assert!((s - 4.0).abs() < 0.2, "{s}");
         assert_eq!(
-            display_size(mode, (3840, 2160), &[(3000, 1920)]),
-            (3840, 2160)
+            render_size(mode, (480, 270), &[(1920, 1080)], 8192),
+            ((480.0 * s).round() as u32, (270.0 * s).round() as u32)
         );
+        assert_eq!(
+            render_size(mode, (480, 270), &[(1920, 1080)], 960),
+            (960, 540)
+        );
+        // Images are never upscaled.
+        assert_eq!(display_size(mode, (480, 270), &[(1920, 1080)]), (480, 270));
     }
 
     #[test]

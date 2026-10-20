@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use lumen_scene::{Scene, ScriptTarget, node_world};
+use lumen_scene::{Scene, ScriptTarget, node_depth, node_world};
 use rquickjs::loader::{BuiltinLoader, BuiltinResolver};
 use rquickjs::{CatchResultExt, Context, Function, Module, Object, Persistent, Runtime};
 use serde_json::{Value, json};
@@ -661,7 +661,11 @@ impl ScriptHost {
                 let Some(node) = slot.node else {
                     continue;
                 };
-                let (world, visible) = node_world(&self.nodes, node);
+                let (world, mut visible) = node_world(&self.nodes, node);
+                // Orthographic layers past the camera's depth range vanish.
+                if slot.shown.world.is_none() {
+                    visible &= node_depth(&self.nodes, node).abs() <= lumen_scene::ORTHO_DEPTH;
+                }
                 let now = LayerShown {
                     transform: lumen_scene::compose(world, slot.local),
                     world: slot.shown.world.map(|_| {
