@@ -194,7 +194,8 @@ fn interp(ty: &str) -> &'static str {
 
 pub fn to_hlsl(vertex: &str, fragment: &str, defines: &[(String, String)]) -> Result<HlslPair> {
     let vs = split_stage(vertex)?;
-    let fs = split_stage(fragment)?;
+    let mut fs = split_stage(fragment)?;
+    separate_stage_uniforms(&vs, &mut fs);
     let textures: Vec<Decl> = union([&vs, &fs], |d| {
         d.qualifier == Qualifier::Uniform && d.is_texture()
     })?;
@@ -257,6 +258,62 @@ pub fn to_hlsl(vertex: &str, fragment: &str, defines: &[(String, String)]) -> Re
             .cloned()
             .collect(),
     })
+}
+
+/// A uniform both stages declare for different material keys holds two
+/// values in WE (foliagesway: `g_Speed` is `speed` in the vertex shader and
+/// `speeduv` in the fragment shader; capture of 2581587068 has 1 and 3), so
+/// the fragment one is renamed `<name>_ps` to get its own constant.
+fn separate_stage_uniforms(vs: &Stage, fs: &mut Stage) {
+    let key = |d: &Decl| {
+        d.annotation
+            .as_ref()
+            .and_then(|a| a["material"].as_str())
+            .map(str::to_owned)
+    };
+    let mut renames = Vec::new();
+    for d in fs
+        .decls
+        .iter_mut()
+        .filter(|d| d.qualifier == Qualifier::Uniform && !d.is_texture())
+    {
+        let Some(k) = key(d) else {
+            continue;
+        };
+        let clash = vs.decls.iter().any(|v| {
+            v.qualifier == Qualifier::Uniform
+                && v.name == d.name
+                && key(v).is_some_and(|kv| kv != k)
+        });
+        if clash {
+            let new = format!("{}_ps", d.name);
+            renames.push((d.name.clone(), new.clone()));
+            d.name = new;
+        }
+    }
+    for (old, new) in renames {
+        fs.body = replace_word(&fs.body, &old, &new);
+    }
+}
+
+/// `text` with every whole identifier `from` replaced by `to`.
+fn replace_word(text: &str, from: &str, to: &str) -> String {
+    let is_ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find(from) {
+        let before = rest[..i].chars().next_back();
+        let after = rest[i + from.len()..].chars().next();
+        out.push_str(&rest[..i]);
+        if before.is_some_and(is_ident) || after.is_some_and(is_ident) {
+            out.push_str(from);
+        } else {
+            out.push_str(to);
+        }
+        rest = &rest[i + from.len()..];
+    }
+    out.push_str(rest);
+    out
 }
 
 fn stage_uniforms(stage: &Stage) -> Vec<Decl> {
@@ -475,6 +532,35 @@ mod tests {
         let signature =
             "vec3 Light(vec3 n,\n    float radius, float exponent)\n{\n    return n;\n}\n";
         assert_eq!(staticize_globals(signature), signature);
+    }
+
+    #[test]
+    fn stages_keep_their_own_material_uniforms() {
+        // foliagesway: `speed` drives the vertex shader, `speeduv` the fragment.
+        let vs = "uniform float g_Speed; // {\"material\":\"speed\",\"default\":1}
+                  uniform float g_Phase; // {\"material\":\"phase\",\"default\":0}
+                  attribute vec3 a_Position;
+void main() {
+                  gl_Position = vec4(a_Position * g_Speed * g_Phase, 1.0);
+}
+";
+        let fs = "uniform float g_Speed; // {\"material\":\"speeduv\",\"default\":5}
+                  uniform float g_Phase; // {\"material\":\"phase\",\"default\":0}
+                  void main() {
+float g_SpeedX = 1.0;
+                  gl_FragColor = vec4(g_Speed * g_Phase * g_SpeedX);
+}
+";
+        let out = to_hlsl(vs, fs, &[]).unwrap();
+        let names: Vec<&str> = out
+            .fragment_uniforms
+            .iter()
+            .map(|d| d.name.as_str())
+            .collect();
+        assert_eq!(names, ["g_Speed_ps", "g_Phase"]);
+        assert_eq!(out.vertex_uniforms[0].name, "g_Speed");
+        assert!(out.fragment.contains("g_Speed_ps * g_Phase * g_SpeedX"));
+        assert!(out.vertex.contains("g_Speed * g_Phase"));
     }
 
     #[test]
