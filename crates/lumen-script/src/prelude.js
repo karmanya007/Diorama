@@ -40,12 +40,18 @@
 	let anims = [];
 	let nodes = [], layers = [], scripts = [], dirtyNodes = new Set(), dirtyLayers = new Set();
 	let effectChanges = [], constantChanges = [], timers = [], timerId = 1;
+	// Layers scripts created / reordered since the last frame (the host
+	// imports and draws them): [layer, node, config] and [layer, before].
+	let created = [], sorts = [];
 	// Sound objects by node: { i, volume, playing }, and this frame's commands.
 	const soundByNode = new Map();
 	let soundCommands = [];
 	// Texture animations scripts took control of, by layer.
 	const textureAnims = new Map();
+	// Script layer objects in layer-list order (sortLayer reorders it) and
+	// by node index (stable).
 	const objects = [];
+	const byNode = [];
 
 	const vec3 = (a) => new Vec3(a[0], a[1], a[2]);
 	const arr3 = (v) => (v instanceof Vec3 || v instanceof Vec2 || (v && typeof v === 'object'))
@@ -186,7 +192,7 @@
 			dirtyNodes.add(this.__n);
 		}
 		get size() { const l = this.__layer; return l === null ? new Vec2(0) : new Vec2(layers[l].size[0], layers[l].size[1]); }
-		getParent() { const p = nodes[this.__n].parent; return p === null ? null : objects[p]; }
+		getParent() { const p = nodes[this.__n].parent; return p === null ? null : byNode[p]; }
 		getChildren() { return objects.filter((o) => nodes[o.__n].parent === this.__n); }
 		getTransformMatrix() { return Mat4.identity ? Mat4.identity() : null; }
 		getTextureAnimation() {
@@ -235,20 +241,64 @@
 		enumerateLayers() { return objects.slice(); },
 		getLayerCount() { return objects.length; },
 		getLayerIndex(layer) { return objects.indexOf(layer); },
-		// Layers made at runtime exist for the script but are not drawn yet.
+		// A layer from a model path or an object config (`image`/`text` plus
+		// placement and style); the host imports and draws it from the next
+		// frame on. Drawn above everything until sortLayer() moves it.
 		createLayer(config) {
-			const c = (config && typeof config === 'object') ? config : {};
+			const c = typeof config === 'string' ? { image: config }
+				: (config && typeof config === 'object') ? config : {};
+			const plain = {};
+			for (const [k, v] of Object.entries(c)) {
+				const n = numbers(v);
+				plain[k] = n && typeof v === 'object' ? n : v;
+			}
+			const l = layers.length;
+			layers.push({
+				alpha: c.alpha !== undefined ? Number(c.alpha) : 1,
+				color: c.color ? arr3(c.color) : [1, 1, 1],
+				text: c.text !== undefined ? String(c.text) : undefined,
+				effects: [], size: [0, 0], frames: [],
+			});
 			nodes.push({
-				name: String(c.name ?? ''), id: -1, parent: null, layer: null, visible: true,
+				name: String(c.name ?? ''), id: -1, parent: null, layer: l, visible: c.visible !== false,
 				origin: c.origin ? arr3(c.origin) : [0, 0, 0],
 				scale: c.scale ? arr3(c.scale) : [1, 1, 1],
-				angles: [0, 0, 0],
+				angles: c.angles ? arr3(c.angles) : [0, 0, 0],
 			});
-			const o = new Layer(nodes.length - 1);
+			const n = nodes.length - 1;
+			created.push([l, n, typeof config === 'string' ? config : plain]);
+			const o = new Layer(n);
 			objects.push(o);
+			byNode.push(o);
 			return o;
 		},
-		sortLayer() {}, destroyLayer() {},
+		// Moves `layer` to position `index` of the layer list (drawn just
+		// below what was there).
+		sortLayer(layer, index) {
+			if (!layer || layer.__n === undefined) return;
+			const from = objects.indexOf(layer);
+			if (from < 0) return;
+			objects.splice(from, 1);
+			const at = Math.max(0, Math.min(Number(index) | 0, objects.length));
+			objects.splice(at, 0, layer);
+			const own = nodes[layer.__n].layer;
+			if (own === null || own === undefined) return;
+			const next = objects.slice(at + 1).map((o) => nodes[o.__n].layer).find((x) => x !== null && x !== undefined);
+			sorts.push([own, next === undefined ? null : next]);
+		},
+		destroyLayer(layer) {
+			if (!layer || layer.__n === undefined) return;
+			nodes[layer.__n].visible = false;
+			dirtyNodes.add(layer.__n);
+		},
+		// The config a layer was created from (scene placement and style).
+		getInitialLayerConfig(layer) {
+			if (!layer || layer.__n === undefined) return {};
+			const n = nodes[layer.__n];
+			const out = { name: n.name, origin: vec3(n.origin), scale: vec3(n.scale), angles: vec3(n.angles) };
+			if (n.config) Object.assign(out, n.config);
+			return out;
+		},
 		getCameraTransforms() { return { eye: new Vec3(0, 0, 0), center: new Vec3(0, 0, -1), up: new Vec3(0, 1, 0) }; },
 	};
 
@@ -329,7 +379,7 @@
 					: v instanceof Vec2 ? [v.x, v.y] : null;
 
 	function current(s) {
-		const o = s.node === null ? null : objects[s.node];
+		const o = s.node === null ? null : byNode[s.node];
 		switch (s.kind) {
 			case 'origin': return o.origin;
 			case 'scale': return o.scale;
@@ -344,7 +394,7 @@
 	}
 
 	function assign(s, v) {
-		const o = s.node === null ? null : objects[s.node];
+		const o = s.node === null ? null : byNode[s.node];
 		switch (s.kind) {
 			case 'origin': o.origin = v; break;
 			case 'scale': o.scale = v; break;
@@ -467,7 +517,7 @@
 		const state = JSON.parse(json);
 		nodes = state.nodes;
 		layers = state.layers;
-		for (let i = 0; i < nodes.length; i++) objects.push(new Layer(i));
+		for (let i = 0; i < nodes.length; i++) { const o = new Layer(i); objects.push(o); byNode.push(o); }
 		// Scene settings scripts read (`thisScene.cameraparallax`, …); colours as Vec3.
 		for (const [k, v] of Object.entries(state.general)) {
 			scene[k] = Array.isArray(v) ? vec3(v) : v;
@@ -481,7 +531,7 @@
 			if (s.node !== null && s.node !== undefined) soundByNode.set(s.node, { i, volume: s.volume, playing: !!s.playing });
 		});
 	};
-	L.layerFor = (node) => node === null ? null : objects[node];
+	L.layerFor = (node) => node === null ? null : byNode[node];
 	L.attach = function (index, ns) { scripts[index].ns = ns; };
 
 	L.start = function () {
@@ -589,7 +639,7 @@
 	};
 
 	L.end = function () {
-		const out = { nodes: {}, layers: {}, effects: effectChanges, constants: constantChanges, textureFrames: [], sounds: soundCommands, logs: L.logs };
+		const out = { nodes: {}, layers: {}, effects: effectChanges, constants: constantChanges, textureFrames: [], sounds: soundCommands, logs: L.logs, created, sorts };
 		for (const [l, t] of textureAnims) {
 			const f = t.getFrame();
 			if (f !== t.__sent) { t.__sent = f; out.textureFrames.push([l, f]); }
@@ -603,6 +653,7 @@
 			out.layers[i] = { alpha: l.alpha, color: l.color, text: l.text };
 		}
 		dirtyNodes = new Set(); dirtyLayers = new Set(); effectChanges = []; constantChanges = []; soundCommands = []; L.logs = [];
+		created = []; sorts = [];
 		return JSON.stringify(out);
 	};
 })();

@@ -720,6 +720,140 @@ impl SceneRenderer {
         }
     }
 
+    /// Adds a layer created at runtime (scripts' `createLayer`) as IR layer
+    /// `layer`'s index = the current layer count, with the textures, programs
+    /// and fonts it brought (ids continuing the scene's). Drawn just below
+    /// IR layer `below` (or on top). Returns the new layer's index.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_layer(
+        &mut self,
+        gpu: &Gpu,
+        compiler: &ShaderCompiler,
+        layer: ir::ImageLayer,
+        textures: &[ir::Texture],
+        programs: &[ir::ShaderProgram],
+        fonts: Vec<ir::FontData>,
+        below: Option<usize>,
+    ) -> usize {
+        let index = self.ir.layers.len();
+        if !textures.is_empty() {
+            match Arc::get_mut(&mut self.shared) {
+                Some(shared) => {
+                    for t in textures {
+                        shared.assets.push(upload(gpu, t));
+                        shared.frames.push(t.frames.clone());
+                    }
+                }
+                None => tracing::warn!("textures of a created layer could not be added"),
+            }
+        }
+        for p in programs {
+            match build_program(gpu, compiler, p, &self.shared.uniforms_layout, self.format) {
+                Ok(program) => self.programs.push(Some(program)),
+                Err(e) => {
+                    tracing::warn!(program = %p.name, "shader skipped: {e}");
+                    self.programs.push(None);
+                }
+            }
+        }
+        let state = LayerState {
+            transform: layer.transform,
+            world: layer.world,
+            color: layer.color,
+            visible: layer.visible,
+            text: None,
+            effects: layer.effects.iter().map(|e| e.visible).collect(),
+            constants: BTreeMap::new(),
+            texture_frame: None,
+        };
+        {
+            let ir = Arc::make_mut(&mut self.ir);
+            ir.fonts.extend(fonts);
+            ir.layers.push(layer);
+        }
+        self.state.push(state);
+        let top = Frame {
+            target: SCENE,
+            camera: self.camera,
+        };
+        let (shared, ir) = (self.shared.clone(), self.ir.clone());
+        let ctx = BuildContext {
+            gpu,
+            scene: &ir,
+            assets: &shared.assets,
+            placeholder: &shared.placeholder,
+            empty: &shared.empty,
+            samplers: &shared.samplers,
+            uniforms_layout: &shared.uniforms_layout,
+        };
+        if let Some(gpu_layer) = self.build_layer(&ctx, index, top, &shared.composite_layout) {
+            let at = below
+                .and_then(|b| self.layers.iter().position(|l| l.index == b))
+                .unwrap_or(self.layers.len());
+            self.layers.insert(at, gpu_layer);
+        }
+        index
+    }
+
+    /// Reserves the next layer index for a created layer that could not be
+    /// imported: never drawn, but later indices stay in step with scripts.
+    pub fn add_placeholder_layer(&mut self) -> usize {
+        let index = self.ir.layers.len();
+        let layer = ir::ImageLayer {
+            name: String::new(),
+            size: [1, 1],
+            node: None,
+            local: ir::IDENTITY_AFFINE,
+            text: None,
+            particles: None,
+            puppet: None,
+            model: None,
+            world: None,
+            transform: ir::IDENTITY_AFFINE,
+            visible: false,
+            kind: LayerKind::Image,
+            group: None,
+            parallax_depth: [0.0, 0.0],
+            color: [1.0; 4],
+            blend: Blend::Translucent,
+            albedo: ir::Pass {
+                program: ir::ProgramId(usize::MAX),
+                textures: BTreeMap::new(),
+                target: None,
+                constants: BTreeMap::new(),
+                blend: Blend::Translucent,
+            },
+            mesh: None,
+            copy_background: false,
+            composite: None,
+            effects: Vec::new(),
+        };
+        self.state.push(LayerState {
+            transform: layer.transform,
+            world: None,
+            color: layer.color,
+            visible: false,
+            text: None,
+            effects: Vec::new(),
+            constants: BTreeMap::new(),
+            texture_frame: None,
+        });
+        Arc::make_mut(&mut self.ir).layers.push(layer);
+        index
+    }
+
+    /// Draws IR layer `layer` just below IR layer `below` (or on top).
+    pub fn sort_layer(&mut self, layer: usize, below: Option<usize>) {
+        let Some(from) = self.layers.iter().position(|l| l.index == layer) else {
+            return;
+        };
+        let moved = self.layers.remove(from);
+        let at = below
+            .and_then(|b| self.layers.iter().position(|l| l.index == b))
+            .unwrap_or(self.layers.len());
+        self.layers.insert(at, moved);
+    }
+
     /// Replaces the pixels of scene texture `texture` (a video frame), tightly
     /// packed RGBA8 of `width × height`, clipped to the texture's size.
     pub fn write_texture(&self, gpu: &Gpu, texture: usize, width: u32, height: u32, rgba: &[u8]) {

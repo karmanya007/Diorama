@@ -79,6 +79,16 @@ pub struct LayerChange {
     pub texture_frame: Option<u32>,
 }
 
+/// A layer a script created (`thisScene.createLayer`): the host must import
+/// `config` as layer `layer` placed by node `node` and add it to the renderer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreatedLayer {
+    pub layer: usize,
+    pub node: usize,
+    /// A model path or an object config, as the script gave it.
+    pub config: Value,
+}
+
 /// What a script asked of a sound object (index in `Scene::sounds`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SoundCommand {
@@ -123,6 +133,10 @@ pub struct ScriptHost {
     sound_states: Option<Vec<bool>>,
     /// Sound commands from the last frame.
     sound_commands: Vec<SoundCommand>,
+    /// Layers created and reordered in the last frame.
+    created: Vec<CreatedLayer>,
+    /// (layer, drawn just below this layer; `None` = on top).
+    sorts: Vec<(usize, Option<usize>)>,
 }
 
 impl std::fmt::Debug for ScriptHost {
@@ -404,6 +418,8 @@ impl ScriptHost {
             events: Vec::new(),
             sound_states: None,
             sound_commands: Vec::new(),
+            created: Vec::new(),
+            sorts: Vec::new(),
         }))
     }
 
@@ -473,6 +489,30 @@ impl ScriptHost {
         std::mem::take(&mut self.sound_commands)
     }
 
+    /// Layers scripts created in the last frame; add them to the renderer
+    /// (then [`ScriptHost::register_layer`]) before applying that frame's
+    /// changes.
+    pub fn take_created(&mut self) -> Vec<CreatedLayer> {
+        std::mem::take(&mut self.created)
+    }
+
+    /// Layer moves of the last frame: (layer, drawn just below this one).
+    pub fn take_sorts(&mut self) -> Vec<(usize, Option<usize>)> {
+        std::mem::take(&mut self.sorts)
+    }
+
+    /// Tells the host how a created layer was imported (its size and local
+    /// placement), for hit testing and transforms from the next frame.
+    pub fn register_layer(&mut self, index: usize, layer: &lumen_scene::ImageLayer) {
+        if let Some(slot) = self.layers.get_mut(index) {
+            slot.size = layer.size;
+            slot.local = layer.local;
+            slot.shown.world = layer.world;
+            // Recompute the placement with the real local transform.
+            slot.shown.transform = [f32::NAN; 6];
+        }
+    }
+
     /// Delivers a component event (e.g. `mediaPlaybackChanged`) to every
     /// script exporting `handler`, at the start of the next frame. Vectors
     /// in `event` given as `{"vec3": [r, g, b]}` become `Vec3`.
@@ -518,6 +558,62 @@ impl ScriptHost {
         let mut changes: BTreeMap<usize, LayerChange> = BTreeMap::new();
 
         let mut moved = false;
+        for c in out["created"].as_array().into_iter().flatten() {
+            let (Some(layer), Some(node)) = (index(&c[0]), index(&c[1])) else {
+                continue;
+            };
+            // Scripts number new layers and nodes after the existing ones.
+            if layer != self.layers.len() || node != self.nodes.len() {
+                tracing::warn!(layer, node, "created layer out of step; ignored");
+                continue;
+            }
+            let config = c[2].clone();
+            let vec = |key: &str, default: [f32; 3]| {
+                let mut v = default;
+                read3(&config[key], &mut v);
+                v
+            };
+            self.nodes.push(lumen_scene::Node {
+                name: config["name"].as_str().unwrap_or("").to_owned(),
+                id: -1,
+                parent: None,
+                origin: vec("origin", [0.0; 3]),
+                scale: vec("scale", [1.0; 3]),
+                angles: vec("angles", [0.0; 3]),
+                visible: config["visible"].as_bool().unwrap_or(true),
+            });
+            let rgb = vec("color", [1.0; 3]);
+            self.layers.push(LayerSlot {
+                node: Some(node),
+                local: lumen_scene::IDENTITY_AFFINE,
+                color: [
+                    rgb[0],
+                    rgb[1],
+                    rgb[2],
+                    config["alpha"].as_f64().unwrap_or(1.0) as f32,
+                ],
+                text: config["text"].as_str().map(str::to_owned),
+                shown: LayerShown {
+                    transform: [f32::NAN; 6],
+                    world: None,
+                    visible: true,
+                },
+                size: [0, 0],
+            });
+            self.created.push(CreatedLayer {
+                layer,
+                node,
+                config,
+            });
+            moved = true;
+        }
+        for s in out["sorts"].as_array().into_iter().flatten() {
+            if let Some(layer) = index(&s[0]) {
+                self.sorts.push((layer, index(&s[1])));
+            }
+        }
+        // New or newly registered layers need their placement computed.
+        moved |= self.layers.iter().any(|s| s.shown.transform[0].is_nan());
         for (key, n) in out["nodes"].as_object().into_iter().flatten() {
             let Some(node) = key
                 .parse::<usize>()

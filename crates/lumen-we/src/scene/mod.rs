@@ -5,6 +5,7 @@
 //! shader translation to HLSL and texture decoding. See
 //! `docs/re-notes/renderdoc-captures.md` for the pass structure this mirrors.
 
+mod factory;
 mod particles;
 pub mod properties;
 mod text;
@@ -25,6 +26,7 @@ use crate::error::{Error, Result};
 use crate::shader::{self, Decl, Qualifier};
 use crate::tex::{Tex, TexFlags};
 use crate::tex_decode::mip_to_rgba8;
+pub use factory::{CreatedLayer, LayerFactory};
 pub use properties::Properties;
 use values::{boolean, floats, integer, unwrap_value, vec_n};
 pub use vfs::Vfs;
@@ -70,19 +72,7 @@ pub fn import_with(vfs: &Vfs, limits: &Limits, properties: &Properties) -> Resul
     {
         general.insert("cameraparallax".into(), Value::Bool(on));
     }
-    let mut importer = Importer {
-        vfs,
-        limits,
-        scene: Scene::default(),
-        textures: HashMap::new(),
-        programs: HashMap::new(),
-        program_uniforms: HashMap::new(),
-        engine: shader::EngineContext::default(),
-        zoom: 1.0,
-        groups: HashMap::new(),
-        fonts: HashMap::new(),
-        texture_formats: HashMap::new(),
-    };
+    let mut importer = Importer::new(vfs, limits);
     importer.scene_header(&json);
     importer.scene.user_properties = user_properties_json(vfs, properties);
     importer.scene.scheme_color = properties
@@ -310,6 +300,24 @@ struct PassSpec<'v> {
     textures: BTreeMap<u32, String>,
     /// Constant lookups in priority order.
     constants: Vec<&'v serde_json::Map<String, Value>>,
+}
+
+impl<'a> Importer<'a> {
+    fn new(vfs: &'a Vfs, limits: &'a Limits) -> Self {
+        Self {
+            vfs,
+            limits,
+            scene: Scene::default(),
+            textures: HashMap::new(),
+            programs: HashMap::new(),
+            program_uniforms: HashMap::new(),
+            engine: shader::EngineContext::default(),
+            zoom: 1.0,
+            groups: HashMap::new(),
+            fonts: HashMap::new(),
+            texture_formats: HashMap::new(),
+        }
+    }
 }
 
 impl Importer<'_> {

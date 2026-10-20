@@ -193,3 +193,58 @@ fn every_corpus_scene_imports() {
     }
     assert!(failures.is_empty(), "{failures:#?}");
 }
+
+#[test]
+fn scripts_can_create_text_and_image_layers() {
+    let (Some(corpus), Some(install)) = (
+        dir_from_env("LUMEN_WE_CORPUS", DEFAULT_CORPUS),
+        dir_from_env("LUMEN_WE_INSTALL", DEFAULT_INSTALL),
+    ) else {
+        eprintln!("corpus not found; skipping");
+        return;
+    };
+    let assets = install.join("assets");
+    let limits = Limits::default();
+    let choices = BTreeMap::new();
+    for (id, config) in [
+        // 2980001176: the clock's shadow, a text layer.
+        (
+            "2980001176",
+            serde_json::json!({"text": "shadow", "color": [0, 0, 0], "alpha": 1,
+                "pointsize": 40, "font": "systemfont_arial"}),
+        ),
+        // 3509243656: an orbit-trail dot, an image model in a 3D scene.
+        (
+            "3509243656",
+            serde_json::json!({"image": "models/ta.json", "origin": [0, 0, -1],
+                "scale": [0.01, 0.01, 0.01], "alpha": 0}),
+        ),
+    ] {
+        let dir = corpus.join(id);
+        if !dir.is_dir() {
+            continue;
+        }
+        let scene = lumen_we::scene::import(&dir, Some(&assets), &limits).unwrap();
+        let mut factory =
+            lumen_we::scene::LayerFactory::new(&dir, Some(&assets), &limits, &choices, &scene)
+                .unwrap();
+        let node = scene.nodes.len();
+        let made = factory.create(&config, node).unwrap();
+        assert_eq!(made.layer.node, Some(node), "{id}");
+        // New resources continue the scene's numbering.
+        let program = made.layer.albedo.program.0;
+        assert!(program < scene.programs.len() + made.programs.len(), "{id}");
+        if let Some(text) = &made.layer.text {
+            assert_eq!(text.text, "shadow");
+            assert!(text.font < scene.fonts.len() + made.fonts.len());
+        }
+        assert_eq!(made.layer.world.is_some(), scene.camera.is_some(), "{id}");
+        // A second layer gets the next node and reuses loaded resources.
+        let again = factory.create(&config, node + 1).unwrap();
+        assert_eq!(again.layer.node, Some(node + 1));
+        assert!(
+            again.textures.is_empty() && again.programs.is_empty(),
+            "{id}"
+        );
+    }
+}

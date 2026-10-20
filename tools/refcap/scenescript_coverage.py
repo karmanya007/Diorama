@@ -23,9 +23,9 @@ HOST = [
 STUBS = {
     "getVideoTexture", "getAnimationLayer", "getAnimationLayerCount",
     "setMaterialProperty", "executeMaterialFunction", "getMaterial", "parallaxDepth",
-    "play", "pause", "stop", "isPlaying", "emit", "instance", "sortLayer", "destroyLayer",
-    "createLayer", "getCameraTransforms", "openUserShortcut", "registerAsset",
-    "registerAudioBuffers", "getTransformMatrix",
+    "play", "pause", "stop", "isPlaying", "emit", "instance",
+    "getCameraTransforms", "openUserShortcut", "registerAsset",
+    "getTransformMatrix",
     # Component callbacks the host never raises yet.
     "resizeScreen", "applyGeneralSettings",
     "destroy",

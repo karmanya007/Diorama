@@ -425,3 +425,44 @@ fn scripts_control_sounds() {
     let changes = host.update(&inputs(0.2));
     assert_eq!(changes[&0].color.map(|c| c[3]), Some(0.5));
 }
+
+#[test]
+fn scripts_create_and_sort_layers() {
+    // 2980001176's clock: a shadow text layer created in init(), sorted
+    // below the clock, then fed the clock's text every frame.
+    let clock = script(
+        "'use strict';
+let shadow;
+export function init() {
+  shadow = thisScene.createLayer({ text: 'shadow', color: new Vec3(0, 0, 0), origin: new Vec3(3, 4, 0) });
+  thisScene.sortLayer(shadow, thisScene.getLayerIndex(thisLayer));
+}
+export function update(value) {
+  shadow.text = 'late';
+  shadow.alpha = 0.5;
+  return 'clock';
+}",
+        0,
+        ScriptTarget::Text(0),
+        "{}",
+    );
+    let mut host = ScriptHost::new(&scene(vec![clock]), [100, 100], CLOCK)
+        .unwrap()
+        .unwrap();
+    let changes = host.update(&inputs(0.0));
+    let created = host.take_created();
+    assert_eq!(created.len(), 1);
+    assert_eq!((created[0].layer, created[0].node), (2, 2));
+    assert_eq!(created[0].config["text"], "shadow");
+    assert_eq!(created[0].config["color"], serde_json::json!([0, 0, 0]));
+    // Drawn just below the clock (layer 0).
+    assert_eq!(host.take_sorts(), vec![(2, Some(0))]);
+    // thisLayer still means the clock after the reorder.
+    assert_eq!(changes[&0].text.as_deref(), Some("clock"));
+    assert_eq!(changes[&2].text.as_deref(), Some("late"));
+    assert_eq!(changes[&2].color, Some([0.0, 0.0, 0.0, 0.5]));
+    assert_eq!(
+        changes[&2].transform.map(|t| [t[4], t[5]]),
+        Some([3.0, 4.0])
+    );
+}

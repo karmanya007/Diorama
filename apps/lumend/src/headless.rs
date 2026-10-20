@@ -21,6 +21,29 @@ pub fn shader_compiler() -> Result<ShaderCompiler> {
     ShaderCompiler::locate(cache).context("locating the HLSL compiler")
 }
 
+/// Imports layers `scene`'s scripts create at runtime; `None` when no
+/// script calls `createLayer` (the factory holds the package in memory).
+pub fn layer_factory(
+    dir: &Path,
+    assets: Option<&Path>,
+    we_config: Option<&Path>,
+    scene: &lumen_scene::Scene,
+) -> Option<lumen_we::scene::LayerFactory> {
+    if !scene
+        .scripts
+        .iter()
+        .any(|s| s.source.contains("createLayer"))
+    {
+        return None;
+    }
+    let choices = we_config
+        .map(|c| lumen_we::config::user_properties_from_file(c, dir, 0))
+        .unwrap_or_default();
+    lumen_we::scene::LayerFactory::new(dir, assets, &Limits::default(), &choices, scene)
+        .inspect_err(|e| tracing::warn!("scripts cannot create layers: {e}"))
+        .ok()
+}
+
 /// Imports a WE scene with the user's own WE choices (`we_config`) applied.
 pub fn load_scene(
     dir: &Path,
@@ -159,7 +182,9 @@ pub fn render_to_png(
     });
     let mut renderer = SceneRenderer::new(&gpu, &scene, &compiler, output)?;
     tracing::info!(ms = started.elapsed().as_millis(), "scene renderer built");
-    if let Some(mut scripts) = crate::scripts::SceneScripts::new(&scene, clock_ms, false) {
+    let factory =
+        layer_factory(scene_dir, assets, we_config, &scene).map(|f| (f, compiler.clone()));
+    if let Some(mut scripts) = crate::scripts::SceneScripts::new(&scene, clock_ms, false, factory) {
         // Run scripts from the scene's start (up to a minute back) at 30 fps:
         // scripts that ease, integrate or count frames end where they would
         // have while playing (3509243656 spins its sky by 3°/s of runtime).

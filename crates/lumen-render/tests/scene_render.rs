@@ -379,3 +379,37 @@ fn audio_spectrum_reaches_shaders() {
     let red = px(&img, 64, 16, 16)[0];
     assert!((126..=129).contains(&red), "{red}");
 }
+
+#[test]
+fn created_layers_draw_with_their_own_resources_and_order() {
+    let Some((gpu, compiler)) = setup() else {
+        return;
+    };
+    let mut s = scene();
+    s.layers.truncate(1);
+    let mut r = SceneRenderer::new(&gpu, &s, &compiler, None).unwrap();
+    // A blue quad over the red one, with a texture and program the scene
+    // did not have (ids continue the scene's).
+    let mut blue = layer("blue", [16.0, 16.0], 2, 1.0);
+    blue.albedo.program = ProgramId(3);
+    let index = r.add_layer(
+        &gpu,
+        &compiler,
+        blue,
+        &[solid("blue", [0, 0, 255, 255])],
+        &[program("image again", IMAGE)],
+        Vec::new(),
+        None,
+    );
+    assert_eq!(index, 1);
+    let frame = |r: &mut SceneRenderer| {
+        r.render(&gpu, &FrameInputs::default());
+        r.read_output(&gpu).unwrap()
+    };
+    assert_eq!(px(&frame(&mut r), 64, 16, 16), [0, 0, 255, 255], "on top");
+    // Sorted below the red layer, it is hidden.
+    r.sort_layer(1, Some(0));
+    assert_eq!(px(&frame(&mut r), 64, 16, 16), [255, 0, 0, 255], "below");
+    // A placeholder keeps numbering without drawing.
+    assert_eq!(r.add_placeholder_layer(), 2);
+}

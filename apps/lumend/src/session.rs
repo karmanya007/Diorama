@@ -275,9 +275,20 @@ impl Session {
                 let max = gpu.device.limits().max_texture_dimension_2d;
                 let (w, h) = render_size(look.fit_mode(), (scene.width, scene.height), &sizes, max);
                 let renderer = SceneRenderer::new(gpu, &scene, &compiler, Some([w, h]))?;
-                let scripts =
-                    crate::scripts::SceneScripts::new(&scene, crate::scripts::now_ms(), true)
-                        .map(Box::new);
+                let factory = crate::headless::layer_factory(
+                    &source.dir,
+                    source.we_assets.as_deref(),
+                    source.we_config.as_deref(),
+                    &scene,
+                )
+                .map(|f| (f, compiler.clone()));
+                let scripts = crate::scripts::SceneScripts::new(
+                    &scene,
+                    crate::scripts::now_ms(),
+                    true,
+                    factory,
+                )
+                .map(Box::new);
                 let videos = crate::videos::SceneVideos::start(&scene);
                 let sounds = crate::sounds::SceneSounds::new(&scene);
                 let [r, g, b] = scene.scheme_color;

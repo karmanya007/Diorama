@@ -4,6 +4,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use lumen_gpu::Gpu;
+use lumen_gpu::shader::ShaderCompiler;
 use lumen_platform::{DesktopPointer, MediaInfo, MediaPlayback, MediaWatcher};
 use lumen_render::scene::{LayerUpdate, SceneRenderer};
 use lumen_scene::Scene;
@@ -35,6 +36,8 @@ pub struct SceneScripts {
     last_time: Option<f32>,
     /// Now-playing source for media events (live sessions only).
     media: Option<Media>,
+    /// Imports layers scripts create (`createLayer`), and compiles their shaders.
+    factory: Option<(lumen_we::scene::LayerFactory, ShaderCompiler)>,
 }
 
 struct Media {
@@ -64,7 +67,12 @@ impl SceneScripts {
     /// `None` when the scene has no scripts or the runtime failed to start.
     /// `live`: follow the system's now-playing media (not for headless frames,
     /// which must not depend on what happens to be playing).
-    pub fn new(scene: &Scene, clock_ms: f64, live: bool) -> Option<Self> {
+    pub fn new(
+        scene: &Scene,
+        clock_ms: f64,
+        live: bool,
+        factory: Option<(lumen_we::scene::LayerFactory, ShaderCompiler)>,
+    ) -> Option<Self> {
         match ScriptHost::new(scene, [scene.width, scene.height], clock_ms) {
             Ok(Some(host)) => {
                 tracing::info!(scripts = scene.scripts.len(), "scene scripts loaded");
@@ -78,6 +86,7 @@ impl SceneScripts {
                         last: None,
                         timeline_at: f32::NEG_INFINITY,
                     }),
+                    factory,
                 })
             }
             Ok(None) => None,
@@ -121,6 +130,45 @@ impl SceneScripts {
             left_down: buttons.is_some_and(|b| b.left_down),
             audio,
         });
+        // Layers created this frame exist before their changes apply.
+        for c in self.host.take_created() {
+            let made = self
+                .factory
+                .as_mut()
+                .map(|(factory, compiler)| (factory.create(&c.config, c.node), compiler));
+            match made {
+                Some((Ok(made), compiler)) => {
+                    let index = renderer.add_layer(
+                        gpu,
+                        compiler,
+                        made.layer.clone(),
+                        &made.textures,
+                        &made.programs,
+                        made.fonts,
+                        None,
+                    );
+                    if index != c.layer {
+                        tracing::warn!(index, expected = c.layer, "created layer index mismatch");
+                    }
+                    self.host.register_layer(c.layer, &made.layer);
+                    self.names.push(made.layer.name.clone());
+                    tracing::debug!(layer = c.layer, config = %c.config, "script created a layer");
+                }
+                Some((Err(e), _)) => {
+                    tracing::debug!(config = %c.config, "created layer not drawn: {e}");
+                    // Keep numbering in step with the scripts.
+                    renderer.add_placeholder_layer();
+                    self.names.push(String::new());
+                }
+                None => {
+                    renderer.add_placeholder_layer();
+                    self.names.push(String::new());
+                }
+            }
+        }
+        for (layer, below) in self.host.take_sorts() {
+            renderer.sort_layer(layer, below);
+        }
         for command in self.host.take_sound_commands() {
             tracing::debug!(?command, "script sound command");
             if let Some(sounds) = sounds.as_deref_mut() {

@@ -69,6 +69,21 @@ impl Vfs {
         None
     }
 
+    /// The one package entry `<dir>/workshop/<id>/<rest>` for `path` =
+    /// `<dir>/<rest>`: workshop assets refer to their own files without the
+    /// `workshop/<id>/` part (a script's `createLayer("models/bar.json")`).
+    pub fn workshop_variant(&self, path: &str) -> Option<String> {
+        let (dir, rest) = path.split_once('/')?;
+        let prefix = format!("{dir}/workshop/");
+        let mut found = self.pkg_entries.keys().filter(|k| {
+            k.strip_prefix(&prefix)
+                .and_then(|r| r.split_once('/'))
+                .is_some_and(|(_, tail)| tail == rest)
+        });
+        let first = found.next()?.clone();
+        found.next().is_none().then_some(first)
+    }
+
     pub fn read_string(&self, path: &str) -> Option<String> {
         self.read(path).and_then(|b| String::from_utf8(b).ok())
     }
