@@ -1911,6 +1911,8 @@ impl SceneRenderer {
             audio,
             audio_level,
             shift,
+            spread: self.parallax.map_or(0.0, |p| p.amount),
+            centre: [self.size[0] as f32 / 2.0, self.size[1] as f32 / 2.0],
             shake,
             scene_load: &mut scene_load,
             depth_load: wgpu::LoadOp::Clear(0.0),
@@ -1941,7 +1943,15 @@ struct FrameState<'a> {
     audio: Vec<(&'static str, Vec<f32>)>,
     /// Mean audio level 0..1 (audio-driven particle emitters).
     audio_level: f32,
+    /// Parallax shift for depth 1 from the cursor ([`SceneRenderer::parallax_shift`]).
     shift: [f32; 2],
+    /// Parallax also spreads layers away from the scene centre by
+    /// `depth × amount × (origin − centre)`: WE's parallax camera sits at
+    /// the centre plus the cursor term, and each layer moves by its depth ×
+    /// amount × its distance from that camera (capture 914 of 3195058405:
+    /// three layers at depths −0.58 / 0.92 / 1.53 fit to within a pixel).
+    spread: f32,
+    centre: [f32; 2],
     shake: [f32; 2],
     scene_load: &'a mut wgpu::LoadOp<wgpu::Color>,
     /// The scene depth buffer is cleared by the first model drawn.
@@ -2040,12 +2050,14 @@ impl SceneRenderer {
                 pass.vertex_count = n;
             }
         }
-        let offset = [
-            f.shift[0] * layer.parallax_depth[0] + f.shake[0],
-            f.shift[1] * layer.parallax_depth[1] + f.shake[1],
-        ];
+        let origin = [layer.transform[3][0], layer.transform[3][1]];
+        let offset = [0, 1].map(|i| {
+            (f.shift[i] + f.spread * (origin[i] - f.centre[i])) * layer.parallax_depth[i]
+                + f.shake[i]
+        });
         let moved = offset != layer.offset;
         if moved {
+            tracing::trace!(layer = layer.index, ?origin, ?offset, "layer offset");
             layer.offset = offset;
             let t = offset_transform(layer.transform, offset);
             if let Some((_, vertices, _, camera)) = &layer.composite {
