@@ -4,6 +4,57 @@ use serde_json::Value;
 
 use crate::error::{Error, Result};
 
+/// Annotation JSON as WE reads it: also accepts numbers with leading zeros
+/// (`"range":[0,01]` in a workshop shader of 2216027178) and trailing commas.
+pub fn lenient_json(text: &str) -> Option<Value> {
+    if let Ok(v) = serde_json::from_str(text) {
+        return Some(v);
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    let (mut in_string, mut escaped) = (false, false);
+    // Last significant character outside strings.
+    let mut prev = ' ';
+    while let Some(c) = chars.next() {
+        if in_string {
+            out.push(c);
+            match c {
+                _ if escaped => escaped = false,
+                '\\' => escaped = true,
+                '"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match c {
+            '"' => in_string = true,
+            '0' if !prev.is_ascii_digit() && prev != '.' => {
+                // Drop leading zeros of an integer part ("01" → "1", "00" → "0").
+                while chars.peek() == Some(&'0') {
+                    chars.next();
+                }
+                if !chars.peek().is_some_and(char::is_ascii_digit) {
+                    out.push('0');
+                }
+                prev = '0';
+                continue;
+            }
+            ']' | '}' => {
+                let trimmed = out.trim_end().len();
+                if out[..trimmed].ends_with(',') {
+                    out.truncate(trimmed - 1);
+                }
+            }
+            _ => {}
+        }
+        out.push(c);
+        if !c.is_whitespace() {
+            prev = c;
+        }
+    }
+    serde_json::from_str(&out).ok()
+}
+
 /// `// [COMBO] {"combo":"NAME","default":0,...}`
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComboDecl {
@@ -18,7 +69,7 @@ pub fn parse_combos(source: &str) -> Vec<ComboDecl> {
         .lines()
         .filter_map(|line| {
             let json = line.split_once("[COMBO]")?.1.trim();
-            let raw: Value = serde_json::from_str(json).ok()?;
+            let raw: Value = lenient_json(json)?;
             let name = raw["combo"].as_str()?.to_owned();
             let default = raw["default"].as_i64().unwrap_or(0);
             Some(ComboDecl { name, default, raw })
@@ -90,7 +141,7 @@ pub fn parse_decl_line(line: &str) -> Result<Option<Vec<Decl>>> {
     let names = words.collect::<Vec<_>>().join(" ");
     let annotation = comment
         .filter(|c| c.starts_with('{'))
-        .and_then(|c| serde_json::from_str(c).ok());
+        .and_then(lenient_json);
 
     let mut decls = Vec::new();
     for part in names.split(',') {
@@ -117,6 +168,18 @@ pub fn parse_decl_line(line: &str) -> Result<Option<Vec<Decl>>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn annotations_parse_leniently() {
+        // 2216027178's shift_hue: `[0,01]` is not JSON but WE reads it.
+        let v = lenient_json(r#"{"material":"Speed","default":1,"range":[0,01]}"#).unwrap();
+        assert_eq!(v["material"], "Speed");
+        assert_eq!(v["range"][1], 1);
+        let v = lenient_json(r#"{"a":"x,]0","b":[0.05,00,-007,10,],}"#).unwrap();
+        assert_eq!(v["a"], "x,]0");
+        assert_eq!(v["b"], serde_json::json!([0.05, 0, -7, 10]));
+        assert!(lenient_json("{nope").is_none());
+    }
 
     #[test]
     fn parses_annotated_uniform() {
