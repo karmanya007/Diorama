@@ -20,10 +20,11 @@ caps = pathlib.Path(sys.argv[1])
 for entry in json.load(open(caps / "manifest.json")):
     rdc = pathlib.Path(entry["capture"]).stem            # we_frame289
     data = json.load(open(caps / f"{rdc}.json"))
-    # Some passes carry g_Time = 0 (engine passes); the frame's time is the largest.
+    # Some passes carry g_Time = 0 (engine passes) and RenderDoc sometimes
+    # reads garbage (1e30); the frame's time is the largest plausible one.
     t = max((cb["g_Time"][0] for a in data["actions"]
              for k in ("vs_cbuffers", "ps_cbuffers")
-             for cb in (a.get(k) or {}).values() if "g_Time" in cb), default=0.0)
+             for cb in (a.get(k) or {}).values() if "g_Time" in cb and 0 <= cb["g_Time"][0] < 1e5), default=0.0)
     # Cursor (if recorded) as a fraction of the captured swapchain: a
     # 3000x1920 swapchain spans this machine's desktop from (-1080, -546).
     sw, sh = data["swapchains"][0]["size"]

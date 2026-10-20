@@ -2158,11 +2158,18 @@ impl SceneRenderer {
             dirty |= layout.write(buf, "g_Daytime", &[inputs.daytime]);
             dirty |= layout.write(buf, "g_PointerPosition", &inputs.pointer);
             dirty |= layout.write(buf, "g_PointerPositionLast", &inputs.pointer);
-            // Depth-parallax effects follow the (smoothed) parallax cursor;
-            // capture 914: (0.526, 0.496) with the cursor near the centre.
-            let parallax = self
-                .parallax
-                .map_or(inputs.pointer, |_| self.parallax_pointer);
+            // Depth-parallax effects read the (smoothed) cursor, y up, pulled
+            // towards the centre by the mouse influence: capture of
+            // 3347344353, cursor (0.890, 0.410) and influence 0.25 →
+            // (0.597, 0.521).
+            let (pointer, influence) = match self.parallax {
+                Some(p) => (self.parallax_pointer, p.mouse_influence),
+                None => (inputs.pointer, 1.0),
+            };
+            let parallax = [
+                0.5 + (pointer[0] - 0.5) * influence,
+                0.5 + (0.5 - pointer[1]) * influence,
+            ];
             dirty |= layout.write(buf, "g_ParallaxPosition", &parallax);
             let frames = pass.sprite.and_then(|a| self.shared.frames.get(a));
             let frame = match sprite_frame {
