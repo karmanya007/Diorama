@@ -51,7 +51,11 @@ pub(crate) fn systems(root: &ParticleSystem) -> Vec<&ParticleSystem> {
 pub(crate) fn render_vars(system: &ParticleSystem) -> ([f32; 4], [f32; 4]) {
     let var0 = match system.renderer {
         ParticleRenderer::SpriteTrail { length, max_length } => [length, max_length, 0.0, 0.0],
-        ParticleRenderer::RopeTrail { length, .. } => [length, 1000.0, 0.0, 0.0],
+        // Rope trails: segment count (unscaled), -, history phase, segment
+        // count; the phase changes every frame (see `rope_vars`).
+        ParticleRenderer::RopeTrail { segments, .. } => {
+            [segments as f32, 0.0, 0.0, segments as f32]
+        }
         ParticleRenderer::Sprite => [0.0; 4],
     };
     let var1 = system.sprite_sheet.map_or([1.0, 1.0, 1.0, 1.0], |s| {
@@ -161,6 +165,70 @@ pub(crate) fn fill(
                 out.extend_from_slice(&values[..n]);
             }
             written += 1;
+        }
+    }
+    written
+}
+
+/// Vertices a system's buffer needs per particle.
+pub(crate) fn vertices_per_particle(system: &ParticleSystem) -> u32 {
+    match system.renderer {
+        ParticleRenderer::RopeTrail { segments, .. } => 6 * segments.max(1),
+        _ => CORNERS.len() as u32,
+    }
+}
+
+/// `g_RenderVar0` of a rope trail with history `phase` (0..1 of a sample
+/// interval since the last sample).
+pub(crate) fn rope_vars(system: &ParticleSystem, phase: f32) -> Option<[f32; 4]> {
+    match system.renderer {
+        ParticleRenderer::RopeTrail { segments, .. } => {
+            let n = segments as f32;
+            Some([n, 0.0, phase, n])
+        }
+        _ => None,
+    }
+}
+
+/// Rope-trail vertices for WE's `genericropeparticle` without a geometry
+/// shader: one quad per segment between consecutive trail points (the head
+/// first, then the history, newest first), six vertices each. Segments are
+/// straight (control points on the ends). Returns the vertex count.
+pub(crate) fn fill_rope(
+    attributes: &[Attribute],
+    particles: &[Particle],
+    max_vertices: u32,
+    out: &mut Vec<f32>,
+) -> u32 {
+    out.clear();
+    let mut written = 0u32;
+    for p in particles {
+        let head = p.draw_position();
+        let points: Vec<[f32; 3]> = std::iter::once(head)
+            .chain(p.trail.iter().copied())
+            .collect();
+        let history = p.trail.len() as f32;
+        for (k, pair) in points.windows(2).enumerate() {
+            if written + CORNERS.len() as u32 > max_vertices {
+                return written;
+            }
+            let (start, end) = (pair[0], pair[1]);
+            for (u, v) in CORNERS {
+                for a in attributes {
+                    let n = a.components.clamp(1, 4) as usize;
+                    let values = match a.name.as_str() {
+                        "a_PositionVec4" => [start[0], start[1], start[2], p.size],
+                        "a_TexCoordVec4" => [end[0], end[1], end[2], history],
+                        "a_TexCoordVec4C1" => [start[0], start[1], start[2], k as f32],
+                        "a_TexCoordVec3C2" => [end[0], end[1], end[2], 0.0],
+                        "a_TexCoordC3" => [u, v, 0.0, 0.0],
+                        "a_Color" => [p.color[0], p.color[1], p.color[2], p.alpha],
+                        _ => [0.0; 4],
+                    };
+                    out.extend_from_slice(&values[..n]);
+                }
+                written += 1;
+            }
         }
     }
     written

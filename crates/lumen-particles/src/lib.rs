@@ -15,7 +15,7 @@ const MAX_STEP: f32 = 1.0 / 30.0;
 const MAX_CATCH_UP: f32 = 30.0;
 
 /// One live particle (system-local pixels, seconds, radians, colours 0..1).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Particle {
     pub position: [f32; 3],
     pub velocity: [f32; 3],
@@ -27,6 +27,14 @@ pub struct Particle {
     pub alpha: f32,
     /// Offset from oscillating operators (not integrated).
     pub offset: [f32; 3],
+    /// Unique within the simulation (follow children find their parent by it).
+    pub id: u64,
+    /// Parent particle of an emitter-local follow child: `position` is then
+    /// relative to `anchor`, the parent's current position.
+    parent: Option<u64>,
+    anchor: [f32; 3],
+    /// Rope trails: earlier draw positions, newest first.
+    pub trail: Vec<[f32; 3]>,
     pub age: f32,
     pub lifetime: f32,
     base_size: f32,
@@ -44,7 +52,7 @@ impl Particle {
 
     /// Where the particle is drawn.
     pub fn draw_position(&self) -> [f32; 3] {
-        add(self.position, self.offset)
+        add(add(self.anchor, self.position), self.offset)
     }
 }
 
@@ -62,6 +70,10 @@ struct Node {
     /// Parent particles born / died this step (for spawn/death children).
     born: Vec<[f32; 3]>,
     died: Vec<[f32; 3]>,
+    /// Ids of the particles born this step (follow children's bursts).
+    born_ids: Vec<u64>,
+    /// Rope trails: time since the last history sample.
+    trail_timer: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -73,6 +85,7 @@ pub struct Simulation {
     pointer: Option<[f32; 3]>,
     /// Audio level 0..1 for audio-driven emitters (0 until audio capture).
     audio_level: f32,
+    next_id: u64,
 }
 
 fn flatten(
@@ -91,6 +104,8 @@ fn flatten(
         emitted_instant: false,
         born: Vec::new(),
         died: Vec::new(),
+        born_ids: Vec::new(),
+        trail_timer: 0.0,
     });
     for child in &system.children {
         flatten(&child.system, Some((index, child.kind)), child.origin, out);
@@ -149,6 +164,19 @@ impl Simulation {
             rng: seed ^ 0x9E37_79B9_7F4A_7C15,
             pointer: None,
             audio_level: 0.0,
+            next_id: 0,
+        }
+    }
+
+    /// Rope trails: how far the next history sample is, 0..1 of a sample
+    /// interval (WE's `g_RenderVar0.z`, shared by all particles).
+    pub fn trail_phase(&self, index: usize) -> f32 {
+        let Some(node) = self.nodes.get(index) else {
+            return 0.0;
+        };
+        match trail_interval(&node.system) {
+            Some(dt) => (node.trail_timer / dt).clamp(0.0, 1.0),
+            None => 0.0,
         }
     }
 
@@ -216,8 +244,11 @@ impl Simulation {
         for i in 0..self.nodes.len() {
             self.nodes[i].born.clear();
             self.nodes[i].died.clear();
+            self.nodes[i].born_ids.clear();
             self.emit(i, dt);
+            self.attach(i);
             self.update(i, dt);
+            self.record_trails(i, dt);
         }
         self.time += dt;
     }
@@ -234,23 +265,84 @@ impl Simulation {
         }
     }
 
+    /// Emitter-local follow children: refresh the parent positions they ride
+    /// on; children of parents that died go with them.
+    fn attach(&mut self, i: usize) {
+        let Some((p, ChildKind::Follow)) = self.nodes[i].parent else {
+            return;
+        };
+        if self.nodes[i].system.world_space {
+            return;
+        }
+        let parents: std::collections::HashMap<u64, [f32; 3]> = self.nodes[p]
+            .particles
+            .iter()
+            .map(|q| (q.id, q.draw_position()))
+            .collect();
+        self.nodes[i]
+            .particles
+            .retain_mut(|c| match c.parent.and_then(|id| parents.get(&id)) {
+                Some(at) => {
+                    c.anchor = *at;
+                    true
+                }
+                None => c.parent.is_none(),
+            });
+    }
+
+    /// Rope trails: every sample interval, each particle remembers where it is.
+    fn record_trails(&mut self, i: usize, dt: f32) {
+        let node = &mut self.nodes[i];
+        let (Some(interval), ParticleRenderer::RopeTrail { segments, .. }) =
+            (trail_interval(&node.system), node.system.renderer)
+        else {
+            return;
+        };
+        node.trail_timer += dt;
+        while node.trail_timer >= interval {
+            node.trail_timer -= interval;
+            for p in &mut node.particles {
+                let at = p.draw_position();
+                p.trail.insert(0, at);
+                p.trail.truncate(segments as usize);
+            }
+        }
+    }
+
     fn emit(&mut self, i: usize, dt: f32) {
         let parent = self.nodes[i].parent;
-        // Where emission happens: the system origin, or parent particles.
-        let anchors: Vec<[f32; 3]> = match parent {
-            None => vec![[0.0; 3]],
-            Some((_, ChildKind::Static)) => vec![self.nodes[i].origin],
+        let local = !self.nodes[i].system.world_space;
+        // Where emission happens: the system origin, or parent particles
+        // (with the parent's id for follow children).
+        let anchors: Vec<([f32; 3], Option<u64>)> = match parent {
+            None => vec![([0.0; 3], None)],
+            Some((_, ChildKind::Static)) => vec![(self.nodes[i].origin, None)],
             Some((p, ChildKind::Follow)) => self.nodes[p]
                 .particles
                 .iter()
-                .map(Particle::draw_position)
+                .map(|q| (q.draw_position(), Some(q.id)))
                 .collect(),
-            Some((p, ChildKind::Spawn)) => self.nodes[p].born.clone(),
-            Some((p, ChildKind::Death)) => self.nodes[p].died.clone(),
+            Some((p, ChildKind::Spawn)) => self.nodes[p].born.iter().map(|b| (*b, None)).collect(),
+            Some((p, ChildKind::Death)) => self.nodes[p].died.iter().map(|d| (*d, None)).collect(),
         };
         if anchors.is_empty() {
             return;
         }
+        let follow = matches!(parent, Some((_, ChildKind::Follow)));
+        // A follow child runs one instance per parent particle: its
+        // instantaneous burst fires when that parent is born (capture 914:
+        // one glow per shooting star).
+        let fresh: Vec<([f32; 3], Option<u64>)> = match parent {
+            Some((p, ChildKind::Follow)) => {
+                let born = &self.nodes[p].born_ids;
+                anchors
+                    .iter()
+                    .filter(|(_, id)| id.is_some_and(|id| born.contains(&id)))
+                    .copied()
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
         let burst = matches!(parent, Some((_, ChildKind::Spawn | ChildKind::Death)));
         let emitters = self.nodes[i].system.emitters.clone();
         let rate_scale = self.nodes[i].system.instance.rate;
@@ -275,10 +367,15 @@ impl Simulation {
             };
             let rate = if audio { rate * self.audio_level } else { rate };
             let mut count = 0usize;
+            let mut at: Vec<([f32; 3], Option<u64>)> = Vec::new();
             if burst {
                 count = (instantaneous.max(1) as usize) * anchors.len();
             } else {
-                if first {
+                if follow {
+                    for a in &fresh {
+                        at.extend(std::iter::repeat_n(*a, instantaneous as usize));
+                    }
+                } else if first {
                     count += instantaneous as usize;
                 }
                 let running = duration <= 0.0 || self.time < duration;
@@ -290,13 +387,38 @@ impl Simulation {
                     count += whole as usize;
                 }
             }
-            for k in 0..count {
+            at.extend((0..count).map(|k| anchors[k % anchors.len()]));
+            let own = {
+                let s = &self.nodes[i].system;
+                (s.max_count as f32 * s.instance.count).round().max(0.0) as usize
+            };
+            for (anchor, parent_id) in at {
                 if self.nodes[i].particles.len() >= self.capacity(i) {
                     break;
                 }
-                let anchor = anchors[k % anchors.len()];
-                let p = self.spawn(i, emitter, anchor);
-                self.nodes[i].born.push(p.position);
+                // Each parent's instance holds at most the child's own maximum.
+                if let Some(id) = parent_id.filter(|_| follow && local)
+                    && self.nodes[i]
+                        .particles
+                        .iter()
+                        .filter(|c| c.parent == Some(id))
+                        .count()
+                        >= own
+                {
+                    continue;
+                }
+                let mut p = if follow && local {
+                    let mut p = self.spawn(i, emitter, [0.0; 3]);
+                    p.parent = parent_id;
+                    p.anchor = anchor;
+                    p
+                } else {
+                    self.spawn(i, emitter, anchor)
+                };
+                p.id = self.next_id;
+                self.next_id += 1;
+                self.nodes[i].born.push(p.draw_position());
+                self.nodes[i].born_ids.push(p.id);
                 self.nodes[i].particles.push(p);
             }
         }
@@ -364,6 +486,10 @@ impl Simulation {
             color: [1.0; 3],
             alpha: 1.0,
             offset: [0.0; 3],
+            id: 0,
+            parent: None,
+            anchor: [0.0; 3],
+            trail: Vec::new(),
             age: 0.0,
             lifetime: 1.0,
             base_size: 20.0,
@@ -599,6 +725,18 @@ fn oscillate(
     let ph = lerp(phase[0], phase[1], r(13));
     let w = (std::f32::consts::TAU * (f * age + ph)).sin() * 0.5 + 0.5;
     lerp(scale[0], scale[1], w)
+}
+
+/// Seconds between rope-trail history samples: the trail spans `length`
+/// seconds over `segments` points (capture 914: 0.4 s, 4 points, 0.133 s
+/// apart at the stars' terminal speed).
+fn trail_interval(system: &ParticleSystem) -> Option<f32> {
+    match system.renderer {
+        ParticleRenderer::RopeTrail { length, segments } if segments > 1 && length > 0.0 => {
+            Some((length / (segments - 1) as f32).max(1e-3))
+        }
+        _ => None,
+    }
 }
 
 /// Renderer settings the vertex builder needs for one system.

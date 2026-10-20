@@ -45,6 +45,30 @@ WE's `genericparticle` / `common_particles.h` shaders, and RenderDoc captures
 - Control point `flags & 1` follows the cursor (fireflies flee it through
   `controlpointattract` with a negative scale).
 
+## Rope trails (capture 914, 285)
+- WE draws `ropetrail` systems with `genericropeparticle` whatever shader
+  the material names, `TRAILRENDERER` UVs, thin vertex format: one segment
+  per pair of consecutive trail points (head first, then history, newest
+  first), each `(start, size, end, history length, control points, colour)`.
+- Both captured systems (lengths 0.4 and 4, no `segments`) hold **4 history
+  points**; samples are `length / (segments − 1)` apart on a timer shared by
+  the whole system: `g_RenderVar0.z` = phase since the last sample (0.6 in
+  914, so the first segment is 0.6 of a full one); `g_RenderVar0.w` = count.
+- Width is the (half-rule) particle size: the shooting stars are ~4 px wide,
+  ~170 px long.
+
+## Follow children: emitter-local vs world space
+- System `flags & 1` = world space. Firefly trails (`flags 1`, capture 289)
+  stay where they were emitted (absolute positions, scene MVP).
+- Without it particles are emitter-local: 914's shooting-star glows are drawn
+  one draw per parent with the parent's position in the MVP and particle
+  position (0, 0, 0) — they ride along with the parent and its instance ends
+  with it. Their `instantaneous: 1` burst fires once per parent (22 stars →
+  22 glows), and each instance holds at most the child's own `maxcount`.
+- All 35 captured shooting-star trails run at exactly 45°: the stars are at
+  terminal velocity `gravity / drag`, which Lumen's per-second drag does not
+  reach within their lifetime — WE's drag is stronger (not calibrated yet).
+
 ## Perspective (3D) scenes
 In scenes with a perspective camera (3509243656) particles are drawn through
 the real camera (`g_ModelViewProjectionMatrix` = system world × view ×

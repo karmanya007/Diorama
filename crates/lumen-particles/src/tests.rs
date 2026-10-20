@@ -60,6 +60,7 @@ fn system(rate: f32, operators: Vec<Operator>) -> ParticleSystem {
         children: Vec::new(),
         sprite_sheet: None,
         perspective: false,
+        world_space: false,
         instance: InstanceOverride::default(),
     }
 }
@@ -173,11 +174,86 @@ fn follow_children_emit_at_parent_particles() {
         .map(Particle::draw_position)
         .collect();
     for c in sim.particles(1) {
+        let c = c.draw_position();
         assert!(
-            parents.iter().any(|p| {
-                ((c.position[0] - p[0]).powi(2) + (c.position[1] - p[1]).powi(2)).sqrt() < 10.5
-            }),
+            parents
+                .iter()
+                .any(|p| ((c[0] - p[0]).powi(2) + (c[1] - p[1]).powi(2)).sqrt() < 10.5),
             "{c:?}"
         );
     }
+}
+
+/// A moving root (rope or sprite) with an emitter-local follow child that
+/// bursts one particle per parent (3195058405's shooting-star glows).
+fn shooting_star(renderer: ParticleRenderer) -> ParticleSystem {
+    let mut glow = system(0.0, Vec::new());
+    glow.emitters = vec![one_shot()];
+    glow.max_count = 4;
+    let mut root = system(
+        2.0,
+        vec![Operator::Movement {
+            gravity: [0.0; 3],
+            drag: 0.0,
+        }],
+    );
+    root.initializers.push(Initializer::Velocity(Range {
+        min: [100.0, 0.0, 0.0],
+        max: [100.0, 0.0, 0.0],
+        exponent: 1.0,
+    }));
+    root.renderer = renderer;
+    root.children = vec![ParticleChild {
+        system: glow,
+        kind: ChildKind::Follow,
+        origin: [0.0; 3],
+        scale: [1.0; 3],
+        probability: 1.0,
+    }];
+    root
+}
+
+#[test]
+fn local_follow_children_ride_with_their_parent() {
+    let mut sim = Simulation::new(&shooting_star(ParticleRenderer::Sprite), 9);
+    sim.advance_to(1.0);
+    let parents = sim.particles(0).len();
+    // One glow per star (instantaneous 1 at each parent's birth), not one
+    // for the whole system.
+    assert_eq!(sim.particles(1).len(), parents);
+    for glow in sim.particles(1) {
+        let at = glow.draw_position();
+        assert!(
+            sim.particles(0)
+                .iter()
+                .any(|p| length(add(p.draw_position(), scale(at, -1.0))) < 1e-3),
+            "{at:?}"
+        );
+    }
+    // Parents live 2 s; their glows go with them.
+    sim.advance_to(2.6);
+    assert_eq!(sim.particles(1).len(), sim.particles(0).len());
+}
+
+#[test]
+fn rope_trails_sample_history_at_length_over_segments() {
+    let rope = ParticleRenderer::RopeTrail {
+        length: 0.3,
+        segments: 4,
+    };
+    let mut sim = Simulation::new(&shooting_star(rope), 4);
+    sim.advance_to(1.5);
+    let p = sim
+        .particles(0)
+        .iter()
+        .find(|p| p.age > 0.5)
+        .unwrap()
+        .clone();
+    assert_eq!(p.trail.len(), 4);
+    // Samples 0.1 s apart along the 100 px/s path, newest first.
+    let gap = p.trail[0][0] - p.trail[1][0];
+    assert!((gap - 10.0).abs() < 0.5, "{:?}", p.trail);
+    assert!(p.draw_position()[0] >= p.trail[0][0]);
+    let phase = sim.trail_phase(0);
+    assert!((0.0..=1.0).contains(&phase));
 }

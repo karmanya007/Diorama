@@ -160,7 +160,8 @@ pub enum ParticleRenderer {
         length: f32,
         max_length: f32,
     },
-    /// A ribbon through the particle's recent positions.
+    /// A ribbon through the particle's recent positions: `segments` points
+    /// sampled every `length / (segments − 1)` seconds (WE `ropetrail`).
     RopeTrail {
         length: f32,
         segments: u32,
@@ -258,4 +259,9 @@ pub struct ParticleSystem {
     /// Particles have depth: drawn through a perspective view of the scene
     /// (WE `flags & 4`), so nearer particles are larger and further out.
     pub perspective: bool,
+    /// Particles live in world space (WE `flags & 1`): as a follow child they
+    /// stay where they were emitted. Otherwise they are emitter-local and a
+    /// follow child's particles ride along with their parent particle
+    /// (captures 289 and 914).
+    pub world_space: bool,
 }

@@ -228,7 +228,8 @@ fn renderer(r: Option<&Value>) -> ParticleRenderer {
         },
         "ropetrail" | "rope" => ParticleRenderer::RopeTrail {
             length: num(r, "length", 0.1),
-            segments: integer(r.get("segments")).unwrap_or(8).clamp(2, 64) as u32,
+            // Captured trails without `segments` hold 4 points (914, 285).
+            segments: integer(r.get("segments")).unwrap_or(4).clamp(2, 64) as u32,
         },
         _ => ParticleRenderer::Sprite,
     }
@@ -337,6 +338,7 @@ impl Importer<'_> {
             .cloned()
             .and_then(|t| self.sprite_sheet(&t, &json));
         let trail = !matches!(renderer, ParticleRenderer::Sprite);
+        let rope = matches!(renderer, ParticleRenderer::RopeTrail { .. });
         let mut combos = BTreeMap::new();
         if sprite_sheet.is_some() {
             combos.insert("SPRITESHEET".to_owned(), 1);
@@ -344,7 +346,14 @@ impl Importer<'_> {
         if trail {
             combos.insert("TRAILRENDERER".to_owned(), 1);
         }
-        if trail || sprite_sheet.is_some() {
+        if rope {
+            // WE draws rope trails with its rope shader whatever the
+            // material names (capture 914: segment draws, TRAILRENDERER
+            // UVs, thin vertex format).
+            if spec.shader == "genericparticle" {
+                spec.shader = "genericropeparticle".into();
+            }
+        } else if trail || sprite_sheet.is_some() {
             combos.insert("THICKFORMAT".to_owned(), 1);
         }
         spec.combos.extend(combos);
@@ -376,6 +385,7 @@ impl Importer<'_> {
             sprite_sheet,
             instance,
             perspective: integer(json.get("flags")).unwrap_or(0) & 4 != 0,
+            world_space: integer(json.get("flags")).unwrap_or(0) & 1 != 0,
         };
         if depth < MAX_DEPTH {
             for c in list("children") {

@@ -863,7 +863,7 @@ impl SceneRenderer {
             let capacity = u32::try_from(sim.capacity(system_index))
                 .unwrap_or(u32::MAX)
                 .clamp(1, 1 << 20)
-                .saturating_mul(6);
+                .saturating_mul(pt::vertices_per_particle(system));
             pass.vertices = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("particle vertices"),
                 size: u64::from(capacity) * stride.max(1) * 4,
@@ -1800,14 +1800,32 @@ impl SceneRenderer {
                     }
                     pass.dirty = true;
                 }
-                let n = crate::particles::fill(
-                    &program.attributes,
-                    system,
-                    pg.sim.particles(draw.system),
-                    draw.capacity,
-                    view,
-                    &mut pg.scratch,
-                );
+                let rope = crate::particles::rope_vars(system, pg.sim.trail_phase(draw.system));
+                let n = match rope {
+                    Some(var0) => {
+                        for (layout, buf) in [
+                            (&program.vs_uniforms, &mut pass.vs_data),
+                            (&program.fs_uniforms, &mut pass.fs_data),
+                        ] {
+                            layout.write(buf, "g_RenderVar0", &var0);
+                        }
+                        pass.dirty = true;
+                        crate::particles::fill_rope(
+                            &program.attributes,
+                            pg.sim.particles(draw.system),
+                            draw.capacity,
+                            &mut pg.scratch,
+                        )
+                    }
+                    None => crate::particles::fill(
+                        &program.attributes,
+                        system,
+                        pg.sim.particles(draw.system),
+                        draw.capacity,
+                        view,
+                        &mut pg.scratch,
+                    ),
+                };
                 tracing::trace!(
                     layer = layer.index,
                     system = draw.system,
@@ -1939,6 +1957,12 @@ impl SceneRenderer {
             dirty |= layout.write(buf, "g_Daytime", &[inputs.daytime]);
             dirty |= layout.write(buf, "g_PointerPosition", &inputs.pointer);
             dirty |= layout.write(buf, "g_PointerPositionLast", &inputs.pointer);
+            // Depth-parallax effects follow the (smoothed) parallax cursor;
+            // capture 914: (0.526, 0.496) with the cursor near the centre.
+            let parallax = self
+                .parallax
+                .map_or(inputs.pointer, |_| self.parallax_pointer);
+            dirty |= layout.write(buf, "g_ParallaxPosition", &parallax);
             let frames = pass.sprite.and_then(|a| self.shared.frames.get(a));
             let frame = match sprite_frame {
                 Some(i) => frames.and_then(|f| f.get(i as usize).or(f.last())),
