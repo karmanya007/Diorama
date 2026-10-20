@@ -24,6 +24,7 @@ impl Look {
             Fit::Fit => FitMode::Fit,
             Fit::Stretch => FitMode::Stretch,
             Fit::Custom { x, y, zoom } => FitMode::Custom { x, y, zoom },
+            Fit::Native { x, y } => FitMode::Native { x, y },
         }
     }
 }

@@ -24,6 +24,10 @@ pub enum FitMode {
     /// them): absolute zoom and a pan that can move the image fully off the
     /// canvas. See [`custom_scale`] and [`custom_offset`].
     Custom { x: i32, y: i32, zoom: i32 },
+    /// One image pixel per canvas pixel, panned `x`/`y` percent across the
+    /// part that does not fit (WE alignment 3; capture of 2981249186 at
+    /// x 100, y 0 shows the image's top-right quarter).
+    Native { x: i32, y: i32 },
 }
 
 /// Canvas pixels per image pixel for WE custom alignment, fitted to
@@ -72,7 +76,19 @@ pub fn uv_scale(mode: FitMode, image: (u32, u32), target: (u32, u32)) -> [f32; 2
                 target.1 as f32 / (image.1.max(1) as f32 * s),
             ]
         }
+        FitMode::Native { .. } => [
+            target.0 as f32 / image.0.max(1) as f32,
+            target.1 as f32 / image.1.max(1) as f32,
+        ],
     }
+}
+
+/// Image centre's offset from the canvas centre in canvas pixels for
+/// [`FitMode::Native`]: the window slides from one edge (0) to the other
+/// (100) of the image.
+pub fn native_offset(x: i32, y: i32, image: (u32, u32), canvas: (u32, u32)) -> [f32; 2] {
+    let axis = |p: i32, i: u32, c: u32| (50.0 - p as f32) / 50.0 * (i as f32 - c as f32) / 2.0;
+    [axis(x, image.0, canvas.0), axis(y, image.1, canvas.1)]
 }
 
 /// Rectangle in virtual-desktop pixels.
@@ -132,6 +148,10 @@ pub fn uv_transform(
     let shift = match mode {
         FitMode::Custom { x, y, zoom } => {
             let [ox, oy] = custom_offset(x, y, custom_scale(zoom), image, canvas.size());
+            [ox / cw, oy / ch]
+        }
+        FitMode::Native { x, y } => {
+            let [ox, oy] = native_offset(x, y, image, canvas.size());
             [ox / cw, oy / ch]
         }
         _ => [0.0, 0.0],
@@ -232,7 +252,7 @@ fn fit_factor(mode: FitMode, image: (u32, u32), targets: &[(u32, u32)]) -> f32 {
                 FitMode::Stretch => sx.max(sy),
                 // Custom zoom is absolute in the image's own pixels, so the
                 // image must keep its native size for the blit to apply it.
-                FitMode::Custom { .. } => 1.0,
+                FitMode::Custom { .. } | FitMode::Native { .. } => 1.0,
             }
         })
         .fold(0.0_f32, f32::max)
@@ -604,6 +624,37 @@ mod tests {
         // 3155776049 (z 112) and the z = 200 control capture.
         assert!((custom_scale(112) - 1.668).abs() < 0.005);
         assert!((custom_scale(200) - 100.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn native_alignment_pans_across_the_overflow() {
+        // 2981249186 on 1920×1080 at x 100, y 0: the 3840×2160 scene's
+        // top-right quarter at one scene pixel per screen pixel.
+        let canvas = Rect {
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+        };
+        let mode = FitMode::Native { x: 100, y: 0 };
+        let (scale, offset) = uv_transform(mode, (3840, 2160), canvas, canvas);
+        assert_eq!(scale, [0.5, 0.5]);
+        assert!(
+            (offset[0] - 0.5).abs() < 1e-6 && offset[1].abs() < 1e-6,
+            "{offset:?}"
+        );
+        // Centred at 50 / 50.
+        let (_, offset) = uv_transform(
+            FitMode::Native { x: 50, y: 50 },
+            (3840, 2160),
+            canvas,
+            canvas,
+        );
+        assert!((offset[0] - 0.25).abs() < 1e-6 && (offset[1] - 0.25).abs() < 1e-6);
+        assert_eq!(
+            render_size(mode, (3840, 2160), &[(1920, 1080)], 8192),
+            (3840, 2160)
+        );
     }
 
     #[test]

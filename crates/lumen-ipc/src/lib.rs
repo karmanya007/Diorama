@@ -45,6 +45,12 @@ pub enum Fit {
         y: i32,
         zoom: i32,
     },
+    /// Native size (one image pixel per screen pixel), panned x/y percent
+    /// across what does not fit (WE alignment 3).
+    Native {
+        x: i32,
+        y: i32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

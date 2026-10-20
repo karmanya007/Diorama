@@ -780,10 +780,25 @@ impl Importer<'_> {
                 radius,
                 exponent,
             }),
-            // Tube lights render (`TubeLight`), but how WE derives the
-            // segment from `origin`, `angles` and `controlpoint` is not
-            // captured yet; origin → controlpoint blew out 3323674297.
-            "ltube" => self.skip("ltube lights (segment ends not captured yet)".into()),
+            // The segment runs from the origin to `controlpoint` in the
+            // light's own frame (turned by its angles): capture of
+            // 3323674297, B − A = R(0.02433)·(2098.68, 148.25) = (2094.46,
+            // 199.27) exactly.
+            "ltube" => {
+                let [cx, cy, cz] = vec_n(object.get("controlpoint"), [0.0; 3]);
+                let t = transform;
+                self.scene.tube_lights.push(lumen_scene::TubeLight {
+                    a: origin,
+                    b: [
+                        t[0] * cx + t[2] * cy + t[4],
+                        t[1] * cx + t[3] * cy + t[5],
+                        z + cz,
+                    ],
+                    color,
+                    radius,
+                    exponent,
+                });
+            }
             other => self.skip(format!("{other} lights")),
         }
     }

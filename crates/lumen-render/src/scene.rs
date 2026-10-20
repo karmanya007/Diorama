@@ -1050,13 +1050,19 @@ impl SceneRenderer {
                 .iter()
                 .map(|a| u64::from(a.components.clamp(1, 4)))
                 .sum();
+            // At most 64 MiB (and the device limit) per system: follow
+            // children of big parents with long rope trails could ask for
+            // close to a gigabyte, and one failed buffer voids the frame.
+            let vertex_bytes = stride.max(1) * 4;
+            let max_bytes = device.limits().max_buffer_size.min(64 << 20);
             let capacity = u32::try_from(sim.capacity(system_index))
                 .unwrap_or(u32::MAX)
                 .clamp(1, 1 << 20)
-                .saturating_mul(pt::vertices_per_particle(system));
+                .saturating_mul(pt::vertices_per_particle(system))
+                .min(u32::try_from(max_bytes / vertex_bytes).unwrap_or(u32::MAX));
             pass.vertices = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("particle vertices"),
-                size: u64::from(capacity) * stride.max(1) * 4,
+                size: u64::from(capacity) * vertex_bytes,
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });

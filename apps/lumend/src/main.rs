@@ -148,6 +148,10 @@ fn we_fit(config: &std::path::Path, wallpaper: &std::path::Path) -> Option<Fit> 
     use lumen_we::config::{Alignment, alignment_from_file};
     Some(match alignment_from_file(config, wallpaper, 0)? {
         Alignment::Stretch => Fit::Stretch,
+        Alignment::Native { x, y } => Fit::Native {
+            x: x.round() as i32,
+            y: y.round() as i32,
+        },
         Alignment::Custom { x, y, zoom } => Fit::Custom {
             x: x.round() as i32,
             y: y.round() as i32,
@@ -177,6 +181,7 @@ fn fit_mode(fit: Fit) -> lumen_render::FitMode {
         Fit::Fit => FitMode::Fit,
         Fit::Stretch => FitMode::Stretch,
         Fit::Custom { x, y, zoom } => FitMode::Custom { x, y, zoom },
+        Fit::Native { x, y } => FitMode::Native { x, y },
     }
 }
 

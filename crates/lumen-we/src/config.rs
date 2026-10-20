@@ -16,6 +16,8 @@ pub enum Alignment {
     Stretch,
     /// `4`: user zoom/pan in percent. The exact mapping is not decoded yet.
     Custom { x: f32, y: f32, zoom: f32 },
+    /// `3`: native size, panned `x`/`y` percent (capture of 2981249186).
+    Native { x: f32, y: f32 },
     /// Any other value.
     Other(i64),
 }
@@ -68,6 +70,10 @@ fn alignment_in(config: &Value, wallpaper: &Path, monitor: usize) -> Option<Alig
     Some(match monitor.get("alignment").and_then(Value::as_i64) {
         None => Alignment::Cover,
         Some(2) => Alignment::Stretch,
+        Some(3) => Alignment::Native {
+            x: pct("alignmentx"),
+            y: pct("alignmenty"),
+        },
         Some(4) => Alignment::Custom {
             x: pct("alignmentx"),
             y: pct("alignmenty"),
