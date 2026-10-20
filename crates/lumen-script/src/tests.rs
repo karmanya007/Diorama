@@ -466,3 +466,31 @@ export function update(value) {
         Some([3.0, 4.0])
     );
 }
+
+#[test]
+fn local_storage_survives_a_restart() {
+    let counter = script(
+        "'use strict';
+export function update(value) {
+  const n = (localStorage.get('visits') ?? 0) + 1;
+  if (engine.runtime === 0) localStorage.set('visits', n);
+  return 'visit ' + n;
+}",
+        0,
+        ScriptTarget::Text(0),
+        "{}",
+    );
+    let s = scene(vec![counter]);
+    let mut host = ScriptHost::new(&s, [100, 100], CLOCK).unwrap().unwrap();
+    host.update(&inputs(0.0));
+    let saved = host.take_storage().unwrap();
+    assert_eq!(saved, r#"{"visits":1}"#);
+    // Nothing to save when scripts leave it alone.
+    host.update(&inputs(1.0));
+    assert!(host.take_storage().is_none());
+    let mut next = ScriptHost::with_storage(&s, [100, 100], CLOCK, Some(&saved))
+        .unwrap()
+        .unwrap();
+    let changes = next.update(&inputs(0.0));
+    assert_eq!(changes[&0].text.as_deref(), Some("visit 2"));
+}

@@ -287,6 +287,7 @@ impl Session {
                     crate::scripts::now_ms(),
                     true,
                     factory,
+                    Some(&source.dir),
                 )
                 .map(Box::new);
                 let videos = crate::videos::SceneVideos::start(&scene);

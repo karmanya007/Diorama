@@ -1,7 +1,8 @@
 //! Runs a scene's SceneScript values and applies their changes to the
 //! renderer each frame.
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use lumen_gpu::Gpu;
 use lumen_gpu::shader::ShaderCompiler;
@@ -38,6 +39,80 @@ pub struct SceneScripts {
     media: Option<Media>,
     /// Imports layers scripts create (`createLayer`), and compiles their shaders.
     factory: Option<(lumen_we::scene::LayerFactory, ShaderCompiler)>,
+    /// Scripts' `localStorage`, kept between runs (live sessions only).
+    storage: Option<Storage>,
+}
+
+/// Where a scene's `localStorage` lives and what is waiting to be written.
+struct Storage {
+    path: PathBuf,
+    pending: Option<String>,
+    written: Instant,
+}
+
+/// Most `localStorage` a scene may keep on disk.
+const MAX_STORAGE: u64 = 4 << 20;
+
+impl Storage {
+    /// `<config>/storage/<hash of the scene folder>.json`.
+    fn for_scene(dir: &Path) -> Option<Self> {
+        let key = dir.to_string_lossy().to_lowercase();
+        // FNV-1a: stable across runs and Rust versions.
+        let hash = key.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
+            (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+        });
+        let path = lumen_platform::config_dir()?
+            .join("storage")
+            .join(format!("{hash:016x}.json"));
+        Some(Self {
+            path,
+            pending: None,
+            written: Instant::now(),
+        })
+    }
+
+    fn load(&self) -> Option<String> {
+        let meta = std::fs::metadata(&self.path).ok()?;
+        if meta.len() > MAX_STORAGE {
+            return None;
+        }
+        std::fs::read_to_string(&self.path).ok()
+    }
+
+    /// Writes what scripts stored, at most every 2 s (scripts may set values
+    /// every frame) unless `now`.
+    fn flush(&mut self, now: bool) {
+        if self.pending.is_none() || (!now && self.written.elapsed() < Duration::from_secs(2)) {
+            return;
+        }
+        let Some(json) = self.pending.take() else {
+            return;
+        };
+        if json.len() as u64 > MAX_STORAGE {
+            tracing::warn!(
+                bytes = json.len(),
+                "script localStorage too large; not saved"
+            );
+            return;
+        }
+        self.written = Instant::now();
+        let result = self
+            .path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::write(&self.path, json));
+        if let Err(e) = result {
+            tracing::warn!(path = %self.path.display(), "saving script localStorage: {e}");
+        }
+    }
+}
+
+impl Drop for SceneScripts {
+    fn drop(&mut self) {
+        if let Some(storage) = &mut self.storage {
+            storage.flush(true);
+        }
+    }
 }
 
 struct Media {
@@ -72,8 +147,16 @@ impl SceneScripts {
         clock_ms: f64,
         live: bool,
         factory: Option<(lumen_we::scene::LayerFactory, ShaderCompiler)>,
+        storage_for: Option<&Path>,
     ) -> Option<Self> {
-        match ScriptHost::new(scene, [scene.width, scene.height], clock_ms) {
+        let storage = storage_for.and_then(Storage::for_scene);
+        let saved = storage.as_ref().and_then(Storage::load);
+        match ScriptHost::with_storage(
+            scene,
+            [scene.width, scene.height],
+            clock_ms,
+            saved.as_deref(),
+        ) {
             Ok(Some(host)) => {
                 tracing::info!(scripts = scene.scripts.len(), "scene scripts loaded");
                 Some(Self {
@@ -87,6 +170,7 @@ impl SceneScripts {
                         timeline_at: f32::NEG_INFINITY,
                     }),
                     factory,
+                    storage,
                 })
             }
             Ok(None) => None,
@@ -165,6 +249,12 @@ impl SceneScripts {
                     self.names.push(String::new());
                 }
             }
+        }
+        if let Some(storage) = &mut self.storage {
+            if let Some(json) = self.host.take_storage() {
+                storage.pending = Some(json);
+            }
+            storage.flush(false);
         }
         for (layer, below) in self.host.take_sorts() {
             renderer.sort_layer(layer, below);

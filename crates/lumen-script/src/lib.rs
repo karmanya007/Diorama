@@ -133,6 +133,8 @@ pub struct ScriptHost {
     sound_states: Option<Vec<bool>>,
     /// Sound commands from the last frame.
     sound_commands: Vec<SoundCommand>,
+    /// `localStorage` as JSON after scripts changed it (to persist).
+    storage: Option<String>,
     /// Layers created and reordered in the last frame.
     created: Vec<CreatedLayer>,
     /// (layer, drawn just below this layer; `None` = on top).
@@ -316,6 +318,17 @@ fn state_json(scene: &Scene, canvas: [u32; 2]) -> String {
 impl ScriptHost {
     /// Loads every script of `scene`; `None` when it has none.
     pub fn new(scene: &Scene, canvas: [u32; 2], clock_ms: f64) -> Result<Option<Self>, Error> {
+        Self::with_storage(scene, canvas, clock_ms, None)
+    }
+
+    /// [`ScriptHost::new`] with `localStorage` restored from a previous run
+    /// (a JSON object, see [`ScriptHost::take_storage`]).
+    pub fn with_storage(
+        scene: &Scene,
+        canvas: [u32; 2],
+        clock_ms: f64,
+        storage: Option<&str>,
+    ) -> Result<Option<Self>, Error> {
         if scene.scripts.is_empty() && scene.animations.is_empty() {
             return Ok(None);
         }
@@ -344,6 +357,9 @@ impl ScriptHost {
                 .map_err(js_err)?;
             let lumen: Object = ctx.globals().get("__lumen").map_err(js_err)?;
             lumen.set("clock", clock_ms).map_err(js_err)?;
+            if let Some(storage) = storage {
+                lumen.set("storage", storage).map_err(js_err)?;
+            }
             ctx.eval::<(), _>(library.classes.as_str())
                 .catch(&ctx)
                 .map_err(js_err)?;
@@ -420,6 +436,7 @@ impl ScriptHost {
             sound_commands: Vec::new(),
             created: Vec::new(),
             sorts: Vec::new(),
+            storage: None,
         }))
     }
 
@@ -487,6 +504,12 @@ impl ScriptHost {
     /// Sound commands scripts gave during the last [`ScriptHost::update`].
     pub fn take_sound_commands(&mut self) -> Vec<SoundCommand> {
         std::mem::take(&mut self.sound_commands)
+    }
+
+    /// `localStorage` (a JSON object) if scripts changed it since the last
+    /// call: persist it and hand it to [`ScriptHost::with_storage`] next run.
+    pub fn take_storage(&mut self) -> Option<String> {
+        self.storage.take()
     }
 
     /// Layers scripts created in the last frame; add them to the renderer
@@ -606,6 +629,9 @@ impl ScriptHost {
                 config,
             });
             moved = true;
+        }
+        if let Some(storage) = out["storage"].as_str() {
+            self.storage = Some(storage.to_owned());
         }
         for s in out["sorts"].as_array().into_iter().flatten() {
             if let Some(layer) = index(&s[0]) {

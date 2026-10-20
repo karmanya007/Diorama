@@ -350,13 +350,19 @@
 
 	const input = { cursorWorldPosition: new Vec3(0), cursorScreenPosition: new Vec2(0), cursorLeftDown: false };
 
+	// Persisted by the host between runs (live sessions): seeded from
+	// `__lumen.storage`, reported back whenever scripts change it.
 	const storage = new Map();
+	let storageDirty = false;
+	try {
+		for (const [k, v] of Object.entries(JSON.parse(L.storage || '{}'))) storage.set(k, v);
+	} catch (e) { /* unreadable store: start empty */ }
 	const localStorage = {
 		LOCATION_GLOBAL: 0, LOCATION_SCREEN: 1,
-		get(key) { return storage.has(key) ? storage.get(key) : undefined; },
-		set(key, value) { storage.set(key, value); },
-		delete(key) { storage.delete(key); },
-		clear() { storage.clear(); },
+		get(key) { return storage.has(String(key)) ? storage.get(String(key)) : undefined; },
+		set(key, value) { storage.set(String(key), value); storageDirty = true; },
+		delete(key) { storageDirty = storage.delete(String(key)) || storageDirty; },
+		clear() { if (storage.size) storageDirty = true; storage.clear(); },
 	};
 
 	Object.assign(globalThis, { thisScene: scene, engine, input, localStorage, shared: {}, renderContext: {} });
@@ -654,6 +660,10 @@
 		}
 		dirtyNodes = new Set(); dirtyLayers = new Set(); effectChanges = []; constantChanges = []; soundCommands = []; L.logs = [];
 		created = []; sorts = [];
+		if (storageDirty) {
+			storageDirty = false;
+			try { out.storage = JSON.stringify(Object.fromEntries(storage)); } catch (e) { /* not JSON */ }
+		}
 		return JSON.stringify(out);
 	};
 })();

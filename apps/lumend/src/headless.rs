@@ -184,7 +184,10 @@ pub fn render_to_png(
     tracing::info!(ms = started.elapsed().as_millis(), "scene renderer built");
     let factory =
         layer_factory(scene_dir, assets, we_config, &scene).map(|f| (f, compiler.clone()));
-    if let Some(mut scripts) = crate::scripts::SceneScripts::new(&scene, clock_ms, false, factory) {
+    // Headless frames never read or write saved localStorage.
+    if let Some(mut scripts) =
+        crate::scripts::SceneScripts::new(&scene, clock_ms, false, factory, None)
+    {
         // Run scripts from the scene's start (up to a minute back) at 30 fps:
         // scripts that ease, integrate or count frames end where they would
         // have while playing (3509243656 spins its sky by 3°/s of runtime).
