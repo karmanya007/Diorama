@@ -10,10 +10,14 @@ publish.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 lumen-platform.workspace = true
-raw-window-handle.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+# The WebView: WebView2 on Windows, WKWebView on macOS; WebKitGTK with the
+# Linux port (wry's `os-webview` feature, which needs the GTK libraries).
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+raw-window-handle.workspace = true
 wry.workspace = true
 
 [target.'cfg(windows)'.dependencies]
