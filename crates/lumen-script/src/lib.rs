@@ -133,6 +133,8 @@ pub struct ScriptHost {
     sound_states: Option<Vec<bool>>,
     /// Sound commands from the last frame.
     sound_commands: Vec<SoundCommand>,
+    /// Point-light intensities scripts set in the last frame.
+    light_changes: Vec<(usize, f32)>,
     /// `localStorage` as JSON after scripts changed it (to persist).
     storage: Option<String>,
     /// Layers created and reordered in the last frame.
@@ -192,6 +194,7 @@ fn target_json(target: &ScriptTarget) -> Value {
         ScriptTarget::Alpha(l) => t("alpha", *l),
         ScriptTarget::Color(l) => t("color", *l),
         ScriptTarget::Text(l) => t("text", *l),
+        ScriptTarget::LightIntensity(i) => t("light", *i),
         ScriptTarget::EffectVisible { layer, effect } => {
             json!({"kind": "effectVisible", "a": layer, "b": effect})
         }
@@ -434,6 +437,7 @@ impl ScriptHost {
             events: Vec::new(),
             sound_states: None,
             sound_commands: Vec::new(),
+            light_changes: Vec::new(),
             created: Vec::new(),
             sorts: Vec::new(),
             storage: None,
@@ -504,6 +508,11 @@ impl ScriptHost {
     /// Sound commands scripts gave during the last [`ScriptHost::update`].
     pub fn take_sound_commands(&mut self) -> Vec<SoundCommand> {
         std::mem::take(&mut self.sound_commands)
+    }
+
+    /// (point light, intensity) set by scripts during the last update.
+    pub fn take_light_changes(&mut self) -> Vec<(usize, f32)> {
+        std::mem::take(&mut self.light_changes)
     }
 
     /// `localStorage` (a JSON object) if scripts changed it since the last
@@ -741,6 +750,11 @@ impl ScriptHost {
         for t in out["textureFrames"].as_array().into_iter().flatten() {
             if let (Some(l), Some(frame)) = (index(&t[0]), t[1].as_u64()) {
                 changes.entry(l).or_default().texture_frame = u32::try_from(frame).ok();
+            }
+        }
+        for c in out["lights"].as_array().into_iter().flatten() {
+            if let (Some(i), Some(v)) = (index(&c[0]), c[1].as_f64()) {
+                self.light_changes.push((i, v as f32));
             }
         }
         for c in out["sounds"].as_array().into_iter().flatten() {

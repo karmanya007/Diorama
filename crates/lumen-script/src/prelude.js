@@ -41,7 +41,7 @@
 
 	let anims = [];
 	let nodes = [], layers = [], scripts = [], dirtyNodes = new Set(), dirtyLayers = new Set();
-	let effectChanges = [], constantChanges = [], timers = [], timerId = 1;
+	let effectChanges = [], constantChanges = [], lightChanges = [], timers = [], timerId = 1;
 	// Layers scripts created / reordered since the last frame (the host
 	// imports and draws them): [layer, node, config] and [layer, before].
 	let created = [], sorts = [];
@@ -412,6 +412,15 @@
 			case 'color': o.color = v; break;
 			case 'text': o.text = v; break;
 			case 'effectVisible': new Effect(s.a, s.b).visible = v; break;
+			case 'light': {
+				const n = numbers(v);
+				if (n && n[0] !== s.last) {
+					s.last = n[0];
+					lightChanges.push([s.a, n[0]]);
+				}
+				s.value = v;
+				break;
+			}
 			case 'constant': {
 				const n = numbers(v);
 				if (n && JSON.stringify(n) !== JSON.stringify(s.last)) {
@@ -647,7 +656,7 @@
 	};
 
 	L.end = function () {
-		const out = { nodes: {}, layers: {}, effects: effectChanges, constants: constantChanges, textureFrames: [], sounds: soundCommands, logs: L.logs, created, sorts };
+		const out = { nodes: {}, layers: {}, effects: effectChanges, constants: constantChanges, lights: lightChanges, textureFrames: [], sounds: soundCommands, logs: L.logs, created, sorts };
 		for (const [l, t] of textureAnims) {
 			const f = t.getFrame();
 			if (f !== t.__sent) { t.__sent = f; out.textureFrames.push([l, f]); }
@@ -660,7 +669,7 @@
 			const l = layers[i];
 			out.layers[i] = { alpha: l.alpha, color: l.color, text: l.text };
 		}
-		dirtyNodes = new Set(); dirtyLayers = new Set(); effectChanges = []; constantChanges = []; soundCommands = []; L.logs = [];
+		dirtyNodes = new Set(); dirtyLayers = new Set(); effectChanges = []; constantChanges = []; lightChanges = []; soundCommands = []; L.logs = [];
 		created = []; sorts = [];
 		if (storageDirty) {
 			storageDirty = false;

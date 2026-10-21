@@ -201,6 +201,8 @@ pub enum ScriptTarget {
         layer: usize,
         effect: usize,
     },
+    /// Intensity of a point light (index into [`Scene::point_lights`]).
+    LightIntensity(usize),
     /// A uniform of one effect pass.
     Constant {
         layer: usize,
@@ -272,8 +274,10 @@ pub struct Shake {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PointLight {
     pub origin: [f32; 3],
-    /// Colour already multiplied by intensity.
+    /// Colour, not yet multiplied by [`PointLight::intensity`].
     pub color: [f32; 3],
+    /// Scripts may change it while the scene runs.
+    pub intensity: f32,
     pub radius: f32,
     /// Falloff exponent.
     pub exponent: f32,

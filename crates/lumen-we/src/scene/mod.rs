@@ -92,8 +92,8 @@ pub fn import_with(vfs: &Vfs, limits: &Limits, properties: &Properties) -> Resul
     importer.scene.nodes = nodes(&objects);
     importer.camera_object(&objects);
     // Lights first: lit shaders are generated for the scene's light count.
-    for object in &objects {
-        importer.light(object, &graph);
+    for (node, object) in objects.iter().enumerate() {
+        importer.light(object, node, &graph);
     }
     importer.engine.point_lights = importer.scene.point_lights.len();
     importer.engine.tube_lights = importer.scene.tube_lights.len();
@@ -766,7 +766,7 @@ impl Importer<'_> {
             .find_map(|id| self.groups.get(&id).copied())
     }
 
-    fn light(&mut self, object: &Value, graph: &SceneGraph) {
+    fn light(&mut self, object: &Value, node: usize, graph: &SceneGraph) {
         let Some(kind) = object.get("light").and_then(Value::as_str) else {
             return;
         };
@@ -782,16 +782,34 @@ impl Importer<'_> {
                 .unwrap_or(default)
         };
         let z = vec_n(object.get("origin"), [0.0; 3])[2];
-        let color = vec_n(object.get("color"), [1.0; 3]).map(|c| c * number("intensity", 1.0));
+        let color = vec_n(object.get("color"), [1.0; 3]);
+        // A scripted intensity starts at the script's stored value.
+        let intensity = object
+            .get("intensity")
+            .map(unwrap_value)
+            .and_then(floats)
+            .and_then(|v| v.first().copied())
+            .unwrap_or(1.0);
         let origin = [transform[4], transform[5], z];
         let (radius, exponent) = (number("radius", 1000.0), number("exponent", 1.0));
         match kind {
-            "lpoint" => self.scene.point_lights.push(lumen_scene::PointLight {
-                origin,
-                color,
-                radius,
-                exponent,
-            }),
+            "lpoint" => {
+                let index = self.scene.point_lights.len();
+                self.scene.point_lights.push(lumen_scene::PointLight {
+                    origin,
+                    color,
+                    intensity,
+                    radius,
+                    exponent,
+                });
+                // Audio-driven lights (3195058405: bass → intensity 1–2).
+                if let Some(value) = object
+                    .get("intensity")
+                    .filter(|v| v.get("script").is_some())
+                {
+                    self.script(value, Some(node), ScriptTarget::LightIntensity(index));
+                }
+            }
             // The segment runs from the origin to `controlpoint` in the
             // light's own frame (turned by its angles): capture of
             // 3323674297, B − A = R(0.02433)·(2098.68, 148.25) = (2094.46,
@@ -806,7 +824,7 @@ impl Importer<'_> {
                         t[1] * cx + t[3] * cy + t[5],
                         z + cz,
                     ],
-                    color,
+                    color: color.map(|c| c * intensity),
                     radius,
                     exponent,
                 });

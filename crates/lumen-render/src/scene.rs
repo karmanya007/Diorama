@@ -217,6 +217,9 @@ pub struct SceneRenderer {
     parallax: Option<ir::Parallax>,
     /// Smoothed cursor used for parallax, and the time it was last updated.
     parallax_pointer: [f32; 2],
+    /// `g_LPoint_Color` (colour × intensity, radius) of every point light;
+    /// scripts change intensities ([`SceneRenderer::set_light_intensity`]).
+    point_light_colors: Vec<f32>,
     last_time: Option<f32>,
     /// Scene pixels (world units in perspective scenes) → clip space.
     camera: Rows,
@@ -571,6 +574,7 @@ impl SceneRenderer {
             format,
             parallax: scene.parallax,
             parallax_pointer: [0.5, 0.5],
+            point_light_colors: point_light_colors(&scene.point_lights),
             last_time: None,
             camera: camera_rows(scene, output),
             eye: scene.camera.map(|c| c.view(&scene.nodes).1),
@@ -888,6 +892,18 @@ impl SceneRenderer {
     /// Replaces host-provided image `name` (e.g. `mediaThumbnail`) with
     /// `rgba`, tightly packed [`SYSTEM_TEXTURE_SIZE`]² RGBA8. Unused names
     /// are ignored.
+    /// Sets point light `light`'s intensity (a scripted value).
+    pub fn set_light_intensity(&mut self, light: usize, intensity: f32) {
+        let Some(l) = self.ir.point_lights.get(light) else {
+            return;
+        };
+        if let Some(c) = self.point_light_colors.get_mut(light * 4..light * 4 + 3) {
+            for (c, base) in c.iter_mut().zip(l.color) {
+                *c = base * intensity;
+            }
+        }
+    }
+
     pub fn set_system_texture(&self, gpu: &Gpu, name: &str, rgba: &[u8]) {
         let n = SYSTEM_TEXTURE_SIZE;
         let Some(t) = self.shared.system.get(name) else {
@@ -1646,12 +1662,8 @@ impl SceneRenderer {
                 .iter()
                 .flat_map(|l| [l.origin[0], l.origin[1], l.origin[2], l.exponent])
                 .collect();
-            let colors: Vec<f32> = lights
-                .iter()
-                .flat_map(|l| [l.color[0], l.color[1], l.color[2], l.radius])
-                .collect();
             layout.write(buf, "g_LPoint_Origin", &origins);
-            layout.write(buf, "g_LPoint_Color", &colors);
+            layout.write(buf, "g_LPoint_Color", &self.point_light_colors);
             let tubes = &ctx.scene.tube_lights;
             let pack = |f: fn(&ir::TubeLight) -> [f32; 4]| -> Vec<f32> {
                 tubes.iter().flat_map(f).collect()
@@ -2202,6 +2214,7 @@ impl SceneRenderer {
                 dirty |= layout.write(buf, "g_NormalModelMatrix", &normal_matrix(model));
             }
             dirty |= layout.write(buf, "g_Daytime", &[inputs.daytime]);
+            dirty |= layout.write(buf, "g_LPoint_Color", &self.point_light_colors);
             dirty |= layout.write(buf, "g_PointerPosition", &inputs.pointer);
             dirty |= layout.write(buf, "g_PointerPositionLast", &inputs.pointer);
             // Depth-parallax effects read the (smoothed) cursor, y up, pulled
@@ -2311,6 +2324,17 @@ impl SceneRenderer {
             k * self.size[1] as f32 * (py - 0.5),
         ]
     }
+}
+
+/// `g_LPoint_Color` for `lights`: colour × intensity, radius in `.w`.
+fn point_light_colors(lights: &[ir::PointLight]) -> Vec<f32> {
+    lights
+        .iter()
+        .flat_map(|l| {
+            let [r, g, b] = l.color.map(|c| c * l.intensity);
+            [r, g, b, l.radius]
+        })
+        .collect()
 }
 
 /// IEEE half → single precision (no `half` dependency for one readback).

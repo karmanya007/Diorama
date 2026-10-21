@@ -266,6 +266,9 @@ impl SceneScripts {
         for (layer, below) in self.host.take_sorts() {
             renderer.sort_layer(layer, below);
         }
+        for (light, intensity) in self.host.take_light_changes() {
+            renderer.set_light_intensity(light, intensity);
+        }
         for command in self.host.take_sound_commands() {
             tracing::debug!(?command, "script sound command");
             if let Some(sounds) = sounds.as_deref_mut() {

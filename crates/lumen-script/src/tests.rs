@@ -494,3 +494,22 @@ export function update(value) {
     let changes = next.update(&inputs(0.0));
     assert_eq!(changes[&0].text.as_deref(), Some("visit 2"));
 }
+
+#[test]
+fn scripts_set_light_intensity() {
+    // 3195058405: an audio-driven point light (bass → intensity 1..2).
+    let light = script(
+        "export function update(value) { return 1 + engine.runtime; }",
+        1,
+        ScriptTarget::LightIntensity(0),
+        "{}",
+    );
+    let mut host = ScriptHost::new(&scene(vec![light]), [100, 100], CLOCK)
+        .unwrap()
+        .unwrap();
+    host.update(&inputs(0.5));
+    assert_eq!(host.take_light_changes(), vec![(0, 1.5)]);
+    // Unchanged values are not sent again.
+    host.update(&inputs(0.5));
+    assert!(host.take_light_changes().is_empty());
+}
