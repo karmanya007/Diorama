@@ -421,6 +421,9 @@ mod unsupported_audio {
         pub fn spectrum(&self, _dt: f32) -> crate::spectrum::AudioSpectrum {
             match *self {}
         }
+        pub fn web_spectrum(&self) -> crate::spectrum::AudioSpectrum {
+            match *self {}
+        }
         pub fn needs_reopen(&self) -> bool {
             match *self {}
         }

@@ -75,6 +75,14 @@ impl AudioCapture {
             .unwrap_or_default()
     }
 
+    /// What WE hands web wallpapers now (linear, unsmoothed).
+    pub fn web_spectrum(&self) -> AudioSpectrum {
+        self.analyzer
+            .lock()
+            .map(|a| a.web_levels())
+            .unwrap_or_default()
+    }
+
     /// True if the stream failed or the default output changed (restart it).
     pub fn needs_reopen(&self) -> bool {
         if self.failed.load(Ordering::SeqCst) {

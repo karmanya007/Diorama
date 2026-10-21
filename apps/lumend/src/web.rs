@@ -247,7 +247,7 @@ impl WebHost {
                 self.next_audio = now + AUDIO_INTERVAL;
             }
             if let Some(audio) = self.audio.as_mut() {
-                let [left, right] = audio.spectrum(time);
+                let [left, right] = audio.web_spectrum(time);
                 let levels: Vec<f32> = left.iter().chain(right.iter()).copied().collect();
                 self.send(&json!({ "audio": levels }));
             }

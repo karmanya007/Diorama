@@ -5,7 +5,7 @@
 //   __lumen.properties(object)   user properties (`{name: {type, value}}`)
 //   __lumen.general(object)      general properties (`{fps}`)
 //   __lumen.paused(bool)         pause / resume the page
-//   __lumen.audio(array)         128 levels: 64 left then 64 right, 0..1
+//   __lumen.audio(array)         128 levels: 64 left then 64 right, linear (WE: mostly < 0.1)
 //   __lumen.media(kind, object)  status | properties | thumbnail | playback | timeline
 //   __lumen.pointer(x, y, kind)  cursor in CSS pixels: move | down | up
 'use strict';

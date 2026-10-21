@@ -186,6 +186,29 @@ impl SceneAudio {
     pub fn spectrum(&mut self, time: f32) -> [[f32; 64]; 2] {
         let dt = self.last_time.map_or(0.0, |t| (time - t).max(0.0));
         self.last_time = Some(time);
+        self.check(time);
+        let spectrum = self.capture.as_ref().map_or([[0.0; 64]; 2], |c| {
+            let s = c.spectrum(dt);
+            [s.left, s.right]
+        });
+        self.peak = spectrum.iter().flatten().fold(self.peak, |m, &v| m.max(v));
+        spectrum
+    }
+
+    /// (left, right) 64 bands as WE gives web wallpapers: linear levels,
+    /// typically well under 0.1, not the normalised scene spectrum.
+    pub fn web_spectrum(&mut self, time: f32) -> [[f32; 64]; 2] {
+        self.check(time);
+        let spectrum = self.capture.as_ref().map_or([[0.0; 64]; 2], |c| {
+            let s = c.web_spectrum();
+            [s.left, s.right]
+        });
+        self.peak = spectrum.iter().flatten().fold(self.peak, |m, &v| m.max(v));
+        spectrum
+    }
+
+    /// Every 2 s: log what was heard and reopen a failed or stale capture.
+    fn check(&mut self, time: f32) {
         if time >= self.next_check {
             self.next_check = time + 2.0;
             tracing::debug!(
@@ -198,12 +221,6 @@ impl SceneAudio {
                 self.capture = lumen_media::AudioCapture::start().ok();
             }
         }
-        let spectrum = self.capture.as_ref().map_or([[0.0; 64]; 2], |c| {
-            let s = c.spectrum(dt);
-            [s.left, s.right]
-        });
-        self.peak = spectrum.iter().flatten().fold(self.peak, |m, &v| m.max(v));
-        spectrum
     }
 }
 

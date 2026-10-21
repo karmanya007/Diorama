@@ -11,6 +11,15 @@
 //! nearly as busy as the bass), which a fixed dB scale cannot reproduce.
 //! WE's exact algorithm is not recovered (mean error 0.21, correlation
 //! ≈ 0.45 per band against its values; a per-band gain fitted worse).
+//!
+//! Web wallpapers get different numbers ([`SpectrumAnalyzer::web_levels`]),
+//! fitted on 2242 `audioArray`s WE sent a page while the loopback audio was
+//! recorded: plain linear magnitudes with no gain control or smoothing (at
+//! most 0.08 for a video playing at −28 dBFS). Bands 0–30 are single bins of
+//! a 2048-point FFT at 48 kHz (23.4 Hz apart); above that band `i` starts at
+//! 8.742e-4·i⁴ Hz, so band 63 ends near 14.7 kHz. A band sums the magnitudes
+//! it covers, × 2.85 (mean correlation 0.87 per band over bands 4–63, mean
+//! error 0.0012).
 
 use std::collections::VecDeque;
 use std::f32::consts::PI;
@@ -29,6 +38,12 @@ const PEAK_FLOOR_DB: f32 = -100.0;
 const TILT_DB_PER_OCTAVE: f32 = 3.0;
 /// Fall speed of a band (per second, exponential).
 const DECAY: f32 = 6.0;
+/// Width of WE's low web bands: one bin of a 2048-point FFT at 48 kHz.
+const WEB_BIN_HZ: f32 = 48_000.0 / 2048.0;
+/// Upper web bands start at `WEB_CURVE_HZ · i⁴` Hz.
+const WEB_CURVE_HZ: f32 = 8.742e-4;
+/// Web band level per unit of summed magnitude (full-scale sine = 1).
+const WEB_GAIN: f32 = 2.85;
 
 /// Per-channel band levels 0..1, bass first.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -74,6 +89,8 @@ pub struct SpectrumAnalyzer {
     /// Running peak of the tilted bands (dB), left then right.
     peaks: [f32; 2],
     window: Vec<f32>,
+    /// Per web band, the FFT bins it overlaps and by what fraction of each.
+    web_bins: Vec<Vec<(usize, f32)>>,
 }
 
 impl SpectrumAnalyzer {
@@ -81,13 +98,15 @@ impl SpectrumAnalyzer {
         let window = (0..FFT_SIZE)
             .map(|i| 0.5 - 0.5 * (2.0 * PI * i as f32 / (FFT_SIZE - 1) as f32).cos())
             .collect();
+        let rate = sample_rate.max(1) as f32;
         Self {
-            rate: sample_rate.max(1) as f32,
+            rate,
             left: VecDeque::with_capacity(FFT_SIZE),
             right: VecDeque::with_capacity(FFT_SIZE),
             smoothed: AudioSpectrum::default(),
             peaks: [PEAK_FLOOR_DB; 2],
             window,
+            web_bins: web_bins(rate),
         }
     }
 
@@ -123,13 +142,27 @@ impl SpectrumAnalyzer {
         self.smoothed
     }
 
-    /// Mean magnitude per band in dB (full-scale sine = 0 dB) plus the
-    /// treble tilt; silence or too few samples read −180 dB.
-    fn band_db(&self, left: bool) -> [f32; BANDS] {
+    /// What WE hands web wallpapers now: linear band magnitudes with no gain
+    /// control or smoothing (see the module docs).
+    pub fn web_levels(&self) -> AudioSpectrum {
+        let mut out = AudioSpectrum::default();
+        for (left, bands) in [(true, &mut out.left), (false, &mut out.right)] {
+            let Some(mag) = self.magnitudes(left) else {
+                continue;
+            };
+            for (o, bins) in bands.iter_mut().zip(&self.web_bins) {
+                *o = WEB_GAIN * bins.iter().map(|&(k, w)| mag[k] * w).sum::<f32>();
+            }
+        }
+        out
+    }
+
+    /// Magnitude per FFT bin of the last samples (full-scale sine = 1), or
+    /// `None` until enough samples arrived.
+    fn magnitudes(&self, left: bool) -> Option<Vec<f32>> {
         let samples = if left { &self.left } else { &self.right };
-        let mut out = [-180.0; BANDS];
         if samples.len() < FFT_SIZE {
-            return out;
+            return None;
         }
         let mut re: Vec<f32> = samples
             .iter()
@@ -138,23 +171,56 @@ impl SpectrumAnalyzer {
             .collect();
         let mut im = vec![0.0; FFT_SIZE];
         fft(&mut re, &mut im);
-        // Hann window halves the amplitude; full-scale sine → 0 dB.
+        // Hann window halves the amplitude.
         let norm = 4.0 / FFT_SIZE as f32;
+        Some(
+            re.iter()
+                .zip(&im)
+                .take(FFT_SIZE / 2)
+                .map(|(r, i)| (r * r + i * i).sqrt() * norm)
+                .collect(),
+        )
+    }
+
+    /// Mean magnitude per band in dB (full-scale sine = 0 dB) plus the
+    /// treble tilt; silence or too few samples read −180 dB.
+    fn band_db(&self, left: bool) -> [f32; BANDS] {
+        let mut out = [-180.0; BANDS];
+        let Some(mag) = self.magnitudes(left) else {
+            return out;
+        };
         let hz_per_bin = self.rate / FFT_SIZE as f32;
         for (band, o) in out.iter_mut().enumerate() {
             let lo = LOW_HZ * (HIGH_HZ / LOW_HZ).powf(band as f32 / BANDS as f32);
             let hi = LOW_HZ * (HIGH_HZ / LOW_HZ).powf((band + 1) as f32 / BANDS as f32);
             let first = ((lo / hz_per_bin) as usize).clamp(1, FFT_SIZE / 2 - 1);
             let last = ((hi / hz_per_bin) as usize).clamp(first, FFT_SIZE / 2 - 1);
-            let sum: f32 = (first..=last)
-                .map(|k| (re[k] * re[k] + im[k] * im[k]).sqrt() * norm)
-                .sum();
+            let sum: f32 = mag[first..=last].iter().sum();
             let mean = sum / (last - first + 1) as f32;
             let centre = (lo * hi).sqrt();
             *o = 20.0 * mean.max(1e-9).log10() + TILT_DB_PER_OCTAVE * (centre / 1000.0).log2();
         }
         out
     }
+}
+
+/// For each of WE's web bands, the FFT bins (at `rate`) it overlaps and the
+/// overlapping fraction of each bin.
+fn web_bins(rate: f32) -> Vec<Vec<(usize, f32)>> {
+    let start = |i: usize| ((i as f32 + 0.5) * WEB_BIN_HZ).max(WEB_CURVE_HZ * (i as f32).powi(4));
+    let hz_per_bin = rate / FFT_SIZE as f32;
+    (0..BANDS)
+        .map(|i| {
+            let (lo, hi) = (start(i), start(i + 1));
+            (1..FFT_SIZE / 2)
+                .filter_map(|k| {
+                    let (a, b) = ((k as f32 - 0.5) * hz_per_bin, (k as f32 + 0.5) * hz_per_bin);
+                    let overlap = b.min(hi) - a.max(lo);
+                    (overlap > 0.0).then(|| (k, overlap / hz_per_bin))
+                })
+                .collect()
+        })
+        .collect()
 }
 
 /// In-place radix-2 FFT (length must be a power of two).
@@ -238,6 +304,31 @@ mod tests {
         a.push(&tone(1000.0, 0.0005, 48_000), 2);
         let dropped = a.analyze(1.0).left.iter().copied().fold(0.0, f32::max);
         assert!((dropped - 0.7).abs() < 0.05, "{dropped}");
+    }
+
+    #[test]
+    fn web_levels_are_linear_and_ungained() {
+        // Band 32 covers 917–1037 Hz.
+        let mut a = SpectrumAnalyzer::new(48_000);
+        a.push(&tone(960.0, 0.01, 48_000), 2);
+        let quiet = a.web_levels();
+        let (band, peak) = quiet
+            .left
+            .iter()
+            .enumerate()
+            .fold((0, 0.0), |m, (i, v)| if *v > m.1 { (i, *v) } else { m });
+        assert_eq!(band, 32, "{:?}", quiet.left);
+        // A −40 dBFS tone reads a few hundredths, as in WE; 10× louder, 10× higher.
+        assert!((0.02..0.1).contains(&peak), "{peak}");
+        assert!(quiet.right.iter().all(|v| *v == 0.0));
+        a.push(&tone(960.0, 0.1, 48_000), 2);
+        let loud = a.web_levels().left[32];
+        assert!((loud / peak - 10.0).abs() < 0.5, "{loud} vs {peak}");
+        // Low bands are one 23.4 Hz bin each: 117 Hz is band 4.
+        let mut b = SpectrumAnalyzer::new(48_000);
+        b.push(&tone(117.2, 0.1, 48_000), 2);
+        let low = b.web_levels().left;
+        assert!(low[4] > low[3] * 1.5 && low[4] > low[5] * 1.5, "{low:?}");
     }
 
     #[test]
