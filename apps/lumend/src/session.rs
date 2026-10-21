@@ -144,12 +144,17 @@ pub struct SceneAudio {
     capture: Option<lumen_media::AudioCapture>,
     last_time: Option<f32>,
     next_check: f32,
+    /// Loudest band since the last check (debug log: is the scene hearing anything?).
+    peak: f32,
 }
 
 impl SceneAudio {
     fn start() -> Option<Self> {
         let capture = match lumen_media::AudioCapture::start() {
-            Ok(c) => Some(c),
+            Ok(c) => {
+                tracing::info!("audio capture started (default output, loopback)");
+                Some(c)
+            }
             Err(e) => {
                 tracing::info!("audio capture unavailable: {e}");
                 None
@@ -159,6 +164,7 @@ impl SceneAudio {
             capture,
             last_time: None,
             next_check: 2.0,
+            peak: 0.0,
         })
     }
 
@@ -168,14 +174,22 @@ impl SceneAudio {
         self.last_time = Some(time);
         if time >= self.next_check {
             self.next_check = time + 2.0;
+            tracing::debug!(
+                peak = self.peak,
+                capturing = self.capture.is_some(),
+                "audio spectrum (loudest band, last 2 s)"
+            );
+            self.peak = 0.0;
             if self.capture.as_ref().is_none_or(|c| c.needs_reopen()) {
                 self.capture = lumen_media::AudioCapture::start().ok();
             }
         }
-        self.capture.as_ref().map_or([[0.0; 64]; 2], |c| {
+        let spectrum = self.capture.as_ref().map_or([[0.0; 64]; 2], |c| {
             let s = c.spectrum(dt);
             [s.left, s.right]
-        })
+        });
+        self.peak = spectrum.iter().flatten().fold(self.peak, |m, &v| m.max(v));
+        spectrum
     }
 }
 

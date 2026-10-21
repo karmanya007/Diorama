@@ -156,7 +156,10 @@ fn spawn(sound: &Sound, volume: f32) -> Option<AudioPlayer> {
         SoundMode::Random { min_gap, max_gap } => PlaybackMode::Random { min_gap, max_gap },
     };
     match AudioPlayer::spawn_playlist(tracks, mode, volume) {
-        Ok(p) => Some(p),
+        Ok(p) => {
+            tracing::info!(sound = %sound.name, volume, "sound playing");
+            Some(p)
+        }
         Err(e) => {
             tracing::info!(sound = %sound.name, "sound unavailable: {e}");
             None
