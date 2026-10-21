@@ -67,19 +67,28 @@ pub enum MediaKind {
     Video,
     /// A Wallpaper Engine scene project folder.
     Scene,
+    /// A web wallpaper: a Wallpaper Engine web project folder or an HTML page.
+    Web,
 }
 
 impl MediaKind {
     /// Guess from the file extension; scene project folders (or their
-    /// `project.json` / `scene.json` / `scene.pkg`) are scenes.
+    /// `project.json` / `scene.json` / `scene.pkg`) are scenes, web project
+    /// folders (`project.json` with `"type": "web"`) and HTML pages are web.
     pub fn from_path(path: &std::path::Path) -> Option<Self> {
         if path.is_dir() {
+            if project_type(&path.join("project.json")).as_deref() == Some("web") {
+                return Some(Self::Web);
+            }
             return ["scene.pkg", "scene.json"]
                 .iter()
                 .any(|f| path.join(f).is_file())
                 .then_some(Self::Scene);
         }
         let name = path.file_name()?.to_str()?.to_ascii_lowercase();
+        if name == "project.json" && project_type(path).as_deref() == Some("web") {
+            return Some(Self::Web);
+        }
         if matches!(name.as_str(), "scene.pkg" | "scene.json" | "project.json") {
             return Some(Self::Scene);
         }
@@ -87,9 +96,18 @@ impl MediaKind {
         match ext.as_str() {
             "png" | "jpg" | "jpeg" | "bmp" | "gif" | "tga" | "webp" => Some(Self::Image),
             "mp4" | "m4v" | "mov" | "webm" | "mkv" | "avi" | "wmv" => Some(Self::Video),
+            "html" | "htm" => Some(Self::Web),
             _ => None,
         }
     }
+}
+
+/// `type` of a Wallpaper Engine `project.json`, lower-case.
+fn project_type(path: &std::path::Path) -> Option<String> {
+    let bytes = std::fs::read(path).ok()?;
+    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&bytes);
+    let v: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    Some(v.get("type")?.as_str()?.to_ascii_lowercase())
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -332,6 +350,31 @@ mod tests {
             MediaKind::from_path("a/project.json".as_ref()),
             Some(MediaKind::Scene)
         );
+        assert_eq!(
+            MediaKind::from_path("a/index.HTML".as_ref()),
+            Some(MediaKind::Web)
+        );
+    }
+
+    #[test]
+    fn web_projects_by_type() {
+        let dir = std::env::temp_dir().join(format!("lumen-ipc-web-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // WE writes project.json with a BOM; `type` is matched case-insensitively.
+        std::fs::write(
+            dir.join("project.json"),
+            "\u{feff}{\"type\": \"Web\", \"file\": \"index.html\"}",
+        )
+        .unwrap();
+        assert_eq!(MediaKind::from_path(&dir), Some(MediaKind::Web));
+        assert_eq!(
+            MediaKind::from_path(&dir.join("project.json")),
+            Some(MediaKind::Web)
+        );
+        std::fs::write(dir.join("project.json"), r#"{"type": "scene"}"#).unwrap();
+        std::fs::write(dir.join("scene.pkg"), b"").unwrap();
+        assert_eq!(MediaKind::from_path(&dir), Some(MediaKind::Scene));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

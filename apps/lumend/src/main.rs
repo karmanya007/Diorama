@@ -9,12 +9,14 @@
 
 mod clock;
 mod headless;
+mod media;
 mod policy;
 mod scripts;
 mod session;
 mod sounds;
 mod state;
 mod videos;
+mod web;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -38,14 +40,17 @@ use crate::session::{Content, Look, Session, Wallpaper};
 #[command(version, about)]
 struct Args {
     /// Image to show at start-up (PNG, JPEG, …). Optional: `lumen set` can choose later.
-    #[arg(long, conflicts_with_all = ["video", "scene"])]
+    #[arg(long, conflicts_with_all = ["video", "scene", "web"])]
     image: Option<PathBuf>,
     /// Video to loop at start-up (MP4, …). Muted.
-    #[arg(long, conflicts_with = "scene")]
+    #[arg(long, conflicts_with_all = ["scene", "web"])]
     video: Option<PathBuf>,
     /// Wallpaper Engine scene project folder (contains `scene.pkg` or `scene.json`).
-    #[arg(long)]
+    #[arg(long, conflicts_with = "web")]
     scene: Option<PathBuf>,
+    /// Web wallpaper at start-up: a Wallpaper Engine web project folder or an HTML page.
+    #[arg(long)]
+    web: Option<PathBuf>,
     /// Wallpaper Engine `assets` folder (built-in shaders and effects used by scenes).
     #[arg(long, default_value = headless::DEFAULT_WE_ASSETS)]
     we_assets: PathBuf,
@@ -87,6 +92,10 @@ struct Args {
     /// Prefer an integrated GPU.
     #[arg(long)]
     low_power: bool,
+    /// Let web wallpapers reach the network (off by default: only the
+    /// wallpaper's own files load).
+    #[arg(long)]
+    web_network: bool,
     /// Exit after this many seconds (for testing).
     #[arg(long)]
     duration: Option<u64>,
@@ -319,6 +328,7 @@ fn main() -> Result<()> {
         audio: None,
         audio_loop: None,
         next_audio_check: Instant::now() + AUDIO_CHECK_INTERVAL,
+        web_network: args.web_network,
         clock: VideoClock::default(),
         fps: args.fps,
         scene_clock: SceneClock::new(args.fps),
@@ -337,7 +347,8 @@ fn main() -> Result<()> {
         .image
         .as_ref()
         .or(args.video.as_ref())
-        .or(args.scene.as_ref());
+        .or(args.scene.as_ref())
+        .or(args.web.as_ref());
     let look = Look {
         fit: match args.fit {
             Some(FitArg::Fill) => Fit::Fill,
@@ -358,7 +369,8 @@ fn main() -> Result<()> {
         args.image
             .as_ref()
             .or(args.video.as_ref())
-            .or(args.scene.as_ref()),
+            .or(args.scene.as_ref())
+            .or(args.web.as_ref()),
         saved,
     ) {
         (Some(path), _) => Some((path.clone(), None, look)),
@@ -495,6 +507,8 @@ struct Daemon<'p> {
     /// Video loop index the audio was last synced to; `None` = not started yet.
     audio_loop: Option<u32>,
     next_audio_check: Instant,
+    /// Web wallpapers may use the network (`--web-network`).
+    web_network: bool,
 }
 
 impl Daemon<'_> {
@@ -505,6 +519,11 @@ impl Daemon<'_> {
             Some(Content::Video(player)) => self.clock.time_until_next(player),
             Some(Content::Scene(_)) if self.scene_clock.is_paused() => COVERAGE_INTERVAL,
             Some(Content::Scene(_)) => self.scene_clock.time_until_next(),
+            Some(Content::Web(_)) => self
+                .session
+                .as_mut()
+                .and_then(Session::web)
+                .map_or(Duration::from_secs(1), |w| w.time_until_next()),
             _ => Duration::from_secs(1),
         };
         let wait = content_wait.min(self.next_coverage.saturating_duration_since(Instant::now()));
@@ -596,6 +615,10 @@ impl Daemon<'_> {
                     return Ok(());
                 }
             }
+            let all_paused = session.outputs.iter().all(|o| o.paused);
+            if let Some(web) = session.web() {
+                web.set_paused(all_paused);
+            }
             if let Some(Content::Scene(_)) = self.wallpaper.as_ref().map(|w| &w.content) {
                 // Resuming makes the next frame due immediately.
                 let all_paused = session.outputs.iter().all(|o| o.paused);
@@ -604,6 +627,16 @@ impl Daemon<'_> {
                     sounds.set_paused(all_paused);
                 }
             }
+        }
+
+        if let Some(web) = session.web() {
+            if !web.alive() {
+                tracing::warn!("web wallpaper host exited; restarting");
+                self.needs_rebuild = true;
+                std::thread::sleep(REBUILD_RETRY);
+                return Ok(());
+            }
+            web.tick(self.platform);
         }
 
         if let Some(Content::Scene(_)) = self.wallpaper.as_ref().map(|w| &w.content)
@@ -738,7 +771,7 @@ impl Daemon<'_> {
         let (Some(wallpaper), Some(gpu)) = (self.wallpaper.as_ref(), self.gpu.as_ref()) else {
             return;
         };
-        match Session::build(self.platform, gpu, wallpaper) {
+        match Session::build(self.platform, gpu, wallpaper, self.web_network) {
             Ok(mut session) => {
                 if let Some(frame) = self.clock.current.as_ref()
                     && let Err(e) = session.show_video_frame(gpu, frame)
@@ -772,6 +805,8 @@ impl Daemon<'_> {
                     set_fallback(&wallpaper.path, wallpaper.look.layout == Layout::Span);
                 }
                 MediaKind::Video | MediaKind::Scene => self.fallback_pending = true,
+                // No snapshot of a page yet: the OS wallpaper stays as it was.
+                MediaKind::Web => {}
             }
         }
         self.wallpaper = Some(wallpaper);

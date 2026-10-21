@@ -239,6 +239,38 @@ impl Platform {
         }
     }
 
+    /// Creates a shown but off-screen window of `width`×`height` (rendering
+    /// tests and snapshots: content that is not on the desktop).
+    pub fn create_offscreen(&self, width: u32, height: u32) -> Result<WallpaperWindow> {
+        let (x, y) = (-32_000, -32_000);
+        // SAFETY: plain Win32 calls; class registered in `new`.
+        unsafe {
+            let hwnd = CreateWindowExW(
+                WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
+                WALLPAPER_CLASS,
+                w!("Lumen offscreen"),
+                WS_POPUP | WS_VISIBLE,
+                x,
+                y,
+                width as i32,
+                height as i32,
+                None,
+                None,
+                Some(self.hinstance),
+                None,
+            )
+            .map_err(|e| os_err("CreateWindowExW(offscreen)", &e))?;
+            Ok(WallpaperWindow {
+                hwnd,
+                hinstance: self.hinstance,
+                x,
+                y,
+                width,
+                height,
+            })
+        }
+    }
+
     /// Pumps window messages for up to `timeout` and returns desktop events
     /// raised meanwhile. Returns early as soon as any message arrives.
     pub fn poll_events(&self, timeout: Duration) -> Vec<DesktopEvent> {

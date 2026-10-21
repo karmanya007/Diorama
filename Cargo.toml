@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "apps/lumen-cli",
     "apps/lumend",
+    "apps/lumen-webhost",
     "crates/lumen-core",
     "crates/lumen-gpu",
     "crates/lumen-ipc",
@@ -49,6 +50,8 @@ ctrlc = "3"
 interprocess = "=2.4.4"
 pollster = "1"
 raw-window-handle = "0.6"
+# Web wallpapers (WebView2 on Windows, WebKitGTK later on Linux).
+wry = { version = "0.57", default-features = false }
 rquickjs = { version = "0.14.0", features = ["loader"] }
 harfrust = "0.14.0"
 swash = "0.2.10"

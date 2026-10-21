@@ -6,10 +6,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use lumen_gpu::Gpu;
 use lumen_gpu::shader::ShaderCompiler;
-use lumen_platform::{DesktopPointer, MediaInfo, MediaPlayback, MediaWatcher};
+use lumen_platform::{DesktopPointer, MediaInfo};
 use lumen_render::scene::{LayerUpdate, SceneRenderer};
 use lumen_scene::Scene;
 
+use crate::media::{MediaChange, MediaTracker};
 use crate::sounds::SceneSounds;
 use lumen_script::{Inputs, ScriptHost, thumbnail_colors};
 use serde_json::json;
@@ -116,13 +117,10 @@ impl Drop for SceneScripts {
 }
 
 struct Media {
-    watcher: MediaWatcher,
-    last: Option<MediaInfo>,
+    tracker: MediaTracker,
     /// The album art shown now (`mediaThumbnail` texture), kept so the next
     /// track can show it as `mediaPreviousThumbnail`.
     art: Option<Vec<u8>>,
-    /// Scene time the last timeline event went out.
-    timeline_at: f32,
 }
 
 /// Milliseconds since the Unix epoch, now.
@@ -168,10 +166,8 @@ impl SceneScripts {
                     size: [scene.width as f32, scene.height as f32],
                     last_time: None,
                     media: live.then(|| Media {
-                        watcher: MediaWatcher::start(),
-                        last: None,
+                        tracker: MediaTracker::start(),
                         art: None,
-                        timeline_at: f32::NEG_INFINITY,
                     }),
                     factory,
                     storage,
@@ -304,62 +300,25 @@ impl Media {
     /// events (`mediaStatusChanged`, `mediaPropertiesChanged`, …).
     /// Returns whether the thumbnail changed.
     fn send_changes(&mut self, host: &mut ScriptHost, time: f32) -> bool {
-        let now = self.watcher.latest();
-        // The watcher's first read takes a moment; don't announce "nothing
-        // playing" before it (scripts would log an empty track).
-        if self.last.is_none() && !now.enabled && time < 3.0 {
-            return false;
+        let mut thumbnail = false;
+        for change in self.tracker.changes(time) {
+            match change {
+                MediaChange::Status { enabled } => {
+                    host.send("mediaStatusChanged", json!({"enabled": enabled}));
+                }
+                MediaChange::Properties(p) => host.send("mediaPropertiesChanged", p),
+                MediaChange::Playback(state) => {
+                    host.send("mediaPlaybackChanged", json!({"state": state}));
+                }
+                MediaChange::Thumbnail => {
+                    thumbnail = true;
+                    if let Some(now) = self.tracker.current() {
+                        host.send("mediaThumbnailChanged", thumbnail_event(now));
+                    }
+                }
+                MediaChange::Timeline(t) => host.send("mediaTimelineChanged", t),
+            }
         }
-        let last = self.last.take();
-        let first = last.is_none();
-        let last = last.unwrap_or_default();
-        if first || now.enabled != last.enabled {
-            host.send("mediaStatusChanged", json!({"enabled": now.enabled}));
-        }
-        let props = |m: &MediaInfo| {
-            (
-                m.title.clone(),
-                m.artist.clone(),
-                m.subtitle.clone(),
-                m.album_title.clone(),
-                m.album_artist.clone(),
-                m.genres.clone(),
-            )
-        };
-        if first || props(&now) != props(&last) {
-            host.send(
-                "mediaPropertiesChanged",
-                json!({
-                    "title": now.title, "artist": now.artist, "subTitle": now.subtitle,
-                    "albumTitle": now.album_title, "albumArtist": now.album_artist,
-                    "genres": now.genres, "contentType": "audio",
-                }),
-            );
-        }
-        if first || now.playback != last.playback {
-            let state = match now.playback {
-                MediaPlayback::Stopped => 0,
-                MediaPlayback::Playing => 1,
-                MediaPlayback::Paused => 2,
-            };
-            host.send("mediaPlaybackChanged", json!({"state": state}));
-        }
-        let thumbnail = first
-            || now.thumbnail_key != last.thumbnail_key
-            || now.thumbnail.is_some() != last.thumbnail.is_some();
-        if thumbnail {
-            host.send("mediaThumbnailChanged", thumbnail_event(&now));
-        }
-        // "Sent frequently while media is playing."
-        let playing = now.playback == MediaPlayback::Playing;
-        if (playing && time - self.timeline_at >= 1.0) || first || now.duration != last.duration {
-            self.timeline_at = time;
-            host.send(
-                "mediaTimelineChanged",
-                json!({"position": now.position, "duration": now.duration}),
-            );
-        }
-        self.last = Some(now);
         thumbnail
     }
 
@@ -368,8 +327,8 @@ impl Media {
     fn show_art(&mut self, gpu: &Gpu, renderer: &SceneRenderer) {
         let n = lumen_render::scene::SYSTEM_TEXTURE_SIZE;
         let art = self
-            .last
-            .as_ref()
+            .tracker
+            .current()
             .and_then(|m| m.thumbnail.as_ref())
             .and_then(|bytes| image::load_from_memory(bytes).ok())
             .map(|img| {

@@ -36,6 +36,8 @@ pub enum Content {
     /// A scene project. Its imported form (decoded textures, often hundreds
     /// of MB) is only held until the GPU has it; a rebuild re-imports.
     Scene(SceneSource),
+    /// A web page, shown by a `lumen-webhost` process.
+    Web(crate::web::WebSource),
 }
 
 pub struct SceneSource {
@@ -92,6 +94,15 @@ impl Wallpaper {
             MediaKind::Scene => scene_dir(path),
             _ => path.to_path_buf(),
         };
+        if kind == MediaKind::Web {
+            let source = crate::web::WebSource::new(path, we_config)?;
+            return Ok(Self {
+                path: source.dir.clone(),
+                kind,
+                look,
+                content: Content::Web(source),
+            });
+        }
         let content = match kind {
             MediaKind::Image => Content::Image(
                 image::open(path)
@@ -102,6 +113,7 @@ impl Wallpaper {
                 VideoPlayer::spawn(path).with_context(|| format!("opening {}", path.display()))?,
             ),
             // Import now so a broken scene is reported by `lumen set`.
+            MediaKind::Web => unreachable!("handled above"),
             MediaKind::Scene => Content::Scene(SceneSource {
                 dir: path.to_path_buf(),
                 we_assets: we_assets.map(Path::to_path_buf),
@@ -136,6 +148,8 @@ enum Renderer {
         /// Fills monitor areas the scene does not cover (fit/custom pan), as WE.
         clear: [f32; 4],
     },
+    /// The page draws itself in its own process and windows.
+    Web(Box<crate::web::WebHost>),
 }
 
 /// Loopback capture of the system's audio for a scene, reopened when the
@@ -149,7 +163,7 @@ pub struct SceneAudio {
 }
 
 impl SceneAudio {
-    fn start() -> Option<Self> {
+    pub fn start() -> Option<Self> {
         let capture = match lumen_media::AudioCapture::start() {
             Ok(c) => {
                 tracing::info!("audio capture started (default output, loopback)");
@@ -169,7 +183,7 @@ impl SceneAudio {
     }
 
     /// (left, right) 64-band spectrum at scene time `time`.
-    fn spectrum(&mut self, time: f32) -> [[f32; 64]; 2] {
+    pub fn spectrum(&mut self, time: f32) -> [[f32; 64]; 2] {
         let dt = self.last_time.map_or(0.0, |t| (time - t).max(0.0));
         self.last_time = Some(time);
         if time >= self.next_check {
@@ -199,14 +213,17 @@ pub struct Output {
     /// Not receiving new frames (covered, locked, …); the last frame stays on screen.
     pub paused: bool,
     pub coverage: Coverage,
-    surface: OutputSurface,
-    window: WallpaperWindow,
+    /// `None` for web wallpapers, which draw in their own windows.
+    surface: Option<OutputSurface>,
+    window: Option<WallpaperWindow>,
 }
 
 impl Output {
     /// See [`WallpaperWindow::keep_in_place`]. True if the window moved.
     pub fn keep_in_place(&self) -> bool {
-        self.window.keep_in_place()
+        self.window
+            .as_ref()
+            .is_some_and(WallpaperWindow::keep_in_place)
     }
 }
 
@@ -227,10 +244,36 @@ pub fn rect_of(o: &OutputInfo) -> Rect {
 }
 
 impl Session {
-    pub fn build(platform: &Platform, gpu: &Gpu, wallpaper: &Wallpaper) -> Result<Self> {
+    pub fn build(
+        platform: &Platform,
+        gpu: &Gpu,
+        wallpaper: &Wallpaper,
+        web_network: bool,
+    ) -> Result<Self> {
         let look = wallpaper.look;
         let infos = platform.outputs().context("enumerating outputs")?;
         let canvas = Rect::bounding(infos.iter().map(rect_of)).context("no outputs found")?;
+        if let Content::Web(source) = &wallpaper.content {
+            // The host makes its own windows; outputs here only track pauses.
+            let host = crate::web::WebHost::spawn(source, web_network)?;
+            let outputs = infos
+                .into_iter()
+                .map(|info| Output {
+                    info,
+                    paused: false,
+                    coverage: Coverage::Visible,
+                    surface: None,
+                    window: None,
+                })
+                .collect::<Vec<_>>();
+            tracing::info!(outputs = outputs.len(), "web wallpaper shown");
+            return Ok(Self {
+                outputs,
+                canvas,
+                renderer: Renderer::Web(Box::new(host)),
+                look,
+            });
+        }
 
         let mut outputs = Vec::new();
         for info in infos {
@@ -247,11 +290,14 @@ impl Session {
                 info,
                 paused: false,
                 coverage: Coverage::Visible,
-                surface,
-                window,
+                surface: Some(surface),
+                window: Some(window),
             });
         }
-        let format = outputs[0].surface.format();
+        let format = outputs
+            .iter()
+            .find_map(|o| o.surface.as_ref().map(OutputSurface::format))
+            .context("no output surface")?;
 
         let renderer = match &wallpaper.content {
             Content::Image(image) => {
@@ -278,6 +324,7 @@ impl Session {
                 let info = player.info();
                 Renderer::Video(VideoBlit::new(gpu, format, info.width, info.height))
             }
+            Content::Web(_) => unreachable!("handled above"),
             Content::Scene(source) => {
                 let scene = source.take()?;
                 let compiler = crate::headless::shader_compiler()?;
@@ -437,6 +484,14 @@ impl Session {
         Ok(())
     }
 
+    /// The web wallpaper host, if this session shows one.
+    pub fn web(&mut self) -> Option<&mut crate::web::WebHost> {
+        match &mut self.renderer {
+            Renderer::Web(host) => Some(host),
+            _ => None,
+        }
+    }
+
     /// The last rendered scene frame, for the OS fallback wallpaper.
     pub fn scene_snapshot(&self, gpu: &Gpu) -> Option<image::RgbaImage> {
         let Renderer::Scene { scene, .. } = &self.renderer else {
@@ -455,7 +510,10 @@ impl Session {
                 Layout::Span => self.canvas,
                 Layout::PerOutput => target,
             };
-            let Some(frame) = out.surface.acquire(gpu)? else {
+            let Some(surface) = out.surface.as_mut() else {
+                continue;
+            };
+            let Some(frame) = surface.acquire(gpu)? else {
                 tracing::debug!(output = %out.info.device, "frame skipped (occluded)");
                 continue;
             };
@@ -470,6 +528,7 @@ impl Session {
                 Renderer::Image(blit) => blit.draw(gpu, &view, canvas, target, fit, clear),
                 Renderer::Video(blit) => blit.draw(gpu, &view, canvas, target, fit, clear),
                 Renderer::Scene { blit, .. } => blit.draw(gpu, &view, canvas, target, fit, clear),
+                Renderer::Web(_) => {}
             }
             gpu.queue.present(frame);
         }

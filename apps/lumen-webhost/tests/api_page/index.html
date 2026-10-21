@@ -1,0 +1,26 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+body{margin:0;background:#102030;color:#fff;font:28px monospace;padding:40px}
+#bars{display:flex;align-items:flex-end;height:200px;gap:2px}#bars div{width:12px;background:#4cf}
+</style></head><body>
+<div id="props">props: none</div><div id="general">general: none</div><div id="paused">paused: none</div>
+<div id="media">media: none</div><div id="playback">playback: none</div><div id="clicks">clicks: 0</div>
+<div id="audio">audio: none</div><div id="bars"></div><div id="net">net: pending</div>
+<script>
+const $ = (id) => document.getElementById(id);
+let clicks = 0;
+window.wallpaperPropertyListener = {
+  applyUserProperties(p) { $('props').textContent = 'props: ' + JSON.stringify(p); },
+  applyGeneralProperties(g) { $('general').textContent = 'general: ' + JSON.stringify(g); },
+  setPaused(p) { $('paused').textContent = 'paused: ' + p; },
+};
+window.wallpaperRegisterAudioListener((a) => {
+  $('audio').textContent = 'audio: ' + a.length + ' values, first ' + a[0].toFixed(2) + ', last ' + a[127].toFixed(2);
+  const bars = $('bars'); bars.innerHTML = '';
+  for (let i = 0; i < 128; i += 4) { const d = document.createElement('div'); d.style.height = (a[i] * 200) + 'px'; bars.appendChild(d); }
+});
+window.wallpaperRegisterMediaPropertiesListener((e) => { $('media').textContent = 'media: ' + e.title + ' / ' + e.artist; });
+window.wallpaperRegisterMediaPlaybackListener((e) => { $('playback').textContent = 'playback: ' + e.state + (e.state === window.wallpaperMediaIntegration.PLAYBACK_PLAYING ? ' (playing)' : ''); });
+document.addEventListener('click', () => { clicks++; $('clicks').textContent = 'clicks: ' + clicks; });
+fetch('https://example.com/', { mode: 'no-cors' }).then(() => { $('net').textContent = 'net: REACHED'; }, () => { $('net').textContent = 'net: blocked'; });
+</script></body></html>

@@ -21,6 +21,10 @@ impl Platform {
         Err(Error::Unsupported)
     }
 
+    pub fn create_offscreen(&self, _width: u32, _height: u32) -> Result<WallpaperWindow> {
+        Err(Error::Unsupported)
+    }
+
     pub fn poll_events(&self, _timeout: Duration) -> Vec<DesktopEvent> {
         Vec::new()
     }

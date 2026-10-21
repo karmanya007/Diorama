@@ -72,6 +72,7 @@ enum KindArg {
     Image,
     Video,
     Scene,
+    Web,
 }
 
 fn main() -> ExitCode {
@@ -124,6 +125,7 @@ fn run(cli: Cli) -> Result<()> {
                 KindArg::Image => MediaKind::Image,
                 KindArg::Video => MediaKind::Video,
                 KindArg::Scene => MediaKind::Scene,
+                KindArg::Web => MediaKind::Web,
             }),
             fit: fit.map(|f| match f {
                 FitArg::Fill => Fit::Fill,
