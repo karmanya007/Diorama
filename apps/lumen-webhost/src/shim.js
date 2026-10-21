@@ -110,8 +110,10 @@
 	window.wallpaperRegisterAudioListener = function (fn) {
 		if (typeof fn === 'function') { state.audio = [fn]; } else { state.audio = []; }
 	};
+	// Only after `load`, like WE: pages set up what their listener uses in
+	// `load` handlers (3343374776 spins forever if called before p5.js runs).
 	L.audio = (levels) => {
-		if (state.paused) { return; }
+		if (state.paused || !state.loaded) { return; }
 		const a = Float32Array.from(levels);
 		for (const fn of state.audio) {
 			try { fn(Array.from(a)); } catch (e) { console.error(e); }
