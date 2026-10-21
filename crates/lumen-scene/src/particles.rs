@@ -216,6 +216,7 @@ pub struct SpriteSheet {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct InstanceOverride {
     pub rate: f32,
+    /// Scales the continuous emission rate (not the maximum count).
     pub count: f32,
     pub size: f32,
     pub lifetime: f32,

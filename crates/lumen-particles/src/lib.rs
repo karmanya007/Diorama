@@ -258,7 +258,7 @@ impl Simulation {
     /// trail draw per firefly), so it holds that many times its own maximum.
     pub fn capacity(&self, i: usize) -> usize {
         let s = &self.nodes[i].system;
-        let own = (s.max_count as f32 * s.instance.count).round().max(0.0) as usize;
+        let own = s.max_count as usize;
         match self.nodes[i].parent {
             Some((p, ChildKind::Follow)) => own.saturating_mul(self.capacity(p).max(1)),
             _ => own,
@@ -345,7 +345,11 @@ impl Simulation {
         };
         let burst = matches!(parent, Some((_, ChildKind::Spawn | ChildKind::Death)));
         let emitters = self.nodes[i].system.emitters.clone();
-        let rate_scale = self.nodes[i].system.instance.rate;
+        // The `count` override scales emission, not the maximum (capture 2478
+        // of 2208593521: rain at 400/s × 0.49 s holds 409 with count 2 and
+        // 78 with count 0.38; 1769376307's stars, count 2, stop at their
+        // maxcount 1000).
+        let rate_scale = self.nodes[i].system.instance.rate * self.nodes[i].system.instance.count;
         let first = !self.nodes[i].emitted_instant;
         self.nodes[i].emitted_instant = true;
         for (e, emitter) in emitters.iter().enumerate() {
@@ -388,10 +392,7 @@ impl Simulation {
                 }
             }
             at.extend((0..count).map(|k| anchors[k % anchors.len()]));
-            let own = {
-                let s = &self.nodes[i].system;
-                (s.max_count as f32 * s.instance.count).round().max(0.0) as usize
-            };
+            let own = self.nodes[i].system.max_count as usize;
             for (anchor, parent_id) in at {
                 if self.nodes[i].particles.len() >= self.capacity(i) {
                     break;

@@ -12,7 +12,7 @@ mod text;
 pub mod values;
 pub mod vfs;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use lumen_core::Limits;
@@ -275,6 +275,8 @@ struct Importer<'a> {
     /// WE format id (`FORMAT_*` in common_fragment.h) of loaded textures
     /// that shaders must convert (`TEX<n>FORMAT` combos).
     texture_formats: HashMap<TextureId, i64>,
+    /// Textures whose mip chain Lumen generated (the TEX stores one level).
+    generated_mips: HashSet<TextureId>,
 }
 
 /// A synthetic pass of an engine post-processing chain (bloom).
@@ -324,6 +326,7 @@ impl<'a> Importer<'a> {
             groups: HashMap::new(),
             fonts: HashMap::new(),
             texture_formats: HashMap::new(),
+            generated_mips: HashSet::new(),
         }
     }
 }
@@ -1603,9 +1606,12 @@ impl Importer<'_> {
         }
         let result = self.load_texture(name);
         let id = match result {
-            Ok((t, format)) => {
+            Ok((t, format, generated)) => {
                 let id = TextureId(self.scene.textures.len());
                 self.scene.textures.push(t);
+                if generated {
+                    self.generated_mips.insert(id);
+                }
                 if let Some(f) = format {
                     self.texture_formats.insert(id, f);
                 }
@@ -1622,7 +1628,8 @@ impl Importer<'_> {
 
     /// The decoded texture and, for one- and two-channel formats, the WE
     /// format id shaders convert with (`ConvertTexture0Format`).
-    fn load_texture(&self, name: &str) -> Result<(Texture, Option<i64>)> {
+    /// Also whether the mip chain was generated here rather than stored.
+    fn load_texture(&self, name: &str) -> Result<(Texture, Option<i64>, bool)> {
         let stem = name.strip_suffix(".tex").unwrap_or(name);
         let path = format!("materials/{stem}.tex");
         let bytes = self
@@ -1631,13 +1638,14 @@ impl Importer<'_> {
             .ok_or_else(|| unsupported("missing texture", &path))?;
         let tex = Tex::parse(&bytes, self.limits)?;
         if tex.is_video {
-            return video_texture(&tex, stem, self.limits.max_texture_dim).map(|t| (t, None));
+            return video_texture(&tex, stem, self.limits.max_texture_dim)
+                .map(|t| (t, None, false));
         }
         let mip = tex
             .first_mip()
             .ok_or_else(|| unsupported("texture without mips", name))?;
         let image = mip_to_rgba8(&tex, mip)?;
-        let mips = mip_chain(&tex, image.width, image.height, &image.pixels);
+        let (mips, generated) = mip_chain(&tex, image.width, image.height, &image.pixels);
         let h = &tex.header;
         // FORMAT_RG88 = 8, FORMAT_R8 = 9 (common_fragment.h).
         let format = match h.format {
@@ -1658,7 +1666,7 @@ impl Importer<'_> {
             frames: sprite_frames(&tex),
             video: None,
         };
-        Ok((texture, format))
+        Ok((texture, format, generated))
     }
 }
 
@@ -1713,7 +1721,10 @@ fn sprite_frames(tex: &Tex) -> Vec<lumen_scene::TextureFrame> {
 
 /// Mip levels below 0: WE's own when the TEX carries a full chain, else a
 /// 2×2 box-filtered chain (encoded PNG/JPEG textures have one level).
-fn mip_chain(tex: &Tex, width: u32, height: u32, level0: &[u8]) -> Vec<Vec<u8>> {
+/// The stored mip chain, or a generated one when the TEX stores only level 0
+/// (`true`). WE itself never generates mips; Lumen does because it renders
+/// layer targets at display size, where WE minifies only at the composite.
+fn mip_chain(tex: &Tex, width: u32, height: u32, level0: &[u8]) -> (Vec<Vec<u8>>, bool) {
     let stored = tex
         .images
         .first()
@@ -1737,8 +1748,9 @@ fn mip_chain(tex: &Tex, width: u32, height: u32, level0: &[u8]) -> Vec<Vec<u8>> 
             out.push(next.clone());
             prev = next;
         }
+        return (out, true);
     }
-    out
+    (out, false)
 }
 
 /// One 2×2 box-filter mip step of tightly packed RGBA8.

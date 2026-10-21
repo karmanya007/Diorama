@@ -2065,10 +2065,16 @@ impl SceneRenderer {
                         &mut pg.scratch,
                     ),
                 };
+                let live = pg.sim.particles(draw.system);
+                let mean = |f: fn(&lumen_particles::Particle) -> f32| {
+                    live.iter().map(f).sum::<f32>() / live.len().max(1) as f32
+                };
                 tracing::trace!(
                     layer = layer.index,
                     system = draw.system,
                     particles = n / 6,
+                    mean_size = mean(|p| p.size),
+                    mean_alpha = mean(|p| p.alpha),
                     "particles drawn"
                 );
                 if n > 0 {

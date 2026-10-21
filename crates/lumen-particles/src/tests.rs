@@ -83,14 +83,23 @@ fn emits_at_rate_and_retires_at_lifetime() {
 }
 
 #[test]
-fn instance_overrides_scale_count_and_size() {
-    let mut s = system(1000.0, Vec::new());
-    s.instance.count = 0.1;
+fn instance_overrides_scale_emission_and_size() {
+    // `count` scales the emission rate: 100/s × 0.5 for 1 s.
+    let mut s = system(100.0, Vec::new());
+    s.instance.count = 0.5;
     s.instance.size = 0.5;
     let mut sim = Simulation::new(&s, 1);
     sim.advance_to(1.0);
-    assert_eq!(sim.particles(0).len(), 10);
+    let n = sim.particles(0).len();
+    assert!((49..=51).contains(&n), "{n}");
     assert!(sim.particles(0).iter().all(|p| p.size == 4.0));
+    // ... but not the maximum.
+    let mut s = system(1000.0, Vec::new());
+    s.max_count = 30;
+    s.instance.count = 2.0;
+    let mut sim = Simulation::new(&s, 1);
+    sim.advance_to(1.0);
+    assert_eq!(sim.particles(0).len(), 30);
 }
 
 #[test]

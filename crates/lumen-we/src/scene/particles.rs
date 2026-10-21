@@ -11,7 +11,7 @@ use lumen_scene::particles::{
     ChildKind, ControlPoint, Emitter, Initializer, InstanceOverride, Operator, ParticleChild,
     ParticleRenderer, ParticleSystem, Range, SpriteSheet,
 };
-use lumen_scene::{ImageLayer, LayerKind};
+use lumen_scene::{ImageLayer, LayerKind, TextureBinding};
 use serde_json::Value;
 
 use super::values::{boolean, floats, integer, unwrap_value, vec_n};
@@ -358,6 +358,17 @@ impl Importer<'_> {
         }
         spec.combos.extend(combos);
         let draw = self.pass(&spec, None)?;
+        // Particles draw straight into the frame, as in WE, which samples a
+        // single-level TEX without mips: tiny sprites stay crisp points
+        // (capture 1225 of 1769376307: 64×64 star halos, 1 level on the GPU).
+        for binding in draw.textures.values() {
+            if let TextureBinding::Asset(id) = binding
+                && self.generated_mips.contains(id)
+                && let Some(t) = self.scene.textures.get_mut(id.0)
+            {
+                t.mips.clear();
+            }
+        }
 
         let control_points = json["controlpoint"]
             .as_array()
