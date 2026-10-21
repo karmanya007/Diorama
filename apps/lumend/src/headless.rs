@@ -190,6 +190,14 @@ pub fn render_to_png(
     // at the warm-up's wall clock (3129248394 times its log by `Date.now()`
     // taken at module load).
     let warm_up = 60.0f32.min(time);
+    // Debugging aid: `LUMEN_FAKE_AUDIO=<0..1>` plays a synthetic beat into
+    // scripts, shaders and emitters (headless frames are otherwise silent),
+    // to check what a scene does with audio.
+    let fake_audio = std::env::var("LUMEN_FAKE_AUDIO")
+        .ok()
+        .and_then(|v| v.parse::<f32>().ok())
+        .map(|v| v.clamp(0.0, 1.0));
+    let audio_at = |t: f32| fake_audio.map_or([[0.0; 64]; 2], |level| fake_spectrum(level, t));
     let start_clock = clock_ms - f64::from(warm_up) * 1000.0;
     // Headless frames never read or write saved localStorage.
     if let Some(mut scripts) =
@@ -204,7 +212,7 @@ pub fn render_to_png(
                 clock_ms: clock,
                 pointer,
                 buttons: None,
-                audio: [[0.0; 64]; 2],
+                audio: audio_at(t),
             };
             scripts.frame(&gpu, &mut renderer, None, &frame);
         }
@@ -218,6 +226,7 @@ pub fn render_to_png(
             time,
             pointer,
             daytime: crate::scripts::day_fraction_at(clock_ms),
+            audio: audio_at(time),
             ..FrameInputs::default()
         },
     );
@@ -277,4 +286,13 @@ pub fn render_to_png(
         .with_context(|| format!("writing {}", out.display()))?;
     println!("wrote {} ({w}×{h}, t = {time} s)", out.display());
     Ok(())
+}
+
+/// A 2 Hz bass-heavy beat at `level` (0..1) for [`render_to_png`]'s
+/// `LUMEN_FAKE_AUDIO`: every band peaks on the beat, low bands loudest.
+fn fake_spectrum(level: f32, time: f32) -> [[f32; 64]; 2] {
+    let beat = (0.5 + 0.5 * (std::f32::consts::TAU * 2.0 * time).cos()).powi(4);
+    let band = |i: usize| level * beat * (1.0 - i as f32 / 96.0);
+    let bands = std::array::from_fn(band);
+    [bands, bands]
 }
