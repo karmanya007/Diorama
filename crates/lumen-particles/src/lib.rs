@@ -514,6 +514,16 @@ impl Simulation {
                 Initializer::Velocity(r) => p.velocity = add(p.velocity, self.pick3(r)),
                 Initializer::Rotation(r) => p.rotation = self.pick3(r),
                 Initializer::AngularVelocity(r) => p.angular_velocity = self.pick3(r),
+                // WE samples a noise field at position × scale + time ×
+                // timescale; with both 0 that is a lattice point where the
+                // noise is 0, so particles get no velocity (capture 287 of
+                // 1537391845: all 11 torch particles at the emitter, a round
+                // glow). Otherwise a random direction stands in for the field.
+                Initializer::TurbulentVelocity {
+                    scale: 0.0,
+                    timescale: 0.0,
+                    ..
+                } => {}
                 Initializer::TurbulentVelocity { speed, .. } => {
                     let a = self.random() * std::f32::consts::TAU;
                     let s = lerp(speed[0], speed[1], self.random());

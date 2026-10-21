@@ -66,11 +66,19 @@ pub fn import_from(vfs: &Vfs, limits: &Limits) -> Result<Scene> {
 pub fn import_with(vfs: &Vfs, limits: &Limits, properties: &Properties) -> Result<Scene> {
     let mut json = vfs.read_json("scene.json")?;
     properties.resolve(&mut json);
-    // WE's per-wallpaper parallax switch overrides the scene's own setting.
+    // WE's per-wallpaper parallax switch: on enables the scene's parallax;
+    // off only stops it following the cursor. Layers keep their depth spread
+    // (capture 287 of 1537391845, switched off with the cursor far right:
+    // the torch sits 0.6 × its distance from the centre further out, the
+    // scene's amount, and has no cursor term).
     if let Some(on) = properties.0.get("cameraparallax").and_then(Value::as_bool)
         && let Some(general) = json.get_mut("general").and_then(Value::as_object_mut)
     {
-        general.insert("cameraparallax".into(), Value::Bool(on));
+        if on {
+            general.insert("cameraparallax".into(), Value::Bool(true));
+        } else {
+            general.insert("cameraparallaxmouseinfluence".into(), Value::from(0.0));
+        }
     }
     let mut importer = Importer::new(vfs, limits);
     importer.scene_header(&json);
