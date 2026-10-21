@@ -72,6 +72,8 @@ enum Command {
     Media(String, Value),
     /// Desktop pixel coordinates and move | down | up.
     Pointer(i32, i32, String),
+    /// Save a PNG of the (primary) page here: lumend's OS fallback wallpaper.
+    Snapshot(PathBuf),
 }
 
 fn parse(line: &str) -> Option<Command> {
@@ -102,6 +104,7 @@ fn parse(line: &str) -> Option<Command> {
             i32::try_from(value["y"].as_i64()?).ok()?,
             value["kind"].as_str()?.to_owned(),
         ),
+        "snapshot" => Command::Snapshot(PathBuf::from(value.as_str()?)),
         _ => return None,
     })
 }
@@ -339,7 +342,7 @@ fn run(args: Args) -> Result<()> {
     }
     let mut screens = build(&mut host, &platform, args.span)?;
     for c in early {
-        apply(&mut host, &screens, c);
+        apply(&mut host, &screens, &platform, c);
     }
     loop {
         for event in platform.poll_events(Duration::from_millis(500)) {
@@ -354,10 +357,30 @@ fn run(args: Args) -> Result<()> {
         }
         while let Ok(c) = rx.try_recv() {
             match c {
-                Some(c) => apply(&mut host, &screens, c),
+                Some(c) => apply(&mut host, &screens, &platform, c),
                 None => return Ok(()),
             }
         }
+    }
+}
+
+/// Writes the primary page's capture to `path` (via a temporary file, so a
+/// reader never sees half a PNG).
+fn save_snapshot(screens: &[Screen], platform: &Platform, path: &Path) {
+    let Some(screen) = screens
+        .iter()
+        .find(|s| s.output.primary)
+        .or_else(|| screens.first())
+    else {
+        return;
+    };
+    let tmp = path.with_extension("tmp");
+    let result = capture(&screen.webview, platform)
+        .and_then(|png| std::fs::write(&tmp, png).context("writing the snapshot"))
+        .and_then(|()| std::fs::rename(&tmp, path).context("moving the snapshot"));
+    match result {
+        Ok(()) => tracing::info!(path = %path.display(), "web wallpaper snapshot"),
+        Err(e) => tracing::warn!("web wallpaper snapshot: {e:#}"),
     }
 }
 
@@ -413,14 +436,14 @@ fn snapshot(
     let screen = host.page(window, &output)?;
     let screens = [screen];
     for c in early {
-        apply(host, &screens, c);
+        apply(host, &screens, platform, c);
     }
     // Piped commands still apply (scripted tests of the API).
     let until = std::time::Instant::now() + Duration::from_secs_f64(args.after.max(0.0));
     while std::time::Instant::now() < until {
         platform.poll_events(Duration::from_millis(16));
         while let Ok(Some(c)) = rx.try_recv() {
-            apply(host, &screens, c);
+            apply(host, &screens, platform, c);
         }
     }
     let [screen] = screens;
@@ -507,7 +530,7 @@ fn build(host: &mut Host, platform: &Platform, span: bool) -> Result<Vec<Screen>
     Ok(screens)
 }
 
-fn apply(host: &mut Host, screens: &[Screen], command: Command) {
+fn apply(host: &mut Host, screens: &[Screen], platform: &Platform, command: Command) {
     let js = match command {
         Command::Properties(choices) => {
             let project = properties::read_project(&host.root);
@@ -537,6 +560,10 @@ fn apply(host: &mut Host, screens: &[Screen], command: Command) {
         }
         Command::Audio(levels) => format!("__lumen.audio({})", Value::from(levels)),
         Command::Media(kind, event) => format!("__lumen.media({},{event})", Value::from(kind)),
+        Command::Snapshot(path) => {
+            save_snapshot(screens, platform, &path);
+            return;
+        }
         Command::Pointer(x, y, kind) => {
             // Only the output under the cursor hears it, in its own CSS pixels.
             for s in screens {

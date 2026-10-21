@@ -657,6 +657,26 @@ impl Daemon<'_> {
                 return Ok(());
             }
             web.tick(self.platform);
+            if self.fallback_pending
+                && let Some(dir) = self.config_dir.as_deref()
+            {
+                let path = dir.join("fallback.png");
+                match web.snapshot(&path) {
+                    web::Snapshot::Pending => {}
+                    web::Snapshot::Ready => {
+                        self.fallback_pending = false;
+                        let span = self
+                            .wallpaper
+                            .as_ref()
+                            .is_some_and(|w| w.look.layout == Layout::Span);
+                        set_fallback(&path, span);
+                    }
+                    web::Snapshot::Failed => {
+                        self.fallback_pending = false;
+                        tracing::warn!("no web wallpaper snapshot for the OS fallback");
+                    }
+                }
+            }
         }
 
         if let Some(Content::Scene(_)) = self.wallpaper.as_ref().map(|w| &w.content)
@@ -839,8 +859,7 @@ impl Daemon<'_> {
                     set_fallback(&wallpaper.path, wallpaper.look.layout == Layout::Span);
                 }
                 MediaKind::Video | MediaKind::Scene => self.fallback_pending = true,
-                // No snapshot of a page yet: the OS wallpaper stays as it was.
-                MediaKind::Web => {}
+                MediaKind::Web => self.fallback_pending = true,
             }
         }
         self.wallpaper = Some(wallpaper);

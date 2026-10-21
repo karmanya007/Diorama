@@ -16,6 +16,18 @@ use crate::session::SceneAudio;
 
 /// WE feeds web audio listeners about 30 times a second.
 const AUDIO_INTERVAL: Duration = Duration::from_millis(33);
+/// Let the page load and settle before photographing it for the OS fallback.
+const SNAPSHOT_AFTER: Duration = Duration::from_secs(5);
+/// Give up on a snapshot the host never wrote.
+const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Progress of [`WebHost::snapshot`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Snapshot {
+    Pending,
+    Ready,
+    Failed,
+}
 
 /// A web wallpaper folder and its page.
 #[derive(Debug, Clone)]
@@ -104,6 +116,8 @@ pub struct WebHost {
     span: bool,
     /// Last cursor sent (desktop pixels) and whether the button was down.
     pointer: Option<(i32, i32, bool)>,
+    /// When the last snapshot was asked for.
+    snapshot_asked: Option<std::time::SystemTime>,
 }
 
 impl WebHost {
@@ -136,6 +150,7 @@ impl WebHost {
             output_pauses: Vec::new(),
             span,
             pointer: None,
+            snapshot_asked: None,
         };
         // The first line is the user's choices (read before the page loads).
         host.send(&json!({ "properties": source.choices() }));
@@ -165,6 +180,28 @@ impl WebHost {
     /// Whether the host process is still running.
     pub fn alive(&mut self) -> bool {
         matches!(self.child.try_wait(), Ok(None))
+    }
+
+    /// A PNG of the page at `path`, asked for once the page had time to load:
+    /// call each tick until it is not [`Snapshot::Pending`].
+    pub fn snapshot(&mut self, path: &Path) -> Snapshot {
+        let Some(asked) = self.snapshot_asked else {
+            if self.started.elapsed() >= SNAPSHOT_AFTER {
+                self.snapshot_asked = Some(std::time::SystemTime::now());
+                self.send(&json!({ "snapshot": path }));
+            }
+            return Snapshot::Pending;
+        };
+        let written = std::fs::metadata(path)
+            .and_then(|m| m.modified())
+            .is_ok_and(|t| t >= asked);
+        if written {
+            Snapshot::Ready
+        } else if asked.elapsed().unwrap_or_default() > SNAPSHOT_TIMEOUT {
+            Snapshot::Failed
+        } else {
+            Snapshot::Pending
+        }
     }
 
     /// `(output id, paused)` for every output: pages on covered monitors
