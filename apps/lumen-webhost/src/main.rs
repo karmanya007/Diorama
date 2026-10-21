@@ -11,9 +11,13 @@
 
 #[cfg(any(windows, target_os = "macos"))]
 mod host;
+#[cfg(any(windows, target_os = "macos"))]
+mod performance;
 mod properties;
 #[cfg(any(windows, target_os = "macos"))]
 mod protocol;
+#[cfg(any(windows, target_os = "macos"))]
+mod watch;
 
 #[cfg(any(windows, target_os = "macos"))]
 fn main() {

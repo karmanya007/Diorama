@@ -16,8 +16,8 @@ mod windows;
 
 #[cfg(windows)]
 pub use windows::{
-    MediaWatcher, Platform, Waker, WallpaperWindow, autostart, cache_dir, config_dir, day_fraction,
-    detach_console, set_autostart, set_os_wallpaper,
+    MediaWatcher, Platform, SystemMonitor, Waker, WallpaperWindow, autostart, cache_dir,
+    config_dir, day_fraction, detach_console, set_autostart, set_os_wallpaper,
 };
 
 #[cfg(not(windows))]
@@ -25,8 +25,8 @@ mod unsupported;
 
 #[cfg(not(windows))]
 pub use unsupported::{
-    MediaWatcher, Platform, Waker, WallpaperWindow, autostart, cache_dir, config_dir, day_fraction,
-    detach_console, set_autostart, set_os_wallpaper,
+    MediaWatcher, Platform, SystemMonitor, Waker, WallpaperWindow, autostart, cache_dir,
+    config_dir, day_fraction, detach_console, set_autostart, set_os_wallpaper,
 };
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -77,6 +77,36 @@ pub enum MediaPlayback {
     Stopped,
     Playing,
     Paused,
+}
+
+/// One reading of the machine's load (for wallpapers that show it).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SystemMetrics {
+    /// Percent of all processors, and per processor.
+    pub cpu: f32,
+    pub cpu_per_core: Vec<f32>,
+    /// Physical memory in bytes.
+    pub memory_used: u64,
+    pub memory_total: u64,
+    /// Percent: the busiest engine of the main GPU (as Task Manager shows it).
+    pub gpu: Option<f32>,
+    /// The main GPU's dedicated memory in bytes.
+    pub vram_used: Option<u64>,
+    pub vram_total: Option<u64>,
+    /// Fixed drives.
+    pub disks: Vec<DiskUsage>,
+    /// Network bytes per second, all physical interfaces.
+    pub upload: f64,
+    pub download: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DiskUsage {
+    /// Upper case, e.g. `C`.
+    pub letter: char,
+    /// Bytes.
+    pub used: u64,
+    pub total: u64,
 }
 
 /// Mouse state on the desktop, polled (wallpapers get no mouse messages).

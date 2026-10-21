@@ -37,6 +37,20 @@
 		return false;
 	}
 
+	// Scripts and stylesheets that fail to load, and uncaught errors, go to
+	// the host's log: a page missing a library often just stops silently.
+	function report(msg) {
+		try { window.ipc.postMessage(JSON.stringify(msg)); } catch (e) { /* no host */ }
+	}
+	window.addEventListener('error', (e) => {
+		const t = e.target;
+		if (t && t !== window && (t.tagName === 'SCRIPT' || t.tagName === 'LINK')) {
+			report({ kind: 'load-failed', tag: t.tagName.toLowerCase(), url: String(t.src || t.href || '') });
+		} else if (e.message) {
+			report({ kind: 'error', message: String(e.message), source: String(e.filename || ''), line: e.lineno || 0 });
+		}
+	}, true);
+
 	// Properties go out after `load` (pages register their listener while
 	// parsing), then again whenever they change.
 	function deliver() {

@@ -49,6 +49,19 @@ service on `127.0.0.1`).
   was handed a browser started with network on (tested).
 - **`--snapshot`** renders a page off-screen and saves WebView2's own capture,
   so pages and the API are tested without touching the desktop.
+- **Companion-app requests answered in the WebView.** Widgets that poll the
+  third-party PerformanceMonitor app (`http://127.0.0.1:<port>/performance`)
+  get the same JSON from Windows' own counters (`lumen_platform::SystemMonitor`:
+  PDH CPU and GPU engines, memory status, fixed-drive free space, DXGI memory
+  sizes, IP helper octets). A WebView2 resource filter answers before the
+  network, so no port is opened and it works with the network off. Any page
+  can read these load figures; they reveal no files or identities. The
+  sampler runs only while a page asks (stops after 30 s idle).
+- **Problems reach the log.** The page script reports scripts and stylesheets
+  that fail to load (with the `lumen set … --allow-network` hint when the
+  network is off) and uncaught errors (debug level); a watchdog asks each
+  page to run a trivial script every 5 s and warns when it has not answered
+  for 10 s. Snapshots give up after 10 s instead of waiting on a stuck page.
 
 ## Consequences
 

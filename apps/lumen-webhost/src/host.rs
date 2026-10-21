@@ -1,5 +1,7 @@
 //! The web wallpaper host proper (needs a WebView: WebView2 on Windows).
 
+use crate::performance::Performance;
+use crate::watch::{Reports, Watchdog};
 use crate::{properties, protocol};
 
 use std::collections::HashMap;
@@ -125,6 +127,7 @@ struct Screen {
     webview: WebView,
     window: WallpaperWindow,
     output: OutputInfo,
+    watchdog: Watchdog,
 }
 
 struct Host {
@@ -139,6 +142,10 @@ struct Host {
     /// Pause per output id; outputs not listed use `paused_all`.
     paused: HashMap<String, bool>,
     paused_all: bool,
+    /// Failed loads and script errors the pages reported.
+    reports: Reports,
+    /// Answers for widgets polling the PerformanceMonitor app.
+    performance: Performance,
 }
 
 impl Host {
@@ -173,6 +180,7 @@ impl Host {
         let allowed = [origin.clone(), wry_origin(&origin)];
         let init = self.init_script(output);
         let (allow_network, devtools) = (self.allow_network, self.devtools);
+        let reports = self.reports.clone();
         let builder = WebViewBuilder::new_with_web_context(&mut self.context)
             .with_url(&self.url)
             .with_bounds(Rect {
@@ -188,16 +196,19 @@ impl Host {
                 allowed.iter().any(|o| url.starts_with(o.as_str())) || url == "about:blank"
             })
             .with_new_window_req_handler(|_, _| wry::NewWindowResponse::Deny)
+            .with_ipc_handler(move |message| reports.handle(message.body()))
             .with_autoplay(true)
             .with_devtools(devtools);
         let builder = platform_options(builder, allow_network, devtools);
         let webview = builder
             .build_as_child(&parent)
             .context("creating the WebView (is the WebView2 runtime installed?)")?;
+        answer_performance(&webview, &self.performance);
         Ok(Screen {
             webview,
             window,
             output: output.clone(),
+            watchdog: Watchdog::default(),
         })
     }
 }
@@ -334,6 +345,8 @@ fn run(args: Args) -> Result<()> {
         general: serde_json::json!({ "fps": 30 }),
         paused: HashMap::new(),
         paused_all: false,
+        reports: Reports::new(root.clone(), args.allow_network),
+        performance: Performance::default(),
     };
     tracing::info!(url = %host.url, network = host.allow_network, "web wallpaper");
 
@@ -352,8 +365,12 @@ fn run(args: Args) -> Result<()> {
                 screens = build(&mut host, &platform, args.span)?;
             }
         }
-        for s in &screens {
+        for s in &mut screens {
             s.window.keep_in_place();
+            let webview = &s.webview;
+            s.watchdog.tick(&host.reports, |answered| {
+                let _ = webview.evaluate_script_with_callback("0", move |_| answered());
+            });
         }
         while let Ok(c) = rx.try_recv() {
             match c {
@@ -434,23 +451,118 @@ fn snapshot(
         primary: false,
     };
     let screen = host.page(window, &output)?;
-    let screens = [screen];
+    let mut screens = [screen];
     for c in early {
         apply(host, &screens, platform, c);
     }
-    // Piped commands still apply (scripted tests of the API).
+    // Piped commands still apply (scripted tests of the API), and the
+    // watchdog runs as on the desktop.
     let until = std::time::Instant::now() + Duration::from_secs_f64(args.after.max(0.0));
     while std::time::Instant::now() < until {
         platform.poll_events(Duration::from_millis(16));
         while let Ok(Some(c)) = rx.try_recv() {
             apply(host, &screens, platform, c);
         }
+        let [s] = &mut screens;
+        let webview = &s.webview;
+        s.watchdog.tick(&host.reports, |answered| {
+            let _ = webview.evaluate_script_with_callback("0", move |_| answered());
+        });
     }
     let [screen] = screens;
     let png = capture(&screen.webview, platform)?;
     std::fs::write(out, png).with_context(|| format!("writing {}", out.display()))?;
     println!("wrote {} ({w}×{h})", out.display());
     Ok(())
+}
+
+/// Requests for the PerformanceMonitor app (`http://127.0.0.1:<port>/performance`
+/// or `/status`, also via `localhost`) are answered by [`Performance`] before
+/// they reach the network: no port is opened and it works with the network off.
+#[cfg(windows)]
+fn answer_performance(webview: &WebView, performance: &Performance) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL;
+    use webview2_com::{WebResourceRequestedEventHandler, take_pwstr};
+    use windows::Win32::UI::Shell::SHCreateMemStream;
+    use windows::core::{HSTRING, PWSTR};
+    use wry::WebViewExtWindows;
+
+    const CORS: &str = "Access-Control-Allow-Origin: *\r\n\
+                        Access-Control-Allow-Methods: GET, OPTIONS\r\n\
+                        Access-Control-Allow-Headers: Content-Type\r\n\
+                        Access-Control-Allow-Private-Network: true";
+    let env = webview.environment();
+    let performance = performance.clone();
+    let handler = WebResourceRequestedEventHandler::create(Box::new(move |_, args| {
+        let Some(args) = args else { return Ok(()) };
+        // SAFETY: COM calls on the WebView's thread with the event's own args.
+        unsafe {
+            let request = args.Request()?;
+            let (mut uri, mut method) = (PWSTR::null(), PWSTR::null());
+            request.Uri(&mut uri)?;
+            request.Method(&mut method)?;
+            let (uri, method) = (take_pwstr(uri), take_pwstr(method));
+            let Some((path, port)) = companion_request(&uri) else {
+                return Ok(());
+            };
+            let (status, reason, body, headers) = if method.eq_ignore_ascii_case("OPTIONS") {
+                (204, "No Content", Vec::new(), CORS.to_owned())
+            } else if let Some(body) = performance.respond(&path, port) {
+                let headers = format!(
+                    "Content-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\n{CORS}"
+                );
+                (200, "OK", body, headers)
+            } else {
+                return Ok(());
+            };
+            let stream = SHCreateMemStream(Some(&body));
+            let response = env.CreateWebResourceResponse(
+                stream.as_ref(),
+                status,
+                &HSTRING::from(reason),
+                &HSTRING::from(headers),
+            )?;
+            args.SetResponse(&response)?;
+        }
+        Ok(())
+    }));
+    let core = webview.webview();
+    let mut token = 0i64;
+    // SAFETY: registering filters and a handler on our own WebView.
+    unsafe {
+        for host in ["127.0.0.1", "localhost"] {
+            for path in ["performance", "status"] {
+                let filter = HSTRING::from(format!("http://{host}*/{path}*"));
+                if let Err(e) = core
+                    .AddWebResourceRequestedFilter(&filter, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL)
+                {
+                    tracing::debug!("performance filter {filter}: {e}");
+                }
+            }
+        }
+        if let Err(e) = core.add_WebResourceRequested(&handler, &mut token) {
+            tracing::warn!("cannot answer performance requests: {e}");
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn answer_performance(_webview: &WebView, _performance: &Performance) {}
+
+/// (`/performance` or `/status`, port) when `uri` asks the companion app on
+/// this machine (`http://127.0.0.1:<port>/…` or `localhost`).
+fn companion_request(uri: &str) -> Option<(String, u16)> {
+    let rest = uri.strip_prefix("http://")?;
+    let (authority, path) = rest.split_once('/')?;
+    let (host, port) = match authority.split_once(':') {
+        Some((h, p)) => (h, p.parse().ok()?),
+        None => (authority, 80),
+    };
+    if host != "127.0.0.1" && !host.eq_ignore_ascii_case("localhost") {
+        return None;
+    }
+    let path = format!("/{}", path.split(['?', '#']).next().unwrap_or_default());
+    matches!(path.as_str(), "/performance" | "/status").then_some((path, port))
 }
 
 /// PNG of what the WebView shows (WebView2 `CapturePreview`).
@@ -479,11 +591,19 @@ fn capture(webview: &WebView, platform: &Platform) -> Result<Vec<u8>> {
                 &handler,
             )
             .context("CapturePreview")?;
+        // A page stuck in a script never finishes a capture; give up rather
+        // than stop serving lumend.
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
         let done = loop {
             platform.poll_events(Duration::from_millis(16));
             match rx.try_recv() {
                 Ok(ok) => break ok,
-                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Empty) => {
+                    anyhow::ensure!(
+                        std::time::Instant::now() < deadline,
+                        "capture timed out (the page is not responding)"
+                    );
+                }
                 Err(mpsc::TryRecvError::Disconnected) => break false,
             }
         };
@@ -626,6 +746,26 @@ mod tests {
         ));
         assert!(parse("not json").is_none());
         assert!(parse(r#"{"unknown": 1}"#).is_none());
+    }
+
+    #[test]
+    fn companion_requests_are_recognised() {
+        let r = |u: &str| companion_request(u);
+        assert_eq!(
+            r("http://127.0.0.1:5000/performance"),
+            Some(("/performance".into(), 5000))
+        );
+        assert_eq!(
+            r("http://localhost:8080/status?x=1"),
+            Some(("/status".into(), 8080))
+        );
+        assert_eq!(
+            r("http://127.0.0.1/performance"),
+            Some(("/performance".into(), 80))
+        );
+        assert_eq!(r("http://127.0.0.1:5000/performancex"), None);
+        assert_eq!(r("http://example.com:5000/performance"), None);
+        assert_eq!(r("https://127.0.0.1:5000/performance"), None);
     }
 
     #[test]
