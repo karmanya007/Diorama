@@ -227,7 +227,6 @@ pub fn render_to_png(
             pointer,
             daytime: crate::scripts::day_fraction_at(clock_ms),
             audio: audio_at(time),
-            ..FrameInputs::default()
         },
     );
     if dump_targets {
