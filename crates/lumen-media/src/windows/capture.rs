@@ -44,7 +44,14 @@ impl AudioCapture {
                         a.push(data, channels);
                     }
                 },
-                move |e| {
+                move |e: cpal::Error| {
+                    // An xrun (WASAPI glitch, common right after the stream
+                    // starts) loses a few samples; reopening for it restarted
+                    // capture every 2 s.
+                    if e.kind() == cpal::ErrorKind::Xrun {
+                        tracing::debug!("audio capture xrun");
+                        return;
+                    }
                     tracing::warn!("audio capture error: {e}");
                     err.store(true, Ordering::SeqCst);
                 },

@@ -128,7 +128,12 @@ impl AudioPlayer {
             .build_output_stream::<f32, _, _>(
                 config,
                 move |out: &mut [f32], _| fill(&cb, out),
-                move |e| {
+                move |e: cpal::Error| {
+                    // An xrun is a momentary glitch, not a reason to rebuild.
+                    if e.kind() == cpal::ErrorKind::Xrun {
+                        tracing::debug!("audio output xrun");
+                        return;
+                    }
                     // Device unplugged / default changed / exclusive mode grabbed: rebuild later.
                     tracing::warn!("audio stream error: {e}");
                     err.stream_failed.store(true, Ordering::SeqCst);
