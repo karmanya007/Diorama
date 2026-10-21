@@ -1745,7 +1745,27 @@ impl SceneRenderer {
                 let bind: Vec<[f32; 2]> = p.vertices.iter().map(|v| v.position).collect();
                 puppet_vertices(&program.attributes, p, &bind, uv_max)
             }
-            (None, None) => pass_vertices(&program.attributes, plan.geometry, uv_max, plan.mesh),
+            (None, None) => {
+                // Lit layers show the middle of a padded texture (capture 276
+                // of 3323674297: a 3840×2176 texture holding a 3840×2160
+                // image, drawn 8 rows down), unlit ones its top-left image.
+                let lit = program
+                    .vs_uniforms
+                    .member("g_ViewProjectionMatrix")
+                    .is_some();
+                let uv_offset = if lit {
+                    [(1.0 - uv_max[0]) * 0.5, (1.0 - uv_max[1]) * 0.5]
+                } else {
+                    [0.0, 0.0]
+                };
+                pass_vertices(
+                    &program.attributes,
+                    plan.geometry,
+                    uv_max,
+                    uv_offset,
+                    plan.mesh,
+                )
+            }
         };
         let stride: usize = program
             .attributes
@@ -2496,14 +2516,16 @@ fn pass_vertices(
     attributes: &[ir::Attribute],
     geometry: Geometry,
     uv_max: [f32; 2],
+    uv_offset: [f32; 2],
     mesh: Option<&[ir::MeshQuad]>,
 ) -> Vec<f32> {
     let whole = match geometry {
         Geometry::LayerTarget { size: [w, h], .. } | Geometry::Direct { size: [w, h], .. } => {
             let [w, h] = [w as f32 * 0.5, h as f32 * 0.5];
+            let [pu, pv] = uv_offset;
             ir::MeshQuad {
                 rect: [-w, -h, w, h],
-                uv: [0.0, 0.0, uv_max[0], uv_max[1]],
+                uv: [pu, pv, pu + uv_max[0], pv + uv_max[1]],
             }
         }
         Geometry::Effect | Geometry::Fullscreen => ir::MeshQuad {
@@ -3120,7 +3142,7 @@ mod tests {
             size: [100, 50],
             model: IDENTITY_ROWS,
         };
-        let q = pass_vertices(&attrs, geometry, [0.5, 1.0], None);
+        let q = pass_vertices(&attrs, geometry, [0.5, 1.0], [0.0, 0.0], None);
         assert_eq!(q.len(), 6 * 5);
         // Bottom-left vertex samples the bottom of the image (v = 1).
         assert_eq!(&q[0..5], &[-50.0, -25.0, 0.0, 0.0, 1.0]);
@@ -3132,7 +3154,13 @@ mod tests {
             rect: [1.0, 2.0, 11.0, 22.0],
             uv: [0.25, 0.5, 0.75, 1.0],
         };
-        let m = pass_vertices(&attrs, geometry, [1.0, 1.0], Some(&[glyph, glyph]));
+        let m = pass_vertices(
+            &attrs,
+            geometry,
+            [1.0, 1.0],
+            [0.0, 0.0],
+            Some(&[glyph, glyph]),
+        );
         assert_eq!(m.len(), 2 * 6 * 5);
         assert_eq!(&m[0..5], &[1.0, 2.0, 0.0, 0.25, 1.0]);
         assert_eq!(&m[25..30], &[11.0, 22.0, 0.0, 0.75, 0.5]);
