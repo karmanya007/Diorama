@@ -340,6 +340,7 @@ impl Importer<'_> {
             .and_then(|z| z.first().copied())
             .filter(|z| *z > 0.01)
             .unwrap_or(1.0);
+        self.scene.zoom = Some(self.zoom).filter(|z| (*z - 1.0).abs() > 1e-6);
         // Without an orthographic projection the scene is 3D: a perspective
         // camera (WE's `camera` block, or a camera object; see camera_object).
         if ortho.is_null() {
@@ -1090,10 +1091,8 @@ impl Importer<'_> {
             // `origin` is the anchor named by `alignment`; children hang off
             // the anchor too, so only the layer's own quad moves.
             let anchor = alignment_offset(object["alignment"].as_str(), size);
-            // `general.zoom` scales every layer about its own origin (capture
-            // of 3195058405: zoom 1.05 → layers drawn at 1.0496×, origins kept).
-            let zoom = [self.zoom, self.zoom];
-            let local = lumen_scene::affine(anchor, 0.0, zoom);
+            // (`general.zoom` is the camera's: `Scene::zoom`.)
+            let local = lumen_scene::affine(anchor, 0.0, [1.0, 1.0]);
             (
                 lumen_scene::compose(world, local),
                 visible,

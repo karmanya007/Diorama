@@ -31,15 +31,16 @@ pub enum FitMode {
 }
 
 /// Canvas pixels per image pixel for WE custom alignment, fitted to
-/// RenderDoc captures (1:1 at z = 100): `(z/100)^3.9` below 100 (exact at
-/// 97 and 99), and `exp(0.042177·d + 3.875e-5·d²)`, d = z − 100, above
-/// (exact at 112 → 1.668 and 200 → 100; empirical in between).
+/// RenderDoc captures (1:1 at z = 100), d = z − 100: `exp(0.0398·d +
+/// 1.66e-4·d²)` below 100 (97 → 0.889, 99 → 0.961, 90 → 0.683: capture of
+/// 3347344353, 0.717 with its general.zoom 1.05), and
+/// `exp(0.042177·d + 3.875e-5·d²)` above (exact at 112 → 1.668 and
+/// 200 → 100; 107 → 1.346 against 1.337 captured).
 pub fn custom_scale(zoom: i32) -> f32 {
-    let z = zoom.max(1) as f32;
-    if z <= 100.0 {
-        (z / 100.0).powf(3.9)
+    let d = zoom.max(1) as f32 - 100.0;
+    if d <= 0.0 {
+        (0.0398 * d + 1.66e-4 * d * d).exp()
     } else {
-        let d = z - 100.0;
         (0.042_177 * d + 3.875e-5 * d * d).exp()
     }
 }
@@ -636,6 +637,8 @@ mod tests {
         assert_eq!(custom_scale(100), 1.0);
         // 3155776049 (z 112) and the z = 200 control capture.
         assert!((custom_scale(112) - 1.668).abs() < 0.005);
+        // 3347344353: z 90 drawn at 0.717 with general.zoom 1.05.
+        assert!((custom_scale(90) * 1.05 - 0.717).abs() < 0.002);
         assert!((custom_scale(200) - 100.0).abs() < 0.5);
     }
 

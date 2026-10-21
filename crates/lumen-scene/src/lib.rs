@@ -35,6 +35,11 @@ pub struct Scene {
     /// Perspective scenes: the camera (layers are then placed by
     /// [`ImageLayer::world`] in 3D world units).
     pub camera: Option<Camera>,
+    /// `general.zoom` of an orthographic scene: the camera zooms about the
+    /// scene centre (`None` = 1). Capture 914 of 3195058405 (zoom 1.05):
+    /// layer sizes and their distances from the centre both scale by 1.05,
+    /// which with the parallax spread fits every layer to a pixel.
+    pub zoom: Option<f32>,
     pub clear_color: [f32; 4],
     /// The project's scheme colour: WE fills monitor areas the scene does not
     /// cover with it (fit/custom alignment); also the theme colour.

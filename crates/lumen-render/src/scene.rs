@@ -336,8 +336,8 @@ fn ortho_rows(w: f32, h: f32) -> Rows {
     ]
 }
 
-/// The scene camera: ortho over the whole scene. (`general.zoom` is not a
-/// plain ortho zoom: applying it either way lowers SSIM on capture 914.)
+/// The scene camera: ortho over the whole scene, zoomed about its centre by
+/// `general.zoom` ([`ir::Scene::zoom`]).
 fn camera_rows(scene: &ir::Scene, output: [u32; 2]) -> Rows {
     match scene.camera {
         // WE renders perspective scenes at the swapchain's aspect.
@@ -346,7 +346,15 @@ fn camera_rows(scene: &ir::Scene, output: [u32; 2]) -> Rows {
             let aspect = output[0] as f32 / output[1].max(1) as f32;
             mat_mul(view, camera.projection(aspect))
         }
-        None => ortho_rows(scene.width as f32, scene.height as f32),
+        None => {
+            let z = scene.zoom.unwrap_or(1.0);
+            let mut rows = ortho_rows(scene.width as f32, scene.height as f32);
+            rows[0][0] *= z;
+            rows[1][1] *= z;
+            rows[3][0] *= z;
+            rows[3][1] *= z;
+            rows
+        }
     }
 }
 
@@ -2626,6 +2634,7 @@ fn stripped(scene: &ir::Scene) -> ir::Scene {
         point_lights: scene.point_lights.clone(),
         tube_lights: scene.tube_lights.clone(),
         camera: scene.camera,
+        zoom: scene.zoom,
         nodes: scene.nodes.clone(),
         layers: scene.layers.clone(),
         textures: Vec::new(),
