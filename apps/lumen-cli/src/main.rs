@@ -28,6 +28,12 @@ enum Command {
         /// Override detection by file extension.
         #[arg(long, value_enum)]
         kind: Option<KindArg>,
+        /// Web wallpapers: let this one use the network (remembered).
+        #[arg(long, conflicts_with = "deny_network")]
+        allow_network: bool,
+        /// Web wallpapers: take network access away again (remembered).
+        #[arg(long)]
+        deny_network: bool,
     },
     /// Video soundtrack volume, 0–100 (0 mutes and closes the audio device).
     Volume {
@@ -118,7 +124,14 @@ fn run(cli: Cli) -> Result<()> {
             fit,
             layout,
             kind,
+            allow_network,
+            deny_network,
         } => Request::Set {
+            network: match (allow_network, deny_network) {
+                (true, _) => Some(true),
+                (_, true) => Some(false),
+                _ => None,
+            },
             // The daemon resolves paths itself; make them absolute so its working directory doesn't matter.
             path: std::path::absolute(&path)?,
             kind: kind.map(|k| match k {

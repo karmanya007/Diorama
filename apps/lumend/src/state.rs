@@ -18,6 +18,9 @@ pub struct State {
     /// Video soundtrack volume 0–100.
     #[serde(default)]
     pub volume: u8,
+    /// Web wallpaper folders the user let use the network.
+    #[serde(default)]
+    pub web_network: Vec<PathBuf>,
 }
 
 impl Default for State {
@@ -26,6 +29,7 @@ impl Default for State {
             version: VERSION,
             wallpaper: None,
             volume: 0,
+            web_network: Vec::new(),
         }
     }
 }
@@ -82,6 +86,7 @@ mod tests {
                 layout: Layout::Span,
             }),
             volume: 40,
+            web_network: vec![PathBuf::from("C:/web/clock")],
         };
         save(&dir, &state).unwrap();
         assert_eq!(load(&dir), state);

@@ -2,6 +2,7 @@
 
 use crate::{properties, protocol};
 
+use std::collections::HashMap;
 use std::io::{BufRead, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -36,6 +37,9 @@ struct Args {
     /// Allow the developer tools (F12 / context menu).
     #[arg(long)]
     devtools: bool,
+    /// One page across all monitors (their bounding box) instead of one per monitor.
+    #[arg(long)]
+    span: bool,
     /// Instead of showing the wallpaper, render it off-screen and save a
     /// PNG of the page after `--after` seconds (tests; nothing on the desktop).
     #[arg(long)]
@@ -48,13 +52,20 @@ struct Args {
     after: f64,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+enum Pause {
+    All(bool),
+    Outputs(HashMap<String, bool>),
+}
+
 /// One message from lumend.
 enum Command {
     /// `{name: value}` user choices over the project's defaults.
     Properties(Map<String, Value>),
     /// `{fps}`.
     General(Value),
-    Paused(bool),
+    /// Every page (`true`/`false`) or per output id (`{id: bool}`).
+    Paused(Pause),
     /// 128 levels: 64 left, 64 right.
     Audio(Vec<f32>),
     /// (kind, event): status | properties | thumbnail | playback | timeline.
@@ -69,7 +80,15 @@ fn parse(line: &str) -> Option<Command> {
     Some(match key.as_str() {
         "properties" => Command::Properties(value.as_object()?.clone()),
         "general" => Command::General(value.clone()),
-        "paused" => Command::Paused(value.as_bool()?),
+        "paused" => Command::Paused(match value {
+            Value::Bool(b) => Pause::All(*b),
+            Value::Object(m) => Pause::Outputs(
+                m.iter()
+                    .filter_map(|(k, v)| Some((k.clone(), v.as_bool()?)))
+                    .collect(),
+            ),
+            _ => return None,
+        }),
         "audio" => Command::Audio(
             value
                 .as_array()?
@@ -114,14 +133,25 @@ struct Host {
     /// The init script: the shim plus the current properties.
     properties: Value,
     general: Value,
-    paused: bool,
+    /// Pause per output id; outputs not listed use `paused_all`.
+    paused: HashMap<String, bool>,
+    paused_all: bool,
 }
 
 impl Host {
-    fn init_script(&self) -> String {
+    fn is_paused(&self, output: &OutputInfo) -> bool {
+        self.paused
+            .get(&output.id.0)
+            .copied()
+            .unwrap_or(self.paused_all)
+    }
+
+    fn init_script(&self, output: &OutputInfo) -> String {
         format!(
             "{SHIM}\n__lumen.properties({});\n__lumen.general({});\n__lumen.paused({});",
-            self.properties, self.general, self.paused
+            self.properties,
+            self.general,
+            self.is_paused(output)
         )
     }
 
@@ -138,7 +168,7 @@ impl Host {
         let root = self.root.clone();
         let origin = self.url.split('/').take(3).collect::<Vec<_>>().join("/");
         let allowed = [origin.clone(), wry_origin(&origin)];
-        let init = self.init_script();
+        let init = self.init_script(output);
         let (allow_network, devtools) = (self.allow_network, self.devtools);
         let builder = WebViewBuilder::new_with_web_context(&mut self.context)
             .with_url(&self.url)
@@ -299,14 +329,15 @@ fn run(args: Args) -> Result<()> {
         context: WebContext::new(Some(data_dir)),
         properties: properties::user_properties(&project, &choices),
         general: serde_json::json!({ "fps": 30 }),
-        paused: false,
+        paused: HashMap::new(),
+        paused_all: false,
     };
     tracing::info!(url = %host.url, network = host.allow_network, "web wallpaper");
 
     if let Some(out) = &args.snapshot {
         return snapshot(&mut host, &platform, &args, out, early, &rx);
     }
-    let mut screens = build(&mut host, &platform)?;
+    let mut screens = build(&mut host, &platform, args.span)?;
     for c in early {
         apply(&mut host, &screens, c);
     }
@@ -315,7 +346,7 @@ fn run(args: Args) -> Result<()> {
             if event.needs_rebuild() {
                 tracing::info!(?event, "rebuilding web wallpaper windows");
                 screens.clear();
-                screens = build(&mut host, &platform)?;
+                screens = build(&mut host, &platform, args.span)?;
             }
         }
         for s in &screens {
@@ -328,6 +359,27 @@ fn run(args: Args) -> Result<()> {
             }
         }
     }
+}
+
+/// The bounding box of `outputs` as one output (span layout).
+fn span_output(outputs: &[OutputInfo]) -> Option<OutputInfo> {
+    let x0 = outputs.iter().map(|o| o.x).min()?;
+    let y0 = outputs.iter().map(|o| o.y).min()?;
+    let x1 = outputs.iter().map(|o| o.x + o.width as i32).max()?;
+    let y1 = outputs.iter().map(|o| o.y + o.height as i32).max()?;
+    Some(OutputInfo {
+        id: lumen_platform::OutputId("span".into()),
+        name: String::new(),
+        manufacturer: String::new(),
+        product_code: 0,
+        device: "span".into(),
+        x: x0,
+        y: y0,
+        width: u32::try_from(x1 - x0).ok()?,
+        height: u32::try_from(y1 - y0).ok()?,
+        refresh_mhz: 0,
+        primary: true,
+    })
 }
 
 /// `--snapshot`: the page in an off-screen window, saved as PNG.
@@ -436,9 +488,13 @@ fn capture(_webview: &WebView, _platform: &Platform) -> Result<Vec<u8>> {
     anyhow::bail!("snapshots need WebView2 (Windows)")
 }
 
-fn build(host: &mut Host, platform: &Platform) -> Result<Vec<Screen>> {
+fn build(host: &mut Host, platform: &Platform, span: bool) -> Result<Vec<Screen>> {
+    let mut outputs = platform.outputs()?;
+    if span {
+        outputs = span_output(&outputs).into_iter().collect();
+    }
     let mut screens = Vec::new();
-    for output in platform.outputs()? {
+    for output in outputs {
         match host.screen(platform, &output) {
             Ok(s) => screens.push(s),
             Err(e) => tracing::warn!(output = %output.device, "web wallpaper: {e:#}"),
@@ -463,8 +519,21 @@ fn apply(host: &mut Host, screens: &[Screen], command: Command) {
             format!("__lumen.general({})", host.general)
         }
         Command::Paused(p) => {
-            host.paused = p;
-            format!("__lumen.paused({p})")
+            match p {
+                Pause::All(all) => {
+                    host.paused.clear();
+                    host.paused_all = all;
+                }
+                Pause::Outputs(map) => host.paused.extend(map),
+            }
+            for s in screens {
+                let js = format!(
+                    "window.__lumen&&__lumen.paused({})",
+                    host.is_paused(&s.output)
+                );
+                let _ = s.webview.evaluate_script(&js);
+            }
+            return;
         }
         Command::Audio(levels) => format!("__lumen.audio({})", Value::from(levels)),
         Command::Media(kind, event) => format!("__lumen.media({},{event})", Value::from(kind)),
@@ -514,7 +583,11 @@ mod tests {
     fn commands_parse() {
         assert!(matches!(
             parse(r#"{"paused": true}"#),
-            Some(Command::Paused(true))
+            Some(Command::Paused(Pause::All(true)))
+        ));
+        assert!(matches!(
+            parse(r#"{"paused": {"a": true, "b": false}}"#),
+            Some(Command::Paused(Pause::Outputs(m))) if m["a"] && !m["b"]
         ));
         assert!(matches!(
             parse(r#"{"audio": [0.5, 1]}"#),
@@ -526,6 +599,27 @@ mod tests {
         ));
         assert!(parse("not json").is_none());
         assert!(parse(r#"{"unknown": 1}"#).is_none());
+    }
+
+    #[test]
+    fn span_covers_every_output() {
+        let out = |x, y, w, h| OutputInfo {
+            id: lumen_platform::OutputId(String::new()),
+            name: String::new(),
+            manufacturer: String::new(),
+            product_code: 0,
+            device: String::new(),
+            x,
+            y,
+            width: w,
+            height: h,
+            refresh_mhz: 0,
+            primary: false,
+        };
+        // This machine: 1920×1080 at 0,0 and a portrait 1080×1920 at −1080,−546.
+        let s = span_output(&[out(0, 0, 1920, 1080), out(-1080, -546, 1080, 1920)]).unwrap();
+        assert_eq!((s.x, s.y, s.width, s.height), (-1080, -546, 3000, 1920));
+        assert!(span_output(&[]).is_none());
     }
 
     #[test]

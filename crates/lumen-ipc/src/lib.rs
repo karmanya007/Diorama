@@ -123,6 +123,10 @@ pub enum Request {
         fit: Option<Fit>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         layout: Option<Layout>,
+        /// Web wallpapers: allow (`true`) or deny (`false`) network access for
+        /// this wallpaper from now on; absent keeps the remembered choice.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        network: Option<bool>,
     },
     /// Video soundtrack volume, 0–100 (0 = muted, no audio device opened).
     Volume {
@@ -306,6 +310,7 @@ mod tests {
             kind: Some(MediaKind::Video),
             fit: None,
             layout: Some(Layout::Span),
+            network: None,
         };
         let line = String::from_utf8(encode(&req).unwrap()).unwrap();
         assert!(line.ends_with('\n'));

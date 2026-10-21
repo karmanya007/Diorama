@@ -255,7 +255,8 @@ impl Session {
         let canvas = Rect::bounding(infos.iter().map(rect_of)).context("no outputs found")?;
         if let Content::Web(source) = &wallpaper.content {
             // The host makes its own windows; outputs here only track pauses.
-            let host = crate::web::WebHost::spawn(source, web_network)?;
+            let host =
+                crate::web::WebHost::spawn(source, web_network, look.layout == Layout::Span)?;
             let outputs = infos
                 .into_iter()
                 .map(|info| Output {

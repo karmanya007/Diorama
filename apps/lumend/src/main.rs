@@ -18,7 +18,7 @@ mod state;
 mod videos;
 mod web;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
@@ -150,6 +150,17 @@ fn parse_size(s: &str) -> std::result::Result<[u32; 2], String> {
     let (w, h) = s.split_once(['x', 'X']).ok_or("expected WxH")?;
     let parse = |v: &str| v.trim().parse::<u32>().map_err(|e| e.to_string());
     Ok([parse(w)?.max(1), parse(h)?.max(1)])
+}
+
+/// Same file or folder, ignoring case and separators (Windows paths).
+fn same_path(a: &Path, b: &Path) -> bool {
+    let norm = |p: &Path| {
+        p.to_string_lossy()
+            .replace('\\', "/")
+            .trim_end_matches('/')
+            .to_lowercase()
+    };
+    norm(a) == norm(b)
 }
 
 /// The fit Wallpaper Engine uses for `wallpaper` on the first monitor.
@@ -329,6 +340,7 @@ fn main() -> Result<()> {
         audio_loop: None,
         next_audio_check: Instant::now() + AUDIO_CHECK_INTERVAL,
         web_network: args.web_network,
+        web_allowed: Vec::new(),
         clock: VideoClock::default(),
         fps: args.fps,
         scene_clock: SceneClock::new(args.fps),
@@ -364,6 +376,7 @@ fn main() -> Result<()> {
     // Start-up content: command line, else the wallpaper from last time.
     let saved_state = config_dir.as_deref().map(state::load).unwrap_or_default();
     daemon.volume = args.volume.unwrap_or(saved_state.volume).min(100);
+    daemon.web_allowed = saved_state.web_network.clone();
     let saved = saved_state.wallpaper;
     let initial = match (
         args.image
@@ -507,8 +520,11 @@ struct Daemon<'p> {
     /// Video loop index the audio was last synced to; `None` = not started yet.
     audio_loop: Option<u32>,
     next_audio_check: Instant,
-    /// Web wallpapers may use the network (`--web-network`).
+    /// Every web wallpaper may use the network (`--web-network`).
     web_network: bool,
+    /// Web wallpaper folders allowed to use the network (`lumen set
+    /// --allow-network`), remembered in the state file.
+    web_allowed: Vec<PathBuf>,
 }
 
 impl Daemon<'_> {
@@ -615,9 +631,13 @@ impl Daemon<'_> {
                     return Ok(());
                 }
             }
-            let all_paused = session.outputs.iter().all(|o| o.paused);
+            let pauses: Vec<(String, bool)> = session
+                .outputs
+                .iter()
+                .map(|o| (o.info.id.0.clone(), o.paused))
+                .collect();
             if let Some(web) = session.web() {
-                web.set_paused(all_paused);
+                web.set_paused(pauses);
             }
             if let Some(Content::Scene(_)) = self.wallpaper.as_ref().map(|w| &w.content) {
                 // Resuming makes the next frame due immediately.
@@ -723,6 +743,18 @@ impl Daemon<'_> {
         }
     }
 
+    fn network_allowed(&self, path: &Path) -> bool {
+        self.web_allowed.iter().any(|p| same_path(p, path))
+    }
+
+    fn set_network_allowed(&mut self, path: &Path, allow: bool) {
+        self.web_allowed.retain(|p| !same_path(p, path));
+        if allow {
+            self.web_allowed.push(path.to_path_buf());
+        }
+        tracing::info!(path = %path.display(), allow, "web wallpaper network access");
+    }
+
     /// Remembers the wallpaper for the next start.
     fn persist(&self, w: &Wallpaper) {
         let Some(dir) = self.config_dir.as_deref() else {
@@ -736,6 +768,7 @@ impl Daemon<'_> {
                 layout: w.look.layout,
             }),
             volume: self.volume,
+            web_network: self.web_allowed.clone(),
             ..state::State::default()
         };
         if let Err(e) = state::save(dir, &state) {
@@ -771,7 +804,8 @@ impl Daemon<'_> {
         let (Some(wallpaper), Some(gpu)) = (self.wallpaper.as_ref(), self.gpu.as_ref()) else {
             return;
         };
-        match Session::build(self.platform, gpu, wallpaper, self.web_network) {
+        let network = self.web_network || self.network_allowed(&wallpaper.path);
+        match Session::build(self.platform, gpu, wallpaper, network) {
             Ok(mut session) => {
                 if let Some(frame) = self.clock.current.as_ref()
                     && let Err(e) = session.show_video_frame(gpu, frame)
@@ -845,6 +879,7 @@ impl Daemon<'_> {
                 kind,
                 fit,
                 layout,
+                network,
             } => {
                 let current = self.wallpaper.as_ref().map(|w| w.look);
                 let look = Look {
@@ -864,7 +899,12 @@ impl Daemon<'_> {
                         self.we_assets.as_deref(),
                         self.we_config.as_deref(),
                     )
-                    .and_then(|w| self.set_wallpaper(w)),
+                    .and_then(|w| {
+                        if let Some(allow) = network {
+                            self.set_network_allowed(&w.path, allow);
+                        }
+                        self.set_wallpaper(w)
+                    }),
                 )
             }
             Request::Volume { percent } => {

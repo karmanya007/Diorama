@@ -96,13 +96,18 @@ pub struct WebHost {
     audio: Option<SceneAudio>,
     started: Instant,
     next_audio: Instant,
+    /// Every output paused: no audio, media or cursor updates.
     paused: bool,
+    /// Pause per output id, as last sent.
+    output_pauses: Vec<(String, bool)>,
+    /// One page across all outputs: it pauses only when all of them do.
+    span: bool,
     /// Last cursor sent (desktop pixels) and whether the button was down.
     pointer: Option<(i32, i32, bool)>,
 }
 
 impl WebHost {
-    pub fn spawn(source: &WebSource, allow_network: bool) -> Result<Self> {
+    pub fn spawn(source: &WebSource, allow_network: bool, span: bool) -> Result<Self> {
         let exe = webhost_exe();
         let mut cmd = Command::new(&exe);
         cmd.arg(&source.dir)
@@ -112,6 +117,9 @@ impl WebHost {
             .stdout(Stdio::null());
         if allow_network {
             cmd.arg("--allow-network");
+        }
+        if span {
+            cmd.arg("--span");
         }
         let mut child = cmd
             .spawn()
@@ -125,6 +133,8 @@ impl WebHost {
             started: Instant::now(),
             next_audio: Instant::now(),
             paused: false,
+            output_pauses: Vec::new(),
+            span,
             pointer: None,
         };
         // The first line is the user's choices (read before the page loads).
@@ -157,11 +167,24 @@ impl WebHost {
         matches!(self.child.try_wait(), Ok(None))
     }
 
-    pub fn set_paused(&mut self, paused: bool) {
-        if paused != self.paused {
-            self.paused = paused;
-            self.send(&json!({ "paused": paused }));
+    /// `(output id, paused)` for every output: pages on covered monitors
+    /// stop while the others keep playing.
+    pub fn set_paused(&mut self, outputs: Vec<(String, bool)>) {
+        if outputs == self.output_pauses {
+            return;
         }
+        self.paused = !outputs.is_empty() && outputs.iter().all(|(_, p)| *p);
+        if self.span {
+            let all = self.paused;
+            self.send(&json!({ "paused": all }));
+        } else {
+            let map: Map<String, Value> = outputs
+                .iter()
+                .map(|(id, p)| (id.clone(), Value::Bool(*p)))
+                .collect();
+            self.send(&json!({ "paused": map }));
+        }
+        self.output_pauses = outputs;
     }
 
     /// How long until [`WebHost::tick`] has work again.
