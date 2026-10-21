@@ -28,6 +28,34 @@ fn print_spectrum() {
     assert!(!capture.needs_reopen(), "capture asked to reopen");
 }
 
+/// Prints the loudest and mean web level (what web pages receive) every
+/// 500 ms for `LUMEN_PROBE_SECS` (default 5) seconds:
+/// `cargo test -p lumen-media --test capture_probe log_web_levels -- --ignored --nocapture`
+#[test]
+#[ignore = "depends on what is playing on this machine"]
+fn log_web_levels() {
+    let secs: u64 = std::env::var("LUMEN_PROBE_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(5);
+    let Ok(capture) = lumen_media::AudioCapture::start() else {
+        println!("no capture");
+        return;
+    };
+    let start = std::time::Instant::now();
+    while start.elapsed().as_secs() < secs {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let s = capture.web_spectrum();
+        let all = s.left.iter().chain(&s.right);
+        let max = all.clone().copied().fold(0.0, f32::max);
+        let mean = all.sum::<f32>() / 128.0;
+        println!(
+            "{:.1}s max {max:.4} mean {mean:.4}",
+            start.elapsed().as_secs_f32()
+        );
+    }
+}
+
 /// Logs 16-band levels (left, right; `t,l0..l15,r0..r15`) every 100 ms for
 /// `LUMEN_PROBE_SECS` (default 10) seconds, to compare with WE's
 /// `g_AudioSpectrum16*` in a capture taken over the same music:
