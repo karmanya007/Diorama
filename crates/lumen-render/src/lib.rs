@@ -30,19 +30,48 @@ pub enum FitMode {
     Native { x: i32, y: i32 },
 }
 
-/// Canvas pixels per image pixel for WE custom alignment, fitted to
-/// RenderDoc captures (1:1 at z = 100), d = z − 100: `exp(0.0398·d +
-/// 1.66e-4·d²)` below 100 (97 → 0.889, 99 → 0.961, 90 → 0.683: capture of
-/// 3347344353, 0.717 with its general.zoom 1.05), and
-/// `exp(0.042177·d + 3.875e-5·d²)` above (exact at 112 → 1.668 and
-/// 200 → 100; 107 → 1.346 against 1.337 captured).
+/// Custom zooms WE was captured at, with the canvas pixels per image pixel
+/// it drew (layer MVPs): 90 (3347344353: 0.717 with its general.zoom 1.05), 97
+/// (2347484937), 99 (2468489223, 2980001176), 107 (3000562427), 112
+/// (3155776049), 120 (833227004: 2.688 for a layer of scale 1.1).
+const CUSTOM_ZOOMS: [(f32, f32); 7] = [
+    (90.0, 0.682_97),
+    (97.0, 0.888_96),
+    (99.0, 0.960_96),
+    (100.0, 1.0),
+    (107.0, 1.337_04),
+    (112.0, 1.667_52),
+    (120.0, 2.441_29),
+];
+
+/// Canvas pixels per image pixel for WE custom alignment. Between captured
+/// zooms ([`CUSTOM_ZOOMS`]) the log of the scale is interpolated linearly
+/// (scenes are sensitive: 0.25 % off at z 112 cost 0.016 SSIM); outside
+/// them `exp(0.0402·d + 2.21e-4·d²)`, d = z − 100 (least squares over the
+/// captures, all within 0.3 %), scaled to meet the nearest captured zoom,
+/// at most 100 (the z = 200 control capture drew exactly 100×).
 pub fn custom_scale(zoom: i32) -> f32 {
-    let d = zoom.max(1) as f32 - 100.0;
-    if d <= 0.0 {
-        (0.0398 * d + 1.66e-4 * d * d).exp()
+    let z = zoom.max(1) as f32;
+    let curve = |z: f32| {
+        let d = z - 100.0;
+        0.040_185 * d + 2.212e-4 * d * d
+    };
+    let ln = |(_, s): (f32, f32)| s.ln();
+    let (first, last) = (CUSTOM_ZOOMS[0], CUSTOM_ZOOMS[CUSTOM_ZOOMS.len() - 1]);
+    let log = if z <= first.0 {
+        ln(first) + curve(z) - curve(first.0)
+    } else if z >= last.0 {
+        ln(last) + curve(z) - curve(last.0)
     } else {
-        (0.042_177 * d + 3.875e-5 * d * d).exp()
-    }
+        CUSTOM_ZOOMS
+            .windows(2)
+            .find(|w| z <= w[1].0)
+            .map_or(0.0, |w| {
+                let t = (z - w[0].0) / (w[1].0 - w[0].0);
+                ln(w[0]) + (ln(w[1]) - ln(w[0])) * t
+            })
+    };
+    log.exp().min(100.0)
 }
 
 /// Offset of the image centre from the canvas centre in canvas pixels
@@ -639,6 +668,8 @@ mod tests {
         assert!((custom_scale(112) - 1.668).abs() < 0.005);
         // 3347344353: z 90 drawn at 0.717 with general.zoom 1.05.
         assert!((custom_scale(90) * 1.05 - 0.717).abs() < 0.002);
+        // 833227004: z 120, a layer of scale 1.1 drawn at 2.688.
+        assert!((custom_scale(120) * 1.1 - 2.688).abs() < 0.01);
         assert!((custom_scale(200) - 100.0).abs() < 0.5);
     }
 
@@ -685,14 +716,14 @@ mod tests {
             render_size(mode, (3840, 2160), &[(3000, 1920)], 8192),
             (3840, 2160)
         );
-        // 3000562427: a 480×270 pixel-art scene zoomed 4× renders at 1920×1080
+        // A 480×270 pixel-art scene zoomed ~4× renders at that scale
         // (nearest-filtered textures stay sharp), capped by the device.
         let mode = FitMode::Custom {
             x: 50,
             y: 50,
-            zoom: 131,
+            zoom: 130,
         };
-        let s = custom_scale(131);
+        let s = custom_scale(130);
         assert!((s - 4.0).abs() < 0.2, "{s}");
         assert_eq!(
             render_size(mode, (480, 270), &[(1920, 1080)], 8192),
