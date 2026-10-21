@@ -76,15 +76,20 @@ def cursor():
 
 
 def capture(target, scene, manifest):
+    # Unix ms around the captured frame (lines frames up with other recordings,
+    # e.g. loopback audio for the audio-spectrum calibration).
+    trigger_ms = int(time.time() * 1000)
     target.TriggerCapture(1)
     cap = pump(target, CAPTURE_TIMEOUT_S, want_capture=True)
+    done_ms = int(time.time() * 1000)
     pos = cursor()
     if cap is None:
         log("  no capture received")
         manifest.append({"scene": scene, "capture": None, "cursor": pos})
         return
     log("  captured %s frame=%d cursor=%s" % (cap.path, cap.frameNumber, pos))
-    manifest.append({"scene": scene, "capture": cap.path, "frame": cap.frameNumber, "cursor": pos})
+    manifest.append({"scene": scene, "capture": cap.path, "frame": cap.frameNumber, "cursor": pos,
+                     "trigger_ms": trigger_ms, "done_ms": done_ms})
 
 
 def main():

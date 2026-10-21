@@ -1,19 +1,32 @@
 //! Audio spectrum for audio-reactive wallpapers: what WE exposes as
 //! `g_AudioSpectrum{16,32,64}{Left,Right}` and script audio buffers.
 //!
-//! WE's exact band mapping and smoothing are not known; this follows the
-//! common shape: a windowed FFT of the last samples per channel, 64 bands
-//! spaced logarithmically from 30 Hz to 16 kHz, magnitudes mapped from
-//! −60..0 dB to 0..1, instant rise and an exponential fall.
+//! A Hann-windowed FFT of the last samples per channel, 64 bands spaced
+//! logarithmically from 50 Hz to 12 kHz (mean magnitude per band), tilted
+//! +3 dB per octave around 1 kHz, then an automatic gain per channel: bands
+//! read relative to the channel's recent peak over a 60 dB range, the peak
+//! falling 2 dB/s. Fitted on 30 WE captures of 2176097362 with the loopback
+//! audio recorded alongside: WE's levels do not depend on playback volume
+//! (quiet music at −40 dBFS still reads 0.3–0.6 per band, the top bands
+//! nearly as busy as the bass), which a fixed dB scale cannot reproduce.
+//! WE's exact algorithm is not recovered (mean error 0.21, correlation
+//! ≈ 0.45 per band against its values; a per-band gain fitted worse).
 
 use std::collections::VecDeque;
 use std::f32::consts::PI;
 
 pub const BANDS: usize = 64;
 const FFT_SIZE: usize = 2048;
-const LOW_HZ: f32 = 30.0;
-const HIGH_HZ: f32 = 16_000.0;
-const FLOOR_DB: f32 = -60.0;
+const LOW_HZ: f32 = 50.0;
+const HIGH_HZ: f32 = 12_000.0;
+/// Bands span this many dB below the channel's running peak.
+const RANGE_DB: f32 = 60.0;
+/// How fast the running peak falls (dB per second).
+const PEAK_RELEASE_DB: f32 = 2.0;
+/// The running peak never drops below this, so silence reads 0.
+const PEAK_FLOOR_DB: f32 = -100.0;
+/// Treble boost (dB per octave above 1 kHz, cut below).
+const TILT_DB_PER_OCTAVE: f32 = 3.0;
 /// Fall speed of a band (per second, exponential).
 const DECAY: f32 = 6.0;
 
@@ -58,6 +71,8 @@ pub struct SpectrumAnalyzer {
     left: VecDeque<f32>,
     right: VecDeque<f32>,
     smoothed: AudioSpectrum,
+    /// Running peak of the tilted bands (dB), left then right.
+    peaks: [f32; 2],
     window: Vec<f32>,
 }
 
@@ -71,6 +86,7 @@ impl SpectrumAnalyzer {
             left: VecDeque::with_capacity(FFT_SIZE),
             right: VecDeque::with_capacity(FFT_SIZE),
             smoothed: AudioSpectrum::default(),
+            peaks: [PEAK_FLOOR_DB; 2],
             window,
         }
     }
@@ -92,21 +108,26 @@ impl SpectrumAnalyzer {
 
     /// Band levels now; `dt` seconds since the last call drives the fall.
     pub fn analyze(&mut self, dt: f32) -> AudioSpectrum {
-        let fall = (-DECAY * dt.max(0.0)).exp();
-        let left = self.bands(true);
-        let right = self.bands(false);
-        for (s, new) in self.smoothed.left.iter_mut().zip(left) {
-            *s = new.max(*s * fall);
-        }
-        for (s, new) in self.smoothed.right.iter_mut().zip(right) {
-            *s = new.max(*s * fall);
+        let dt = dt.max(0.0);
+        let fall = (-DECAY * dt).exp();
+        let levels = [self.band_db(true), self.band_db(false)];
+        let smoothed = [&mut self.smoothed.left, &mut self.smoothed.right];
+        for ((db, peak), smoothed) in levels.iter().zip(&mut self.peaks).zip(smoothed) {
+            let loudest = db.iter().copied().fold(f32::MIN, f32::max);
+            *peak = loudest.max(*peak - PEAK_RELEASE_DB * dt).max(PEAK_FLOOR_DB);
+            for (db, s) in db.iter().zip(smoothed.iter_mut()) {
+                let new = ((db - (*peak - RANGE_DB)) / RANGE_DB).clamp(0.0, 1.0);
+                *s = new.max(*s * fall);
+            }
         }
         self.smoothed
     }
 
-    fn bands(&self, left: bool) -> [f32; BANDS] {
+    /// Mean magnitude per band in dB (full-scale sine = 0 dB) plus the
+    /// treble tilt; silence or too few samples read −180 dB.
+    fn band_db(&self, left: bool) -> [f32; BANDS] {
         let samples = if left { &self.left } else { &self.right };
-        let mut out = [0.0; BANDS];
+        let mut out = [-180.0; BANDS];
         if samples.len() < FFT_SIZE {
             return out;
         }
@@ -125,11 +146,12 @@ impl SpectrumAnalyzer {
             let hi = LOW_HZ * (HIGH_HZ / LOW_HZ).powf((band + 1) as f32 / BANDS as f32);
             let first = ((lo / hz_per_bin) as usize).clamp(1, FFT_SIZE / 2 - 1);
             let last = ((hi / hz_per_bin) as usize).clamp(first, FFT_SIZE / 2 - 1);
-            let peak = (first..=last)
+            let sum: f32 = (first..=last)
                 .map(|k| (re[k] * re[k] + im[k] * im[k]).sqrt() * norm)
-                .fold(0.0f32, f32::max);
-            let db = 20.0 * peak.max(1e-9).log10();
-            *o = ((db - FLOOR_DB) / -FLOOR_DB).clamp(0.0, 1.0);
+                .sum();
+            let mean = sum / (last - first + 1) as f32;
+            let centre = (lo * hi).sqrt();
+            *o = 20.0 * mean.max(1e-9).log10() + TILT_DB_PER_OCTAVE * (centre / 1000.0).log2();
         }
         out
     }
@@ -193,11 +215,29 @@ mod tests {
             .iter()
             .enumerate()
             .fold((0, 0.0), |m, (i, v)| if *v > m.1 { (i, *v) } else { m });
-        // 1 kHz on a 30 Hz – 16 kHz log scale of 64 bands → band 35.
-        assert_eq!(band, 35, "{:?}", s.left);
+        // 1 kHz on a 50 Hz – 12 kHz log scale of 64 bands → band 34/35.
+        assert!((34..=35).contains(&band), "{band}: {:?}", s.left);
         assert!(peak > 0.85, "{peak}");
         assert!(s.right.iter().all(|v| *v == 0.0));
         assert!(s.left[5] < 0.3, "{}", s.left[5]);
+    }
+
+    #[test]
+    fn quiet_audio_is_normalised() {
+        // −46 dBFS (quiet playback) still reaches the top of its band, as in WE.
+        let mut a = SpectrumAnalyzer::new(48_000);
+        a.push(&tone(1000.0, 0.005, 48_000), 2);
+        let s = a.analyze(0.0);
+        assert!(
+            s.left.iter().copied().fold(0.0, f32::max) > 0.85,
+            "{:?}",
+            s.left
+        );
+        // The gain follows the music down slowly: 1 s after a 20 dB drop the
+        // peak has fallen 2 dB, so the tone reads (60 − 18) / 60.
+        a.push(&tone(1000.0, 0.0005, 48_000), 2);
+        let dropped = a.analyze(1.0).left.iter().copied().fold(0.0, f32::max);
+        assert!((dropped - 0.7).abs() < 0.05, "{dropped}");
     }
 
     #[test]
