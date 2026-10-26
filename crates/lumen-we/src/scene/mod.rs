@@ -1183,9 +1183,13 @@ impl Importer<'_> {
         let composite_blend = spec.blend;
         let albedo = self.pass(&spec, None)?;
 
-        let size = match object.get("size").and_then(floats) {
+        // The model's own size (Deep Space's flow layer is 1920×1080 while
+        // its first texture, a flow mask, is 480×270).
+        let model_size = integer(model.get("width")).zip(integer(model.get("height")));
+        let size = match (object.get("size").and_then(floats), model_size) {
             _ if fullscreen => [self.scene.width, self.scene.height],
-            Some(s) if s.len() >= 2 => [s[0].max(1.0) as u32, s[1].max(1.0) as u32],
+            (Some(s), _) if s.len() >= 2 => [s[0].max(1.0) as u32, s[1].max(1.0) as u32],
+            (_, Some((w, h))) => [w.max(1) as u32, h.max(1) as u32],
             _ => match albedo.textures.get(&0) {
                 Some(TextureBinding::Asset(id)) => {
                     let t = &self.scene.textures[id.0];
