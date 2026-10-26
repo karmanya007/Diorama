@@ -288,6 +288,10 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         outputs: Option<Vec<String>>,
     },
+    /// Folders the library also lists (remembered).
+    SetFolders {
+        folders: Vec<PathBuf>,
+    },
     /// When to pause and how fast scenes run (remembered).
     SetPolicy {
         policy: Policy,
@@ -332,6 +336,9 @@ pub struct Status {
     pub volume: u8,
     #[serde(default)]
     pub policy: Policy,
+    /// Folders the library also lists.
+    #[serde(default)]
+    pub folders: Vec<PathBuf>,
     pub outputs: Vec<OutputStatus>,
 }
 

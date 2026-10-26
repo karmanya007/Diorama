@@ -355,6 +355,7 @@ fn main() -> Result<()> {
         overrides: Vec::new(),
         playlists: Vec::new(),
         rng: playlist::Rng::from_time(),
+        folders: Vec::new(),
         fps: Policy::default().fps,
         we_config: we_config_path(&args),
         we_assets: args.we_assets.is_dir().then(|| args.we_assets.clone()),
@@ -403,6 +404,7 @@ fn main() -> Result<()> {
     };
     daemon.fps = daemon.policy.fps;
     daemon.playlists = saved_state.playlists.clone();
+    daemon.folders = saved_state.folders.clone();
     daemon.overrides = saved_state
         .properties
         .iter()
@@ -844,6 +846,8 @@ struct Daemon<'p> {
     /// Named playlists.
     playlists: Vec<Playlist>,
     rng: playlist::Rng,
+    /// Folders the library also lists (kept for the UI).
+    folders: Vec<PathBuf>,
 }
 
 impl Daemon<'_> {
@@ -1225,6 +1229,7 @@ impl Daemon<'_> {
             volume: self.volume,
             web_network: self.web_allowed.clone(),
             playlists: self.playlists.clone(),
+            folders: self.folders.clone(),
             policy: Some(self.policy),
             properties: self
                 .overrides
@@ -1470,6 +1475,11 @@ impl Daemon<'_> {
                 }
                 Err(message) => Response::Error { message },
             },
+            Request::SetFolders { folders } => {
+                self.folders = folders;
+                self.persist();
+                Response::Ok
+            }
             Request::SetPolicy { policy } => {
                 self.policy = Policy {
                     fps: policy.fps.clamp(1, 240),
@@ -1526,6 +1536,7 @@ impl Daemon<'_> {
             user_paused: self.conditions.user_paused,
             volume: self.volume,
             policy: self.policy,
+            folders: self.folders.clone(),
             outputs,
         }
     }

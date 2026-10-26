@@ -3,6 +3,12 @@
 
 [advisories]
 yanked = "deny"
+ignore = [
+    # proc-macro-error (unmaintained, no known vulnerability): a build-time
+    # macro crate reached only through Tauri's Linux GTK 3 stack
+    # (glib-macros 0.18). Revisit when Tauri moves to GTK 4.
+    { id = "RUSTSEC-2024-0370", reason = "unmaintained build-time macro via tauri's Linux GTK stack" },
+]
 
 [licenses]
 allow = [

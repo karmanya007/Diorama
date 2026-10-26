@@ -4,6 +4,7 @@ members = [
     "apps/lumen-cli",
     "apps/lumend",
     "apps/lumen-webhost",
+    "apps/lumen-ui/src-tauri",
     "crates/lumen-core",
     "crates/lumen-gpu",
     "crates/lumen-ipc",

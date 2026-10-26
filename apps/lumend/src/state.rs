@@ -26,6 +26,9 @@ pub struct State {
     /// Web wallpaper folders the user let use the network.
     #[serde(default)]
     pub web_network: Vec<PathBuf>,
+    /// Folders the library also lists.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub folders: Vec<PathBuf>,
     /// Named playlists.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub playlists: Vec<lumen_ipc::Playlist>,
@@ -52,6 +55,7 @@ impl Default for State {
             wallpaper: None,
             volume: 0,
             web_network: Vec::new(),
+            folders: Vec::new(),
             playlists: Vec::new(),
             policy: None,
             properties: Vec::new(),
