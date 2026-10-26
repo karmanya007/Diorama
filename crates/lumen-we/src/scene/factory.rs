@@ -86,7 +86,7 @@ impl LayerFactory {
             .map(|p| Properties::from_project(&p))
             .unwrap_or_default()
             .with_overrides(choices);
-        let mut json = vfs.read_json("scene.json")?;
+        let mut json = super::read_scene_json(&vfs)?;
         properties.resolve(&mut json);
         // The scene header gives `general.zoom` (layers scale about their origin).
         let zoom = {

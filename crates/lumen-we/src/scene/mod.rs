@@ -62,9 +62,25 @@ pub fn import_from(vfs: &Vfs, limits: &Limits) -> Result<Scene> {
     import_with(vfs, limits, &properties)
 }
 
+/// The scene description: the `.json` file `project.json` names (some of
+/// WE's own projects use `<name>.json`), else `scene.json`.
+pub fn read_scene_json(vfs: &Vfs) -> Result<Value> {
+    let named = vfs
+        .read_json("project.json")
+        .ok()
+        .and_then(|p| p.get("file")?.as_str().map(str::to_owned))
+        .filter(|f| f.to_ascii_lowercase().ends_with(".json"));
+    match named {
+        Some(file) => vfs
+            .read_json(&file)
+            .or_else(|_| vfs.read_json("scene.json")),
+        None => vfs.read_json("scene.json"),
+    }
+}
+
 /// Imports with explicit user-property values (see [`Properties`]).
 pub fn import_with(vfs: &Vfs, limits: &Limits, properties: &Properties) -> Result<Scene> {
-    let mut json = vfs.read_json("scene.json")?;
+    let mut json = read_scene_json(vfs)?;
     properties.resolve(&mut json);
     // WE's per-wallpaper parallax switch: on enables the scene's parallax;
     // off only stops it following the cursor. Layers keep their depth spread

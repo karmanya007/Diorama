@@ -80,7 +80,13 @@ impl MediaKind {
             match project_type(&path.join("project.json")).as_deref() {
                 Some("web") => return Some(Self::Web),
                 Some("video") => return Some(Self::Video),
-                _ => {}
+                Some("scene") => return Some(Self::Scene),
+                // Some of WE's own projects have no type: go by their file.
+                _ => {
+                    if let Some(kind) = project_file_kind(&path.join("project.json")) {
+                        return Some(kind);
+                    }
+                }
             }
             return ["scene.pkg", "scene.json"]
                 .iter()
@@ -101,6 +107,21 @@ impl MediaKind {
             "html" | "htm" => Some(Self::Web),
             _ => None,
         }
+    }
+}
+
+/// The kind a `project.json`'s `file` implies (projects without a `type`).
+fn project_file_kind(path: &std::path::Path) -> Option<MediaKind> {
+    let bytes = std::fs::read(path).ok()?;
+    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&bytes);
+    let v: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    let file = v.get("file")?.as_str()?.to_ascii_lowercase();
+    let ext = file.rsplit('.').next()?;
+    match ext {
+        "json" | "pkg" => Some(MediaKind::Scene),
+        "html" | "htm" => Some(MediaKind::Web),
+        "mp4" | "m4v" | "mov" | "webm" | "mkv" | "avi" | "wmv" => Some(MediaKind::Video),
+        _ => None,
     }
 }
 
@@ -485,6 +506,33 @@ impl Server {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn project_folders_are_detected_by_type_or_file() {
+        let root = std::env::temp_dir().join(format!("lumen-kind-{}", std::process::id()));
+        let case = |name: &str, project: &str| {
+            let dir = root.join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("project.json"), project).unwrap();
+            MediaKind::from_path(&dir)
+        };
+        assert_eq!(
+            case("a", r#"{"type":"scene","file":"scene.json"}"#),
+            Some(MediaKind::Scene)
+        );
+        // WE's own older projects: no type, a named scene file.
+        assert_eq!(
+            case("b", r#"{"title":"Techno","file":"techno.json"}"#),
+            Some(MediaKind::Scene)
+        );
+        assert_eq!(case("c", r#"{"file":"index.html"}"#), Some(MediaKind::Web));
+        assert_eq!(
+            case("d", r#"{"type":"Video","file":"v.mp4"}"#),
+            Some(MediaKind::Video)
+        );
+        assert_eq!(case("e", r#"{"file":"app.exe"}"#), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn requests_round_trip_as_json_lines() {

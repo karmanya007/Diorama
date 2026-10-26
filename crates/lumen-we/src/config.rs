@@ -108,15 +108,26 @@ fn alignment_in(config: &Value, wallpaper: &Path, monitor: usize) -> Option<Alig
     })
 }
 
+/// `file` from the `project.json` in folder `dir`, if any.
+fn project_file(dir: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(dir.join("project.json")).ok()?;
+    let project: Value = serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()?;
+    Some(project.get("file")?.as_str()?.to_owned())
+}
+
 /// `<user>.wproperties[<wallpaper file>].Monitor<n>` for `wallpaper`.
 fn monitor_entry<'c>(config: &'c Value, wallpaper: &Path, monitor: usize) -> Option<&'c Value> {
     let wanted = normalise(&wallpaper.to_string_lossy());
-    // A scene folder is stored as its scene.pkg / scene.json.
-    let candidates = [
+    // A scene folder is stored as its scene.pkg / scene.json, or the file
+    // its project.json names (`<name>.json` in some of WE's own projects).
+    let mut candidates = vec![
         wanted.clone(),
         format!("{wanted}/scene.pkg"),
         format!("{wanted}/scene.json"),
     ];
+    if let Some(file) = project_file(wallpaper) {
+        candidates.push(format!("{wanted}/{}", file.to_lowercase()));
+    }
     let users = config.as_object()?;
     for user in users.values() {
         let Some(props) = user.get("wproperties").and_then(Value::as_object) else {
