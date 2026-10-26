@@ -362,6 +362,47 @@ fn only_the_topmost_listening_layer_gets_cursor_events() {
 }
 
 #[test]
+fn pressing_a_dragged_layer_raises_it_above_other_dragged_layers() {
+    // Layers 0 (x = 0) and 1 (x = 5, drawn above) overlap at x 0–5. Both drag.
+    let drag = |node: usize, tag: &str| {
+        script(
+            &format!(
+                "export function cursorDown() {{ thisScene.getLayer('clock').text += '{tag}'; }} export function cursorMove() {{}}"
+            ),
+            node,
+            ScriptTarget::Other(format!("drag{node}")),
+            "{}",
+        )
+    };
+    let mut s = scene(vec![drag(0, "B"), drag(1, "T")]);
+    s.layers[1].transform = lumen_scene::affine([5.0, 0.0], 0.0, [1.0, 1.0]);
+    let mut host = ScriptHost::new(&s, [100, 100], CLOCK).unwrap().unwrap();
+    let at = |x: f32, down: bool| Inputs {
+        cursor: [x, 0.0],
+        pointer_active: true,
+        left_down: down,
+        ..inputs(0.0)
+    };
+    // Press the back layer where only it is: it comes to the top.
+    host.update(&at(-3.0, false));
+    let pressed = host
+        .update(&at(-3.0, true))
+        .get(&0)
+        .and_then(|c| c.text.clone());
+    assert_eq!(pressed.as_deref(), Some("12:34B"));
+    host.update(&at(-3.0, false));
+    assert_eq!(host.take_sorts(), vec![(0, None)]);
+    // Now it gets presses where they overlap.
+    let text = host
+        .update(&at(3.0, true))
+        .get(&0)
+        .and_then(|c| c.text.clone());
+    assert_eq!(text.as_deref(), Some("12:34BB"));
+    // Already on top: no reorder.
+    assert!(host.take_sorts().is_empty());
+}
+
+#[test]
 fn drags_keep_the_layer_after_the_cursor_leaves_it() {
     // Pixel Desktop's window script (3155776049): fast drags outrun the
     // 10 × 10 layer between frames.

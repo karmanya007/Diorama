@@ -618,6 +618,39 @@
 		return scripts.some((s) => s.node === node && !s.disabled && s.ns
 			&& CURSOR.some((h) => typeof s.ns[h] === 'function'));
 	}
+	// Lumen addition (not WE): pressing a layer that scripts drag (it has
+	// cursorDown and cursorMove) lifts it and its children above the other
+	// dragged groups, like windows on a desktop (Pixel Desktop). Layers that
+	// are not dragged keep their place.
+	function drags(node) {
+		return scripts.some((s) => s.node === node && !s.disabled && s.ns
+			&& typeof s.ns.cursorDown === 'function' && typeof s.ns.cursorMove === 'function');
+	}
+	function within(node, root) {
+		for (let n = node, guard = 0; n !== null && n !== undefined && guard < 256; n = nodes[n].parent, guard++) {
+			if (n === root) return true;
+		}
+		return false;
+	}
+	function raise(root) {
+		if (!drags(root)) return;
+		const others = byNode.map((_, n) => n)
+			.filter((n) => n !== root && drags(n) && !within(n, root) && !within(root, n));
+		let top = -1;
+		objects.forEach((o, i) => { if (others.some((r) => within(o.__n, r))) top = i; });
+		const first = objects.findIndex((o) => within(o.__n, root));
+		if (top < 0 || first < 0 || first > top) return;
+		const anchor = objects[top];
+		const group = objects.filter((o) => within(o.__n, root));
+		const rest = objects.filter((o) => !within(o.__n, root));
+		const at = rest.indexOf(anchor) + 1;
+		objects.splice(0, objects.length, ...rest.slice(0, at), ...group, ...rest.slice(at));
+		const next = rest.slice(at).map((o) => nodes[o.__n].layer).find((x) => x !== null && x !== undefined);
+		for (const o of group) {
+			const own = nodes[o.__n].layer;
+			if (own !== null && own !== undefined) sorts.push([own, next === undefined ? null : next]);
+		}
+	}
 	// Events for every script (media integration …).
 	function revive(v) {
 		if (v && typeof v === 'object' && Array.isArray(v.vec3)) return vec3(v.vec3);
@@ -663,7 +696,10 @@
 		}
 		if (down && !wasDown) {
 			pressed = new Map(hits);
-			for (const [n, local] of hits) dispatch(n, 'cursorDown', world, local);
+			for (const [n, local] of hits) {
+				raise(n);
+				dispatch(n, 'cursorDown', world, local);
+			}
 		} else if (!down && wasDown) {
 			for (const [n, local] of hits) {
 				dispatch(n, 'cursorUp', world, local);

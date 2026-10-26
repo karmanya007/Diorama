@@ -417,6 +417,11 @@ mod scene_probe {
                 left_down: pressing.is_some(),
                 audio: [[0.0; 64]; 2],
             });
+            let sorts = host.take_sorts();
+            if !sorts.is_empty() {
+                let moved: Vec<&str> = sorts.iter().map(|(l, _)| names[*l].as_str()).collect();
+                println!("{t:6.2}s raised {} layers: {} …", moved.len(), moved[0]);
+            }
             for (i, c) in changes {
                 if let Some(tr) = c.transform {
                     if std::env::var("LUMEN_TEST_TRACE").is_ok_and(|n| n == names[i]) {
