@@ -26,6 +26,9 @@ pub struct State {
     /// Web wallpaper folders the user let use the network.
     #[serde(default)]
     pub web_network: Vec<PathBuf>,
+    /// When to pause and how fast scenes run.
+    #[serde(default)]
+    pub policy: Option<lumen_ipc::Policy>,
     /// Property values set in Lumen, per wallpaper.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub properties: Vec<SavedProperties>,
@@ -46,6 +49,7 @@ impl Default for State {
             wallpaper: None,
             volume: 0,
             web_network: Vec::new(),
+            policy: None,
             properties: Vec::new(),
         }
     }

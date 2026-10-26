@@ -1,24 +1,9 @@
 //! When to pause a monitor's wallpaper (P5/P6/P17).
 
-use clap::ValueEnum;
+use lumen_ipc::{Action, Policy};
 use lumen_platform::{Coverage, OutputInfo, Platform};
 
 use crate::session::Session;
-
-/// What to do with a monitor's wallpaper in a given situation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum Action {
-    Keep,
-    Pause,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct Policy {
-    pub fullscreen: Action,
-    pub maximized: Action,
-    pub battery: Action,
-    pub locked: Action,
-}
 
 /// Inputs to the pause decision, refreshed from the platform and the user.
 #[derive(Debug, Clone, Copy, Default)]
@@ -29,18 +14,17 @@ pub struct Conditions {
     pub user_paused: bool,
 }
 
-impl Policy {
-    pub fn pauses(self, coverage: Coverage, c: Conditions) -> bool {
-        let pause = |a: Action| a == Action::Pause;
-        c.user_paused
-            || (c.locked && pause(self.locked))
-            || (c.on_battery && pause(self.battery))
-            || match coverage {
-                Coverage::Fullscreen => pause(self.fullscreen),
-                Coverage::Maximized => pause(self.maximized),
-                Coverage::Visible => false,
-            }
-    }
+/// Whether `policy` pauses a monitor with this coverage under these conditions.
+pub fn pauses(policy: Policy, coverage: Coverage, c: Conditions) -> bool {
+    let pause = |a: Action| a == Action::Pause;
+    c.user_paused
+        || (c.locked && pause(policy.locked))
+        || (c.on_battery && pause(policy.battery))
+        || match coverage {
+            Coverage::Fullscreen => pause(policy.fullscreen),
+            Coverage::Maximized => pause(policy.maximized),
+            Coverage::Visible => false,
+        }
 }
 
 /// Re-evaluates which outputs are paused. Logs changes; returns true if any output resumed.
@@ -56,7 +40,7 @@ pub fn update_pauses(
     for (out, cov) in session.outputs.iter_mut().zip(coverage) {
         // Display changes can leave the window off its output (see `keep_in_place`).
         resumed |= out.keep_in_place();
-        let paused = policy.pauses(cov, c);
+        let paused = pauses(policy, cov, c);
         if paused != out.paused || cov != out.coverage {
             tracing::info!(
                 output = %out.info.device,
@@ -79,26 +63,32 @@ pub fn update_pauses(
 mod tests {
     use super::*;
 
-    const DEFAULTS: Policy = Policy {
-        fullscreen: Action::Pause,
-        maximized: Action::Pause,
-        battery: Action::Keep,
-        locked: Action::Pause,
-    };
+    const DEFAULTS: Policy = Policy::BALANCED;
 
     #[test]
     fn defaults() {
         let c = Conditions::default();
-        assert!(!DEFAULTS.pauses(Coverage::Visible, c));
-        assert!(DEFAULTS.pauses(Coverage::Maximized, c));
-        assert!(DEFAULTS.pauses(Coverage::Fullscreen, c));
+        assert!(!pauses(DEFAULTS, Coverage::Visible, c));
+        assert!(pauses(DEFAULTS, Coverage::Maximized, c));
+        assert!(pauses(DEFAULTS, Coverage::Fullscreen, c));
         let battery = Conditions {
             on_battery: true,
             ..c
         };
-        assert!(!DEFAULTS.pauses(Coverage::Visible, battery));
+        assert!(!pauses(DEFAULTS, Coverage::Visible, battery));
         let locked = Conditions { locked: true, ..c };
-        assert!(DEFAULTS.pauses(Coverage::Visible, locked));
+        assert!(pauses(DEFAULTS, Coverage::Visible, locked));
+        let gaming = Policy::preset("Gaming").unwrap();
+        assert!(pauses(gaming, Coverage::Visible, battery));
+        assert_eq!(gaming.preset_name(), Some("gaming"));
+        assert_eq!(
+            Policy {
+                fps: 31,
+                ..DEFAULTS
+            }
+            .preset_name(),
+            None
+        );
     }
 
     #[test]
@@ -108,11 +98,12 @@ mod tests {
             maximized: Action::Keep,
             battery: Action::Keep,
             locked: Action::Keep,
+            fps: 30,
         };
         let c = Conditions {
             user_paused: true,
             ..Conditions::default()
         };
-        assert!(keep_all.pauses(Coverage::Visible, c));
+        assert!(pauses(keep_all, Coverage::Visible, c));
     }
 }

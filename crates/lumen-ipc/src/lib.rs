@@ -110,6 +110,93 @@ fn project_type(path: &std::path::Path) -> Option<String> {
     Some(v.get("type")?.as_str()?.to_ascii_lowercase())
 }
 
+/// What to do with a monitor's wallpaper in a given situation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Action {
+    Keep,
+    Pause,
+}
+
+/// When wallpapers pause, and how fast scenes run (P5, P17).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Policy {
+    /// A fullscreen app (game, video player) covers the monitor.
+    pub fullscreen: Action,
+    /// A maximized window covers the monitor.
+    pub maximized: Action,
+    /// The computer runs on battery.
+    pub battery: Action,
+    /// The session is locked.
+    pub locked: Action,
+    /// Frame rate cap for scenes.
+    pub fps: u32,
+}
+
+impl Default for Policy {
+    fn default() -> Self {
+        Self::BALANCED
+    }
+}
+
+impl Policy {
+    /// Pauses when covered or locked; 30 fps.
+    pub const BALANCED: Self = Self {
+        fullscreen: Action::Pause,
+        maximized: Action::Pause,
+        battery: Action::Keep,
+        locked: Action::Pause,
+        fps: 30,
+    };
+
+    /// Named presets, in the order a UI lists them.
+    pub const PRESETS: [(&'static str, Self); 4] = [
+        ("balanced", Self::BALANCED),
+        // Keeps playing beside maximized windows; smoother scenes.
+        (
+            "quality",
+            Self {
+                maximized: Action::Keep,
+                fps: 60,
+                ..Self::BALANCED
+            },
+        ),
+        // Leaves the GPU to games, also on battery.
+        (
+            "gaming",
+            Self {
+                battery: Action::Pause,
+                fps: 24,
+                ..Self::BALANCED
+            },
+        ),
+        // Pauses whenever it can and runs scenes slowly.
+        (
+            "battery",
+            Self {
+                battery: Action::Pause,
+                fps: 15,
+                ..Self::BALANCED
+            },
+        ),
+    ];
+
+    pub fn preset(name: &str) -> Option<Self> {
+        Self::PRESETS
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, p)| *p)
+    }
+
+    /// The preset this policy equals, if any.
+    pub fn preset_name(&self) -> Option<&'static str> {
+        Self::PRESETS
+            .iter()
+            .find(|(_, p)| p == self)
+            .map(|(n, _)| *n)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "kebab-case")]
 pub enum Request {
@@ -149,6 +236,10 @@ pub enum Request {
     Volume {
         percent: u8,
     },
+    /// When to pause and how fast scenes run (remembered).
+    SetPolicy {
+        policy: Policy,
+    },
     /// Pause all outputs regardless of policy until `Resume`.
     Pause,
     Resume,
@@ -184,6 +275,8 @@ pub struct Status {
     /// Video soundtrack volume, 0–100.
     #[serde(default)]
     pub volume: u8,
+    #[serde(default)]
+    pub policy: Policy,
     pub outputs: Vec<OutputStatus>,
 }
 

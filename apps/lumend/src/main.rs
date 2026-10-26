@@ -35,8 +35,9 @@ use lumen_media::AudioPlayer;
 use lumen_platform::{Coverage, DesktopEvent, Platform};
 
 use crate::clock::{SceneClock, VideoClock};
-use crate::policy::{Action, Conditions, Policy, update_pauses};
+use crate::policy::{Conditions, update_pauses};
 use crate::session::{Content, Look, Session, Wallpaper};
+use lumen_ipc::{Action, Policy};
 
 #[derive(Debug, Parser)]
 #[command(version, about)]
@@ -59,9 +60,9 @@ struct Args {
     /// Render one frame of `--scene` offscreen to this PNG and exit.
     #[arg(long, requires = "scene")]
     frame_out: Option<PathBuf>,
-    /// Frame rate cap for scenes.
-    #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u32).range(1..=240))]
-    fps: u32,
+    /// Frame rate cap for scenes (default: the saved policy's, else 30).
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..=240))]
+    fps: Option<u32>,
     /// Scene time in seconds for `--frame-out`.
     #[arg(long, default_value_t = 0.0)]
     time: f32,
@@ -105,17 +106,18 @@ struct Args {
     #[arg(long)]
     list_outputs: bool,
     /// When a fullscreen app covers a monitor (games, video players).
-    #[arg(long, value_enum, default_value = "pause")]
-    on_fullscreen: Action,
-    /// When a maximized window covers a monitor.
-    #[arg(long, value_enum, default_value = "pause")]
-    on_maximized: Action,
-    /// While running on battery.
-    #[arg(long, value_enum, default_value = "keep")]
-    on_battery: Action,
-    /// While the session is locked.
-    #[arg(long, value_enum, default_value = "pause")]
-    on_lock: Action,
+    /// Default: the saved policy (`lumen policy`), else pause.
+    #[arg(long, value_enum)]
+    on_fullscreen: Option<ActionArg>,
+    /// When a maximized window covers a monitor (default: saved, else pause).
+    #[arg(long, value_enum)]
+    on_maximized: Option<ActionArg>,
+    /// While running on battery (default: saved, else keep).
+    #[arg(long, value_enum)]
+    on_battery: Option<ActionArg>,
+    /// While the session is locked (default: saved, else pause).
+    #[arg(long, value_enum)]
+    on_lock: Option<ActionArg>,
     /// Run without a console (used by autostart); logs go to `lumend.log` in the config folder.
     #[arg(long)]
     background: bool,
@@ -126,6 +128,21 @@ struct Args {
     /// Video soundtrack volume 0–100 (default: last used, else 0 = muted; no audio device opened).
     #[arg(long, value_parser = clap::value_parser!(u8).range(0..=100))]
     volume: Option<u8>,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ActionArg {
+    Keep,
+    Pause,
+}
+
+impl From<ActionArg> for Action {
+    fn from(a: ActionArg) -> Self {
+        match a {
+            ActionArg::Keep => Action::Keep,
+            ActionArg::Pause => Action::Pause,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -322,12 +339,7 @@ fn main() -> Result<()> {
         platform: &platform,
         gpu: Some(Gpu::new(gpu_options).context("GPU init")?),
         gpu_options,
-        policy: Policy {
-            fullscreen: args.on_fullscreen,
-            maximized: args.on_maximized,
-            battery: args.on_battery,
-            locked: args.on_lock,
-        },
+        policy: Policy::default(),
         conditions: Conditions {
             on_battery: platform.on_battery(),
             ..Conditions::default()
@@ -340,7 +352,7 @@ fn main() -> Result<()> {
         web_network: args.web_network,
         web_allowed: Vec::new(),
         overrides: Vec::new(),
-        fps: args.fps,
+        fps: Policy::default().fps,
         we_config: we_config_path(&args),
         we_assets: args.we_assets.is_dir().then(|| args.we_assets.clone()),
         next_coverage: Instant::now(),
@@ -373,6 +385,20 @@ fn main() -> Result<()> {
     let saved_state = config_dir.as_deref().map(state::load).unwrap_or_default();
     daemon.volume = args.volume.unwrap_or(saved_state.volume).min(100);
     daemon.web_allowed = saved_state.web_network.clone();
+    // The saved policy, with what the command line names on top.
+    let saved_policy = saved_state.policy.unwrap_or_default();
+    daemon.policy = Policy {
+        fullscreen: args
+            .on_fullscreen
+            .map_or(saved_policy.fullscreen, Action::from),
+        maximized: args
+            .on_maximized
+            .map_or(saved_policy.maximized, Action::from),
+        battery: args.on_battery.map_or(saved_policy.battery, Action::from),
+        locked: args.on_lock.map_or(saved_policy.locked, Action::from),
+        fps: args.fps.unwrap_or(saved_policy.fps),
+    };
+    daemon.fps = daemon.policy.fps;
     daemon.overrides = saved_state
         .properties
         .iter()
@@ -398,7 +424,7 @@ fn main() -> Result<()> {
                 layout: s.layout,
             };
             match daemon.load(&s.path, Some(s.kind), look) {
-                Ok(w) => slots.push(Slot::new(w, s.outputs, args.fps)),
+                Ok(w) => slots.push(Slot::new(w, s.outputs, daemon.fps)),
                 Err(e) => tracing::error!("start-up wallpaper {}: {e:#}", s.path.display()),
             }
         }
@@ -1007,6 +1033,7 @@ impl Daemon<'_> {
             wallpapers: self.slots.iter().map(Slot::saved).collect(),
             volume: self.volume,
             web_network: self.web_allowed.clone(),
+            policy: Some(self.policy),
             properties: self
                 .overrides
                 .iter()
@@ -1215,6 +1242,19 @@ impl Daemon<'_> {
                 self.persist();
                 Response::Ok
             }
+            Request::SetPolicy { policy } => {
+                self.policy = Policy {
+                    fps: policy.fps.clamp(1, 240),
+                    ..policy
+                };
+                self.fps = self.policy.fps;
+                for slot in &mut self.slots {
+                    slot.scene_clock.set_fps(self.fps);
+                }
+                self.next_coverage = Instant::now();
+                self.persist();
+                Response::Ok
+            }
             Request::Pause | Request::Resume => {
                 self.conditions.user_paused = matches!(request, Request::Pause);
                 self.next_coverage = Instant::now();
@@ -1255,6 +1295,7 @@ impl Daemon<'_> {
             content: self.main_slot().map(Slot::content_status),
             user_paused: self.conditions.user_paused,
             volume: self.volume,
+            policy: self.policy,
             outputs,
         }
     }

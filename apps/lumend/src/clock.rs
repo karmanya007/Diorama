@@ -98,6 +98,12 @@ impl SceneClock {
         self.paused_at.is_some()
     }
 
+    /// A new frame rate cap; scene time carries on.
+    pub fn set_fps(&mut self, fps: u32) {
+        self.interval = Duration::from_secs(1) / fps.clamp(1, 1000);
+        self.next_frame = Instant::now();
+    }
+
     pub fn set_paused(&mut self, paused: bool) {
         match (paused, self.paused_at) {
             (true, None) => self.paused_at = Some(Instant::now()),

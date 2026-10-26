@@ -3,9 +3,9 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
-use lumen_ipc::{Fit, Layout, MediaKind, Request, Response};
+use lumen_ipc::{Action, Fit, Layout, MediaKind, Policy, Request, Response};
 
 #[derive(Debug, Parser)]
 #[command(version, about)]
@@ -61,6 +61,23 @@ enum Command {
         #[arg(value_parser = clap::value_parser!(u8).range(0..=100))]
         percent: u8,
     },
+    /// Show or change when wallpapers pause and how fast scenes run
+    /// (remembered). Presets: balanced, quality, gaming, battery.
+    Policy {
+        /// Start from this preset.
+        preset: Option<String>,
+        #[arg(long, value_enum)]
+        on_fullscreen: Option<ActionArg>,
+        #[arg(long, value_enum)]
+        on_maximized: Option<ActionArg>,
+        #[arg(long, value_enum)]
+        on_battery: Option<ActionArg>,
+        #[arg(long, value_enum)]
+        on_lock: Option<ActionArg>,
+        /// Frame rate cap for scenes.
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..=240))]
+        fps: Option<u32>,
+    },
     /// Pause every monitor until `lumen resume`.
     Pause,
     /// Undo `lumen pause` (automatic pause rules still apply).
@@ -82,6 +99,21 @@ enum Command {
         #[arg(value_enum)]
         action: AutostartAction,
     },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ActionArg {
+    Keep,
+    Pause,
+}
+
+impl From<ActionArg> for Action {
+    fn from(a: ActionArg) -> Self {
+        match a {
+            ActionArg::Keep => Action::Keep,
+            ActionArg::Pause => Action::Pause,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -145,6 +177,16 @@ fn autostart(action: AutostartAction) -> Result<()> {
         },
     }
     Ok(())
+}
+
+fn print_policy(p: &Policy) {
+    let word = |a: Action| if a == Action::Pause { "pause" } else { "keep" };
+    println!("policy   {}", p.preset_name().unwrap_or("custom"));
+    println!("  fullscreen app  {}", word(p.fullscreen));
+    println!("  maximized       {}", word(p.maximized));
+    println!("  on battery      {}", word(p.battery));
+    println!("  locked          {}", word(p.locked));
+    println!("  scene fps       {}", p.fps);
 }
 
 fn library(folders: Vec<PathBuf>, json: bool) -> Result<()> {
@@ -242,6 +284,43 @@ fn run(cli: Cli) -> Result<()> {
         Command::Quit => Request::Quit,
         Command::Autostart { action } => return autostart(action),
         Command::Library { folder, json } => return library(folder, json),
+        Command::Policy {
+            preset,
+            on_fullscreen,
+            on_maximized,
+            on_battery,
+            on_lock,
+            fps,
+        } => {
+            let Response::Status(status) = lumen_ipc::call(&Request::Status)? else {
+                bail!("the daemon did not report its policy");
+            };
+            let changed = preset.is_some()
+                || on_fullscreen.is_some()
+                || on_maximized.is_some()
+                || on_battery.is_some()
+                || on_lock.is_some()
+                || fps.is_some();
+            if !changed {
+                print_policy(&status.policy);
+                return Ok(());
+            }
+            let base = match preset.as_deref() {
+                Some(name) => Policy::preset(name).with_context(|| {
+                    format!("no preset {name} (balanced, quality, gaming, battery)")
+                })?,
+                None => status.policy,
+            };
+            let policy = Policy {
+                fullscreen: on_fullscreen.map_or(base.fullscreen, Action::from),
+                maximized: on_maximized.map_or(base.maximized, Action::from),
+                battery: on_battery.map_or(base.battery, Action::from),
+                locked: on_lock.map_or(base.locked, Action::from),
+                fps: fps.unwrap_or(base.fps),
+            };
+            print_policy(&policy);
+            Request::SetPolicy { policy }
+        }
     };
 
     match lumen_ipc::call(&request)? {
