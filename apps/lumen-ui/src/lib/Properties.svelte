@@ -32,7 +32,7 @@
   }
 
   async function resetAll() {
-    const changes = Object.fromEntries(list.map((f) => [f.name, null]));
+    const changes = Object.fromEntries([...list.map((f) => f.name), 'cameraparallax'].map((n) => [n, null]));
     await attempt(async () => {
       await api.setProperties(item.path, changes);
       values = await api.properties(item.path);
@@ -47,6 +47,15 @@
   <p class="muted">Reading values…</p>
 {:else}
   <div class="form">
+    {#if typeof values.cameraparallax === 'boolean'}
+      <!-- Wallpaper Engine's per-wallpaper switch, for scenes with parallax. -->
+      <label class="field check">
+        <input type="checkbox" checked={values.cameraparallax} onchange={(e) => change('cameraparallax', e.currentTarget.checked)} />
+        <span>Camera parallax (follows the mouse)</span>
+      </label>
+    {:else if !list.length}
+      <p class="muted">No settings.</p>
+    {/if}
     {#each list as f (f.name)}
       {#if holds(f.def.condition, values)}
         {#if f.type === 'text'}

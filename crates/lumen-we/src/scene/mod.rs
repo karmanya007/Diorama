@@ -37,6 +37,14 @@ pub fn import(project_dir: &Path, assets_dir: Option<&Path>, limits: &Limits) ->
     import_with_choices(project_dir, assets_dir, limits, &BTreeMap::new())
 }
 
+/// Whether the scene in `project_dir` uses camera parallax (its layers
+/// follow the cursor), before anyone's choices; `None` if it cannot be read.
+pub fn uses_parallax(project_dir: &Path) -> Option<bool> {
+    let vfs = Vfs::open(project_dir, None, &Limits::default()).ok()?;
+    let json = read_scene_json(&vfs).ok()?;
+    Some(boolean(json["general"].get("cameraparallax"), false))
+}
+
 /// [`import`] with the user's own choices (e.g. from WE's config,
 /// [`crate::config::user_properties_from_file`]) over the project defaults.
 pub fn import_with_choices(

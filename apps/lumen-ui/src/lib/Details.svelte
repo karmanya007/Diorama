@@ -161,7 +161,7 @@
       </select>
     </div>
 
-    {#if item.properties && Object.keys(item.properties).length}
+    {#if (item.properties && Object.keys(item.properties).length) || item.kind === 'scene'}
       <h3>Properties</h3>
       <Properties {item} />
     {/if}
