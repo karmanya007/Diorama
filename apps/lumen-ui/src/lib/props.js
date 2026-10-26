@@ -18,7 +18,9 @@ export function labelOf(name, def) {
     const words = base.replaceAll('_', ' ').trim();
     return words.charAt(0).toUpperCase() + words.slice(1);
   }
-  const doc = new DOMParser().parseFromString(raw, 'text/html');
+  // Line breaks and block ends separate words.
+  const spaced = raw.replace(/<br\s*\/?>|<\/(?:p|div|li|h[1-6])>/gi, ' ');
+  const doc = new DOMParser().parseFromString(spaced, 'text/html');
   return (doc.body.textContent ?? '').replace(/\s+/g, ' ').trim();
 }
 

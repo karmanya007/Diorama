@@ -122,7 +122,16 @@
     {/each}
     <div class="row">
       <input class="grow" type="text" placeholder="C:\Users\you\Pictures\Wallpapers" bind:value={newFolder} onkeydown={(e) => e.key === 'Enter' && addFolder()} aria-label="Folder path" />
-      <button onclick={addFolder}>Add folder</button>
+      <button onclick={addFolder} disabled={!newFolder.trim()}>Add</button>
+      <button
+        onclick={async () => {
+          const path = await attempt(() => api.pick({ folder: true, title: 'Add a folder to the library' }));
+          if (path) {
+            newFolder = path;
+            addFolder();
+          }
+        }}>Browse…</button
+      >
     </div>
   </div>
 

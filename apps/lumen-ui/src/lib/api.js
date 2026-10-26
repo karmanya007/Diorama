@@ -1,6 +1,7 @@
 // Calls into the Rust side: lumend requests (`ipc`, the same JSON the CLI
 // sends) and the library scan.
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
+import { open } from '@tauri-apps/plugin-dialog';
 
 /** One lumend request, e.g. `{ cmd: 'status' }`. Throws on daemon errors. */
 export async function call(request) {
@@ -16,6 +17,24 @@ export const library = (folders) => invoke('library', { folders });
 export const presets = () => invoke('presets');
 export const autostart = () => invoke('autostart');
 export const setAutostart = (on) => invoke('set_autostart', { on });
+
+const KINDS = {
+  image: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'avif'],
+  video: ['mp4', 'webm', 'ogv', 'mov', 'm4v'],
+  audio: ['mp3', 'ogg', 'wav', 'flac', 'm4a', 'aac', 'opus'],
+};
+
+/** The system's open dialog: a file (of WE's `fileType`) or a folder; null if cancelled. */
+export async function pick({ folder = false, fileType, title } = {}) {
+  const exts = KINDS[fileType];
+  const picked = await open({
+    directory: folder,
+    multiple: false,
+    title,
+    filters: !folder && exts ? [{ name: fileType, extensions: exts }] : undefined,
+  });
+  return typeof picked === 'string' ? picked : null;
+}
 
 /** A local file as an image URL the page may load. */
 export const fileUrl = (path) => (path ? convertFileSrc(path) : '');

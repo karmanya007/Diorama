@@ -98,7 +98,21 @@
         {:else if f.type === 'file' || f.type === 'directory'}
           <label class="field">
             <span>{labelOf(f.name, f.def)} <span class="muted">({f.type === 'file' ? 'file path' : 'folder path'})</span></span>
-            <input type="text" placeholder="C:\…" value={values[f.name] ?? ''} onchange={(e) => change(f.name, e.currentTarget.value.trim())} />
+            <span class="row">
+              <input class="grow" type="text" placeholder="C:\…" value={values[f.name] ?? ''} onchange={(e) => change(f.name, e.currentTarget.value.trim())} />
+              <button
+                onclick={async (e) => {
+                  e.preventDefault();
+                  const path = await attempt(() =>
+                    api.pick({ folder: f.type === 'directory', fileType: f.def.fileType, title: labelOf(f.name, f.def) }),
+                  );
+                  if (path) change(f.name, path.replaceAll('\\', '/'));
+                }}>Browse…</button
+              >
+              {#if values[f.name]}
+                <button class="ghost" title="Clear" onclick={(e) => { e.preventDefault(); change(f.name, ''); }}>✕</button>
+              {/if}
+            </span>
           </label>
         {/if}
       {/if}
@@ -131,6 +145,11 @@
     flex-direction: row;
     align-items: center;
     gap: 8px;
+  }
+
+  .grow {
+    flex: 1;
+    min-width: 0;
   }
 
   .section {
