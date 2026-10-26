@@ -333,11 +333,16 @@ fn run(args: Args) -> Result<()> {
     let mut choices = Map::new();
     let mut early = Vec::new();
     if driven {
-        match rx.recv_timeout(Duration::from_secs(2)) {
-            Ok(Some(Command::Properties(c))) => choices = c,
-            Ok(Some(other)) => early.push(other),
-            Ok(None) if args.snapshot.is_none() => return Ok(()),
-            Ok(None) | Err(_) => {}
+        // lumend's first lines (properties, general) arrive together.
+        let mut wait = Duration::from_secs(2);
+        while let Ok(message) = rx.recv_timeout(wait) {
+            match message {
+                Some(Command::Properties(c)) => choices = c,
+                Some(other) => early.push(other),
+                None if args.snapshot.is_none() => return Ok(()),
+                None => break,
+            }
+            wait = Duration::from_millis(100);
         }
     }
 
@@ -364,13 +369,27 @@ fn run(args: Args) -> Result<()> {
         properties: Value::Null,
         directories: Value::Null,
         local: Arc::default(),
-        general: serde_json::json!({ "fps": 30 }),
+        // WE's language comes from lumend when WE's settings name one.
+        general: serde_json::json!({
+            "fps": 30,
+            "language": lumen_we::language::from_locale(
+                &lumen_platform::ui_language().unwrap_or_default()
+            ),
+        }),
         paused: HashMap::new(),
         paused_all: false,
         reports: Reports::new(root.clone(), args.allow_network),
         performance: Performance::default(),
     };
     host.set_properties(&choices);
+    // General properties reach the init script; the rest needs the pages.
+    early.retain(|c| match c {
+        Command::General(g) => {
+            merge(&mut host.general, g);
+            false
+        }
+        _ => true,
+    });
     tracing::info!(url = %host.url, network = host.allow_network, "web wallpaper");
 
     if let Some(out) = &args.snapshot {
@@ -683,7 +702,7 @@ fn apply(host: &mut Host, screens: &[Screen], platform: &Platform, command: Comm
             )
         }
         Command::General(g) => {
-            host.general = g;
+            merge(&mut host.general, &g);
             format!("__lumen.general({})", host.general)
         }
         Command::Paused(p) => {
@@ -730,6 +749,14 @@ fn apply(host: &mut Host, screens: &[Screen], platform: &Platform, command: Comm
         if let Err(e) = s.webview.evaluate_script(&js) {
             tracing::debug!("web wallpaper script: {e}");
         }
+    }
+}
+
+/// `update`'s keys over `general`'s (lumend sends only what it knows).
+fn merge(general: &mut Value, update: &Value) {
+    match (general.as_object_mut(), update.as_object()) {
+        (Some(g), Some(u)) => g.extend(u.iter().map(|(k, v)| (k.clone(), v.clone()))),
+        _ => *general = update.clone(),
     }
 }
 

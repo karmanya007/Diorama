@@ -40,8 +40,18 @@ fn normalise(p: &str) -> String {
     p.replace('\\', "/").trim_end_matches('/').to_lowercase()
 }
 
+/// Display-placement keys, which Lumen applies itself (`alignmentfliph`,
+/// the horizontal flip, stays: web pages apply it).
+const PLACEMENT: [&str; 5] = [
+    "alignment",
+    "alignmentx",
+    "alignmenty",
+    "alignmentz",
+    "alignmentposition",
+];
+
 /// The user's per-wallpaper choices made in WE's UI (property overrides and
-/// options such as `cameraparallax`), without the display-alignment keys.
+/// options such as `cameraparallax`), without the display-placement keys.
 pub fn user_properties_from_file(
     config: &Path,
     wallpaper: &Path,
@@ -57,11 +67,23 @@ pub fn user_properties_from_file(
         .and_then(Value::as_object)
         .map(|m| {
             m.iter()
-                .filter(|(k, _)| !k.starts_with("alignment"))
+                .filter(|(k, _)| !PLACEMENT.contains(&k.as_str()))
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// The `language` WE gives web pages for the settings in `config`
+/// (`<user>.general.user.language`, or Steam's language when `default`).
+pub fn web_language_from_file(config: &Path) -> Option<&'static str> {
+    let text = std::fs::read_to_string(config).ok()?;
+    let config: Value = serde_json::from_str(&text).ok()?;
+    config.as_object()?.values().find_map(|user| {
+        let settings = user.get("general")?.get("user")?;
+        let text = |k: &str| settings.get(k).and_then(Value::as_str);
+        crate::language::from_we_settings(text("language"), text("steamlanguage"))
+    })
 }
 
 fn alignment_in(config: &Value, wallpaper: &Path, monitor: usize) -> Option<Alignment> {
@@ -149,12 +171,16 @@ mod tests {
         let path = dir.join("config.json");
         std::fs::write(
             &path,
-            r#"{"Bob": {"wproperties": {"C:/W/1/scene.pkg": {"Monitor0": {"alignment": 4, "alignmentz": 99, "clock": "1", "cameraparallax": false}}}}}"#,
+            r#"{"Bob": {"wproperties": {"C:/W/1/scene.pkg": {"Monitor0": {"alignment": 4, "alignmentz": 99, "alignmentfliph": true, "clock": "1", "cameraparallax": false}}},
+                "general": {"user": {"language": "default", "steamlanguage": "german"}}}}"#,
         )
         .unwrap();
         let props = user_properties_from_file(&path, Path::new("C:/W/1"), 0);
+        let language = web_language_from_file(&path);
         std::fs::remove_dir_all(&dir).unwrap();
-        assert_eq!(props.len(), 2);
+        assert_eq!(props.len(), 3);
+        assert_eq!(props["alignmentfliph"], true);
+        assert_eq!(language, Some("de-de"));
         assert_eq!(props["clock"], "1");
         assert_eq!(props["cameraparallax"], false);
     }

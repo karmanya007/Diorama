@@ -107,6 +107,14 @@ pub fn cache_dir() -> Option<std::path::PathBuf> {
         .map(|d| d.join("lumen"))
 }
 
+/// The user's language from `LC_ALL` / `LC_MESSAGES` / `LANG` (`de_DE.UTF-8`).
+pub fn ui_language() -> Option<String> {
+    ["LC_ALL", "LC_MESSAGES", "LANG"]
+        .iter()
+        .filter_map(|k| std::env::var(k).ok())
+        .find(|v| !v.is_empty())
+}
+
 /// Fraction of the day elapsed (UTC until the Linux backend reads the time zone).
 pub fn day_fraction() -> f32 {
     let secs = std::time::SystemTime::now()

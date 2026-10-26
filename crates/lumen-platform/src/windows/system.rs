@@ -32,6 +32,17 @@ pub fn config_dir() -> Option<PathBuf> {
     std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("Lumen"))
 }
 
+/// The user's display language as a tag such as `en-US`.
+pub fn ui_language() -> Option<String> {
+    use windows::Win32::Globalization::{GetUserDefaultUILanguage, LCIDToLocaleName};
+    let mut name = [0u16; 85];
+    // SAFETY: plain queries; the buffer is LOCALE_NAME_MAX_LENGTH long.
+    let len =
+        unsafe { LCIDToLocaleName(u32::from(GetUserDefaultUILanguage()), Some(&mut name), 0) };
+    let len = usize::try_from(len).ok().filter(|&n| n > 1)?;
+    Some(String::from_utf16_lossy(&name[..len - 1]))
+}
+
 /// Fraction of the local day elapsed, 0..1 (`g_Daytime`).
 pub fn day_fraction() -> f32 {
     // SAFETY: plain query of the local wall-clock time.

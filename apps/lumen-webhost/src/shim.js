@@ -69,9 +69,50 @@
 	L.properties = (p) => {
 		state.properties = p;
 		watchLocalFiles();
+		adjust(p || {});
 		if (state.loaded) { call('applyUserProperties', p); }
 	};
 	L.general = (g) => { state.general = g; if (state.loaded) { call('applyGeneralProperties', g); } };
+
+	// WE's own options for every web wallpaper, stored with the properties:
+	// a colour filter (`wec_e` on/off; contrast, brightness, saturation as
+	// value/50; hue (value/50 - 1) * 180 degrees) and a horizontal flip.
+	// Keys left out keep their last value, like WE.
+	const filter = { on: false, con: 1, brs: 1, sa: 1, hue: 0 };
+	let flip = null;
+	function adjust(p) {
+		const num = (k) => (p[k] && typeof p[k].value === 'number' ? p[k].value : null);
+		if (p.wec_e && typeof p.wec_e.value === 'boolean') { filter.on = p.wec_e.value; }
+		for (const k of ['con', 'brs', 'sa']) {
+			const v = num('wec_' + k);
+			if (v !== null) { filter[k] = v / 50; }
+		}
+		const hue = num('wec_hue');
+		if (hue !== null) { filter.hue = (hue / 50 - 1) * 180; }
+		if (p.alignmentfliph && typeof p.alignmentfliph.value === 'boolean') { flip = p.alignmentfliph.value; }
+		applyAdjustments();
+	}
+	// Written only when they change, so a page's own filter or transform
+	// stays while the options are off.
+	const written = { filter: '', flip: null };
+	function applyAdjustments() {
+		const root = document.documentElement;
+		if (!root) { return; }
+		const css = filter.on
+			? `contrast(${filter.con}) brightness(${filter.brs}) saturate(${filter.sa}) hue-rotate(${filter.hue}deg)`
+			: '';
+		if (css !== written.filter) {
+			root.style.filter = css;
+			written.filter = css;
+		}
+		if (flip !== null && flip !== written.flip) {
+			root.style.transform = flip ? 'scaleX(-1)' : '';
+			if (flip) { root.style.overflowY = 'hidden'; }
+			written.flip = flip;
+		}
+	}
+	// The init script runs before the document exists.
+	document.addEventListener('DOMContentLoaded', applyAdjustments);
 
 	// Directory properties: `fetchall` ones tell the page which files came
 	// and went; `ondemand` ones answer wallpaperRequestRandomFileForProperty.

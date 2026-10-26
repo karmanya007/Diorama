@@ -70,6 +70,11 @@ impl WebSource {
         })
     }
 
+    /// The language WE's settings give web pages, if WE's config names one.
+    fn language(&self) -> Option<&'static str> {
+        lumen_we::config::web_language_from_file(self.we_config.as_deref()?)
+    }
+
     /// The user's property choices from Wallpaper Engine (keyed by the page).
     fn choices(&self) -> Map<String, Value> {
         self.we_config
@@ -154,6 +159,9 @@ impl WebHost {
         };
         // The first line is the user's choices (read before the page loads).
         host.send(&json!({ "properties": source.choices() }));
+        if let Some(language) = source.language() {
+            host.send(&json!({ "general": { "language": language } }));
+        }
         tracing::info!(
             page = %source.dir.join(&source.file).display(),
             network = allow_network,

@@ -17,7 +17,7 @@ mod windows;
 #[cfg(windows)]
 pub use windows::{
     MediaWatcher, Platform, SystemMonitor, Waker, WallpaperWindow, autostart, cache_dir,
-    config_dir, day_fraction, detach_console, set_autostart, set_os_wallpaper,
+    config_dir, day_fraction, detach_console, set_autostart, set_os_wallpaper, ui_language,
 };
 
 #[cfg(not(windows))]
@@ -26,7 +26,7 @@ mod unsupported;
 #[cfg(not(windows))]
 pub use unsupported::{
     MediaWatcher, Platform, SystemMonitor, Waker, WallpaperWindow, autostart, cache_dir,
-    config_dir, day_fraction, detach_console, set_autostart, set_os_wallpaper,
+    config_dir, day_fraction, detach_console, set_autostart, set_os_wallpaper, ui_language,
 };
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

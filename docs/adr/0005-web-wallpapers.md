@@ -76,5 +76,6 @@ service on `127.0.0.1`).
   WE's CEF host).
 - Per-output pause is all-or-nothing for now (the host pauses every page).
 - Per-wallpaper network permission, span layout (one page across monitors),
-  user-chosen local files in properties, and WE's own colour adjustments
-  (`wec_*`) are follow-ups.
+  user-chosen local files in properties, and WE's own options (colour
+  filter, flip, `language`; `docs/re-notes/web-adjustments.md`) followed
+  in Phase 5. Setting properties inside Lumen waits for the Phase 6 UI.
