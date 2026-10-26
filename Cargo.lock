@@ -1331,6 +1331,7 @@ dependencies = [
  "anyhow",
  "clap",
  "lumen-platform",
+ "lumen-we",
  "raw-window-handle",
  "serde_json",
  "tracing",
