@@ -157,7 +157,8 @@ impl WebHost {
             .arg("--file")
             .arg(&source.file)
             .stdin(Stdio::piped())
-            .stdout(Stdio::piped());
+            .stdout(Stdio::piped())
+            .stderr(crate::child_stderr());
         if below {
             cmd.arg("--below");
         }

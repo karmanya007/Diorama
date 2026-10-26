@@ -504,6 +504,20 @@ fn scene_fallback(dir: Option<&std::path::Path>, gpu: &Gpu, session: &Session, s
     }
 }
 
+/// Running without a console (`--background`).
+static BACKGROUND: AtomicBool = AtomicBool::new(false);
+
+/// Where child processes write errors: lumend's own stderr, except in the
+/// background, where it is no valid handle and inheriting it makes starting
+/// the child fail ("The request is not supported", os error 50).
+fn child_stderr() -> std::process::Stdio {
+    if BACKGROUND.load(Ordering::Relaxed) {
+        std::process::Stdio::null()
+    } else {
+        std::process::Stdio::inherit()
+    }
+}
+
 /// Console logging normally; with `--background`, detach from the console and
 /// append to `<config dir>/lumend.log` instead.
 fn init_logging(background: bool, config_dir: Option<&std::path::Path>) {
@@ -519,6 +533,7 @@ fn init_logging(background: bool, config_dir: Option<&std::path::Path>) {
     });
     if background {
         lumen_platform::detach_console();
+        BACKGROUND.store(true, Ordering::Relaxed);
     }
     match file {
         Some(f) => tracing_subscriber::fmt()
@@ -1338,12 +1353,21 @@ impl Daemon<'_> {
             ),
             _ => key.clone(),
         };
-        Ok(properties::effective(
+        let mut values = properties::effective(
             &dir,
             &we_key,
             self.we_config.as_deref(),
             &self.overrides_of(&key),
-        ))
+        );
+        // Scenes with camera parallax get its switch (WE's per-wallpaper
+        // option, on unless someone turned it off).
+        if kind == MediaKind::Scene
+            && !values.contains_key("cameraparallax")
+            && lumen_we::scene::uses_parallax(&key) == Some(true)
+        {
+            values.insert("cameraparallax".into(), serde_json::Value::Bool(true));
+        }
+        Ok(values)
     }
 
     fn network_allowed(&self, path: &Path) -> bool {

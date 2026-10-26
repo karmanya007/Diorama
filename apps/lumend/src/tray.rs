@@ -1,5 +1,7 @@
 //! The notification-area icon's picture and its "Open Lumen" choice.
 
+use std::process::Stdio;
+
 use anyhow::{Context, Result};
 
 /// Lumen's icon (the UI's) as `size`×`size` RGBA.
@@ -17,7 +19,12 @@ pub fn open_ui() {
     let exe = std::env::current_exe()
         .unwrap_or_default()
         .with_file_name(format!("lumen-ui{}", std::env::consts::EXE_SUFFIX));
-    if let Err(e) = std::process::Command::new(&exe).spawn() {
+    let started = std::process::Command::new(&exe)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(crate::child_stderr())
+        .spawn();
+    if let Err(e) = started {
         tracing::warn!("cannot start {}: {e}", exe.display());
     }
 }
