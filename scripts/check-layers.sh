@@ -12,6 +12,7 @@ rules=(
   "lumen-scene:lumen-assets lumen-ipc lumen-we lumen-gpu lumen-runtime lumen-render lumen-platform"
   "lumen-assets:lumen-we lumen-gpu lumen-runtime lumen-render lumen-platform"
   "lumen-ipc:lumen-we lumen-gpu lumen-runtime lumen-render lumen-platform"
+  "lumen-library:lumen-we lumen-gpu lumen-runtime lumen-render lumen-platform lumen-media"
   "lumen-we:lumen-gpu lumen-runtime lumen-render lumen-platform"
   "lumen-gpu:lumen-we lumen-runtime lumen-render lumen-platform"
   "lumen-runtime:lumen-we lumen-platform"

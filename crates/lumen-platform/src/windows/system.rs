@@ -32,6 +32,43 @@ pub fn config_dir() -> Option<PathBuf> {
     std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("Lumen"))
 }
 
+/// Steam's install folder (`HKCU\Software\Valve\Steam\SteamPath`).
+pub fn steam_dir() -> Option<PathBuf> {
+    // SAFETY: two-call RegGetValueW pattern with correctly sized buffers.
+    unsafe {
+        let (key, value) = (w!("Software\\Valve\\Steam"), w!("SteamPath"));
+        let mut len = 0u32;
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            key,
+            value,
+            RRF_RT_REG_SZ,
+            None,
+            None,
+            Some(&mut len),
+        )
+        .ok()
+        .ok()?;
+        let mut buf = vec![0u16; (len as usize).div_ceil(2)];
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            key,
+            value,
+            RRF_RT_REG_SZ,
+            None,
+            Some(buf.as_mut_ptr().cast()),
+            Some(&mut len),
+        )
+        .ok()
+        .ok()?;
+        let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+        // Stored lower-case with forward slashes; use the folder's real name.
+        let path = std::fs::canonicalize(String::from_utf16_lossy(&buf[..end])).ok()?;
+        let plain = path.to_str()?.strip_prefix(r"\\?\").map(PathBuf::from);
+        Some(plain.unwrap_or(path))
+    }
+}
+
 /// The user's display language as a tag such as `en-US`.
 pub fn ui_language() -> Option<String> {
     use windows::Win32::Globalization::{GetUserDefaultUILanguage, LCIDToLocaleName};

@@ -67,6 +67,16 @@ enum Command {
     Resume,
     /// Stop the daemon.
     Quit,
+    /// List your wallpapers: Wallpaper Engine Workshop items and projects
+    /// (found through Steam) and any folders given.
+    Library {
+        /// Also look in this folder (projects, images, videos); repeat for more.
+        #[arg(long, value_name = "DIR")]
+        folder: Vec<PathBuf>,
+        /// Print JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
     /// Start lumend automatically when you sign in (per user, no admin rights).
     Autostart {
         #[arg(value_enum)]
@@ -134,6 +144,30 @@ fn autostart(action: AutostartAction) -> Result<()> {
             None => println!("autostart disabled"),
         },
     }
+    Ok(())
+}
+
+fn library(folders: Vec<PathBuf>, json: bool) -> Result<()> {
+    let mut roots = lumen_platform::steam_dir()
+        .map(|d| lumen_library::Roots::from_steam(&d))
+        .unwrap_or_default();
+    roots.folders = folders;
+    let items = lumen_library::scan(&roots);
+    if json {
+        println!("{}", serde_json::to_string_pretty(&items)?);
+        return Ok(());
+    }
+    for i in &items {
+        println!(
+            "{:<12} {:<11} {:>8.1} MB  {}  ({})",
+            format!("{:?}", i.kind).to_lowercase(),
+            format!("{:?}", i.rating).to_lowercase(),
+            i.size as f64 / 1e6,
+            i.title,
+            i.path.display()
+        );
+    }
+    eprintln!("{} wallpapers", items.len());
     Ok(())
 }
 
@@ -207,6 +241,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::Resume => Request::Resume,
         Command::Quit => Request::Quit,
         Command::Autostart { action } => return autostart(action),
+        Command::Library { folder, json } => return library(folder, json),
     };
 
     match lumen_ipc::call(&request)? {

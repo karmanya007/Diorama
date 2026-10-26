@@ -107,6 +107,14 @@ pub fn cache_dir() -> Option<std::path::PathBuf> {
         .map(|d| d.join("lumen"))
 }
 
+/// Steam's install folder: `~/.local/share/Steam` or `~/.steam/steam`.
+pub fn steam_dir() -> Option<std::path::PathBuf> {
+    let home = std::path::PathBuf::from(std::env::var_os("HOME")?);
+    [home.join(".local/share/Steam"), home.join(".steam/steam")]
+        .into_iter()
+        .find(|p| p.is_dir())
+}
+
 /// The user's language from `LC_ALL` / `LC_MESSAGES` / `LANG` (`de_DE.UTF-8`).
 pub fn ui_language() -> Option<String> {
     ["LC_ALL", "LC_MESSAGES", "LANG"]

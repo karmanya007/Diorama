@@ -7,6 +7,7 @@ members = [
     "crates/lumen-core",
     "crates/lumen-gpu",
     "crates/lumen-ipc",
+    "crates/lumen-library",
     "crates/lumen-media",
     "crates/lumen-particles",
     "crates/lumen-platform",
@@ -31,6 +32,7 @@ publish = false
 # internal
 lumen-core = { path = "crates/lumen-core", version = "0.0.1" }
 lumen-we = { path = "crates/lumen-we", version = "0.0.1" }
+lumen-library = { path = "crates/lumen-library", version = "0.0.1" }
 lumen-gpu = { path = "crates/lumen-gpu", version = "0.0.1" }
 lumen-ipc = { path = "crates/lumen-ipc", version = "0.0.1" }
 lumen-media = { path = "crates/lumen-media", version = "0.0.1" }
