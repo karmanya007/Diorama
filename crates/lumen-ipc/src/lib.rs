@@ -197,6 +197,36 @@ impl Policy {
     }
 }
 
+/// The order a playlist moves through its wallpapers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Order {
+    #[default]
+    Sequential,
+    Shuffle,
+}
+
+/// When a playlist moves on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "kebab-case")]
+pub enum Schedule {
+    /// To the next wallpaper every `minutes`.
+    Interval { minutes: u32 },
+    /// Each wallpaper from its start time: `starts[i]` minutes after local
+    /// midnight for `items[i]`.
+    TimeOfDay { starts: Vec<u32> },
+}
+
+/// A named list of wallpapers that take turns.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Playlist {
+    pub name: String,
+    pub items: Vec<PathBuf>,
+    #[serde(default)]
+    pub order: Order,
+    pub schedule: Schedule,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "kebab-case")]
 pub enum Request {
@@ -236,6 +266,26 @@ pub enum Request {
     Volume {
         percent: u8,
     },
+    /// Add a playlist, or replace the one with its name (remembered).
+    SavePlaylist {
+        playlist: Playlist,
+    },
+    DeletePlaylist {
+        name: String,
+    },
+    /// The saved playlists.
+    Playlists,
+    /// Play a saved playlist on the monitors `outputs` (as in `Set`).
+    Play {
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outputs: Option<Vec<String>>,
+    },
+    /// Move playlists on to their next wallpaper: those on `outputs`, or all.
+    Next {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outputs: Option<Vec<String>>,
+    },
     /// When to pause and how fast scenes run (remembered).
     SetPolicy {
         policy: Policy,
@@ -264,6 +314,9 @@ pub struct OutputStatus {
     /// What this monitor shows.
     #[serde(default)]
     pub content: Option<ContentStatus>,
+    /// The playlist it plays, if any.
+    #[serde(default)]
+    pub playlist: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -295,6 +348,9 @@ pub enum Response {
     Status(Status),
     Properties {
         values: serde_json::Map<String, serde_json::Value>,
+    },
+    Playlists {
+        playlists: Vec<Playlist>,
     },
     Error {
         message: String,

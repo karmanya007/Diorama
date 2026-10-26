@@ -26,6 +26,9 @@ pub struct State {
     /// Web wallpaper folders the user let use the network.
     #[serde(default)]
     pub web_network: Vec<PathBuf>,
+    /// Named playlists.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub playlists: Vec<lumen_ipc::Playlist>,
     /// When to pause and how fast scenes run.
     #[serde(default)]
     pub policy: Option<lumen_ipc::Policy>,
@@ -49,6 +52,7 @@ impl Default for State {
             wallpaper: None,
             volume: 0,
             web_network: Vec::new(),
+            playlists: Vec::new(),
             policy: None,
             properties: Vec::new(),
         }
@@ -64,6 +68,15 @@ pub struct SavedWallpaper {
     /// Output ids it shows on; empty: every monitor no other wallpaper has.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub outputs: Vec<String>,
+    /// The playlist it came from and its position there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub playlist: Option<SavedRun>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SavedRun {
+    pub name: String,
+    pub index: usize,
 }
 
 /// Missing or unreadable state is not fatal: start empty and say why.
@@ -120,6 +133,7 @@ mod tests {
                     fit: Fit::Fill,
                     layout: Layout::Span,
                     outputs: Vec::new(),
+                    playlist: None,
                 },
                 SavedWallpaper {
                     path: PathBuf::from("C:/walls/b.png"),
@@ -127,6 +141,10 @@ mod tests {
                     fit: Fit::Fit,
                     layout: Layout::PerOutput,
                     outputs: vec!["DEL-1".into()],
+                    playlist: Some(SavedRun {
+                        name: "day".into(),
+                        index: 1,
+                    }),
                 },
             ],
             volume: 40,

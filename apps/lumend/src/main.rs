@@ -10,6 +10,7 @@
 mod clock;
 mod headless;
 mod media;
+mod playlist;
 mod policy;
 mod properties;
 mod scripts;
@@ -37,7 +38,7 @@ use lumen_platform::{Coverage, DesktopEvent, Platform};
 use crate::clock::{SceneClock, VideoClock};
 use crate::policy::{Conditions, update_pauses};
 use crate::session::{Content, Look, Session, Wallpaper};
-use lumen_ipc::{Action, Policy};
+use lumen_ipc::{Action, Playlist, Policy, Schedule};
 
 #[derive(Debug, Parser)]
 #[command(version, about)]
@@ -352,6 +353,8 @@ fn main() -> Result<()> {
         web_network: args.web_network,
         web_allowed: Vec::new(),
         overrides: Vec::new(),
+        playlists: Vec::new(),
+        rng: playlist::Rng::from_time(),
         fps: Policy::default().fps,
         we_config: we_config_path(&args),
         we_assets: args.we_assets.is_dir().then(|| args.we_assets.clone()),
@@ -399,6 +402,7 @@ fn main() -> Result<()> {
         fps: args.fps.unwrap_or(saved_policy.fps),
     };
     daemon.fps = daemon.policy.fps;
+    daemon.playlists = saved_state.playlists.clone();
     daemon.overrides = saved_state
         .properties
         .iter()
@@ -424,7 +428,18 @@ fn main() -> Result<()> {
                 layout: s.layout,
             };
             match daemon.load(&s.path, Some(s.kind), look) {
-                Ok(w) => slots.push(Slot::new(w, s.outputs, daemon.fps)),
+                Ok(w) => {
+                    let mut slot = Slot::new(w, s.outputs, daemon.fps);
+                    // Playlists carry on from where they were.
+                    slot.run = s.playlist.and_then(|r| {
+                        let list = daemon.playlists.iter().find(|p| p.name == r.name)?;
+                        Some(Run::new(
+                            list,
+                            r.index.min(list.items.len().saturating_sub(1)),
+                        ))
+                    });
+                    slots.push(slot);
+                }
                 Err(e) => tracing::error!("start-up wallpaper {}: {e:#}", s.path.display()),
             }
         }
@@ -522,6 +537,44 @@ struct Slot {
     audio_loop: Option<u32>,
     /// Fallback snapshot still to be taken from the next shown frame.
     fallback_pending: bool,
+    /// The playlist this wallpaper came from.
+    run: Option<Run>,
+}
+
+/// A playlist playing on a slot.
+struct Run {
+    name: String,
+    /// Position of the wallpaper showing.
+    index: usize,
+    /// Time-of-day playlists: the item the clock last chose (`Next` may have moved on since).
+    scheduled: Option<usize>,
+    /// When to move on (interval) or look at the clock again (time of day).
+    next: Instant,
+}
+
+/// How often time-of-day playlists look at the clock.
+const CLOCK_CHECK: Duration = Duration::from_secs(30);
+
+impl Run {
+    fn new(playlist: &Playlist, index: usize) -> Self {
+        let scheduled = match &playlist.schedule {
+            Schedule::TimeOfDay { starts } => playlist::by_time(starts, playlist::minute_of_day()),
+            Schedule::Interval { .. } => None,
+        };
+        Self {
+            name: playlist.name.clone(),
+            index,
+            scheduled,
+            next: Instant::now() + Self::wait(playlist),
+        }
+    }
+
+    fn wait(playlist: &Playlist) -> Duration {
+        match playlist.schedule {
+            Schedule::Interval { minutes } => Duration::from_secs(60 * u64::from(minutes.max(1))),
+            Schedule::TimeOfDay { .. } => CLOCK_CHECK,
+        }
+    }
 }
 
 /// What a slot's frame asks of the daemon.
@@ -547,6 +600,7 @@ impl Slot {
             audio: None,
             audio_loop: None,
             fallback_pending: false,
+            run: None,
         }
     }
 
@@ -557,6 +611,10 @@ impl Slot {
             fit: self.wallpaper.look.fit,
             layout: self.wallpaper.look.layout,
             outputs: self.claim.clone(),
+            playlist: self.run.as_ref().map(|r| state::SavedRun {
+                name: r.name.clone(),
+                index: r.index,
+            }),
         }
     }
 
@@ -783,6 +841,9 @@ struct Daemon<'p> {
     web_allowed: Vec<PathBuf>,
     /// Property values set in Lumen, per wallpaper path.
     overrides: Vec<(PathBuf, properties::Values)>,
+    /// Named playlists.
+    playlists: Vec<Playlist>,
+    rng: playlist::Rng,
 }
 
 impl Daemon<'_> {
@@ -894,6 +955,8 @@ impl Daemon<'_> {
             }
         }
 
+        self.advance_playlists(None);
+
         if Instant::now() >= self.next_audio_check {
             self.next_audio_check = Instant::now() + AUDIO_CHECK_INTERVAL;
             for slot in &mut self.slots {
@@ -907,6 +970,134 @@ impl Daemon<'_> {
             }
         }
         Ok(())
+    }
+
+    /// Moves playlists on: those whose time has come, or with `skip` those
+    /// on these monitors (all when empty).
+    fn advance_playlists(&mut self, skip: Option<&[String]>) {
+        let now = Instant::now();
+        let minute = playlist::minute_of_day();
+        let mut moves = Vec::new();
+        for (i, slot) in self.slots.iter_mut().enumerate() {
+            let Some(run) = slot.run.as_mut() else {
+                continue;
+            };
+            let Some(list) = self.playlists.iter().find(|p| p.name == run.name) else {
+                continue;
+            };
+            let target = match (skip, &list.schedule) {
+                (Some(outputs), _) => (outputs.is_empty()
+                    || slot.shown_on.iter().any(|o| outputs.contains(o)))
+                .then(|| playlist::after(list, run.index, &mut self.rng)),
+                (None, _) if now < run.next => None,
+                (None, Schedule::Interval { .. }) => {
+                    Some(playlist::after(list, run.index, &mut self.rng))
+                }
+                (None, Schedule::TimeOfDay { starts }) => {
+                    run.next = now + CLOCK_CHECK;
+                    let chosen = playlist::by_time(starts, minute);
+                    let changed = chosen != run.scheduled;
+                    run.scheduled = chosen;
+                    chosen.filter(|_| changed)
+                }
+            };
+            if let Some(index) = target {
+                moves.push((i, list.clone(), index));
+            }
+        }
+        for (i, list, index) in moves {
+            self.switch(i, &list, index);
+        }
+    }
+
+    /// Shows item `index` of `list` (or the next one that loads) on slot `i`.
+    fn switch(&mut self, i: usize, list: &Playlist, index: usize) {
+        let layout = self.slots[i].wallpaper.look.layout;
+        let n = list.items.len();
+        for k in 0..n {
+            let at = (index + k) % n;
+            let path = &list.items[at];
+            let look = Look {
+                fit: self.default_fit(path),
+                layout,
+            };
+            match self.load(path, None, look) {
+                Ok(w) => {
+                    tracing::info!(playlist = %list.name, path = %path.display(), "next wallpaper");
+                    let fps = self.fps;
+                    let slot = &mut self.slots[i];
+                    slot.wallpaper = w;
+                    slot.session = None;
+                    slot.shown_on.clear();
+                    slot.clock = VideoClock::default();
+                    slot.scene_clock = SceneClock::new(fps);
+                    if let Some(run) = slot.run.as_mut() {
+                        run.index = at;
+                        run.next = Instant::now() + Run::wait(list);
+                    }
+                    self.rebuild(false);
+                    let volume = self.volume;
+                    self.slots[i].start_audio(volume);
+                    self.persist();
+                    return;
+                }
+                Err(e) => {
+                    tracing::warn!(playlist = %list.name, "skipping {}: {e:#}", path.display())
+                }
+            }
+        }
+        // Nothing loads: keep what shows, try again later.
+        if let Some(run) = self.slots[i].run.as_mut() {
+            run.next = Instant::now() + Run::wait(list);
+        }
+    }
+
+    /// Starts the playlist `name` on the monitors `claim` (empty: all).
+    fn play(&mut self, name: &str, claim: Vec<String>) -> Result<()> {
+        let list = self
+            .playlists
+            .iter()
+            .find(|p| p.name == name)
+            .cloned()
+            .with_context(|| format!("no playlist {name}"))?;
+        anyhow::ensure!(!list.items.is_empty(), "playlist {name} is empty");
+        let first = playlist::first(&list, &mut self.rng);
+        let layout = self
+            .main_slot()
+            .map_or(Layout::PerOutput, |s| s.wallpaper.look.layout);
+        let n = list.items.len();
+        let mut last_error = None;
+        for k in 0..n {
+            let at = (first + k) % n;
+            let path = &list.items[at];
+            let look = Look {
+                fit: self.default_fit(path),
+                layout,
+            };
+            match self.load(path, None, look) {
+                Ok(w) => {
+                    let shown = self.set_wallpaper(w, claim);
+                    if let Some(slot) = self.slots.last_mut() {
+                        slot.run = Some(Run::new(&list, at));
+                    }
+                    self.persist();
+                    return shown;
+                }
+                Err(e) => {
+                    tracing::warn!(playlist = %name, "skipping {}: {e:#}", path.display());
+                    last_error = Some(e);
+                }
+            }
+        }
+        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("playlist {name} is empty")))
+    }
+
+    /// Output ids for what the user typed (`None`: all monitors).
+    fn claim(&self, outputs: Option<Vec<String>>) -> std::result::Result<Vec<String>, String> {
+        match outputs {
+            Some(names) => slots::resolve(&names, &self.platform.outputs().unwrap_or_default()),
+            None => Ok(Vec::new()),
+        }
     }
 
     /// Property values set in Lumen for the wallpaper at `path` (see
@@ -1033,6 +1224,7 @@ impl Daemon<'_> {
             wallpapers: self.slots.iter().map(Slot::saved).collect(),
             volume: self.volume,
             web_network: self.web_allowed.clone(),
+            playlists: self.playlists.clone(),
             policy: Some(self.policy),
             properties: self
                 .overrides
@@ -1188,15 +1380,9 @@ impl Daemon<'_> {
                 network,
                 outputs,
             } => {
-                let claim = match outputs {
-                    Some(names) => {
-                        let infos = self.platform.outputs().unwrap_or_default();
-                        match slots::resolve(&names, &infos) {
-                            Ok(ids) => ids,
-                            Err(message) => return Response::Error { message },
-                        }
-                    }
-                    None => Vec::new(),
+                let claim = match self.claim(outputs) {
+                    Ok(ids) => ids,
+                    Err(message) => return Response::Error { message },
                 };
                 let current = self.main_slot().map(|s| s.wallpaper.look);
                 let look = Look {
@@ -1242,6 +1428,48 @@ impl Daemon<'_> {
                 self.persist();
                 Response::Ok
             }
+            Request::SavePlaylist { playlist } => {
+                if playlist.name.trim().is_empty() {
+                    return Response::Error {
+                        message: "a playlist needs a name".into(),
+                    };
+                }
+                if let Schedule::TimeOfDay { starts } = &playlist.schedule
+                    && starts.len() != playlist.items.len()
+                {
+                    return Response::Error {
+                        message: "a time-of-day playlist needs one start time per wallpaper".into(),
+                    };
+                }
+                self.playlists.retain(|p| p.name != playlist.name);
+                self.playlists.push(playlist);
+                self.persist();
+                Response::Ok
+            }
+            Request::DeletePlaylist { name } => {
+                self.playlists.retain(|p| p.name != name);
+                for slot in &mut self.slots {
+                    if slot.run.as_ref().is_some_and(|r| r.name == name) {
+                        slot.run = None;
+                    }
+                }
+                self.persist();
+                Response::Ok
+            }
+            Request::Playlists => Response::Playlists {
+                playlists: self.playlists.clone(),
+            },
+            Request::Play { name, outputs } => match self.claim(outputs) {
+                Ok(claim) => ok_or_error(self.play(&name, claim)),
+                Err(message) => Response::Error { message },
+            },
+            Request::Next { outputs } => match self.claim(outputs) {
+                Ok(ids) => {
+                    self.advance_playlists(Some(&ids));
+                    Response::Ok
+                }
+                Err(message) => Response::Error { message },
+            },
             Request::SetPolicy { policy } => {
                 self.policy = Policy {
                     fps: policy.fps.clamp(1, 240),
@@ -1275,12 +1503,14 @@ impl Daemon<'_> {
                 continue;
             };
             for o in &session.outputs {
-                outputs.push(output_status(
+                let mut status = output_status(
                     o.info.clone(),
                     o.paused,
                     o.coverage,
                     Some(slot.content_status()),
-                ));
+                );
+                status.playlist = slot.run.as_ref().map(|r| r.name.clone());
+                outputs.push(status);
             }
         }
         for info in self.platform.outputs().unwrap_or_default() {
@@ -1320,5 +1550,6 @@ fn output_status(
         paused,
         coverage: format!("{coverage:?}").to_lowercase(),
         content,
+        playlist: None,
     }
 }

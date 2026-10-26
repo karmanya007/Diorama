@@ -5,7 +5,9 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
-use lumen_ipc::{Action, Fit, Layout, MediaKind, Policy, Request, Response};
+use lumen_ipc::{
+    Action, Fit, Layout, MediaKind, Order, Playlist, Policy, Request, Response, Schedule,
+};
 
 #[derive(Debug, Parser)]
 #[command(version, about)]
@@ -61,6 +63,24 @@ enum Command {
         #[arg(value_parser = clap::value_parser!(u8).range(0..=100))]
         percent: u8,
     },
+    /// Manage playlists (wallpapers that take turns).
+    Playlist {
+        #[command(subcommand)]
+        action: PlaylistAction,
+    },
+    /// Play a saved playlist.
+    Play {
+        name: String,
+        /// Only on this monitor; repeat for more. Default: all monitors.
+        #[arg(long = "output", value_name = "MONITOR")]
+        outputs: Vec<String>,
+    },
+    /// Move playlists on to their next wallpaper.
+    Next {
+        /// Only the playlist on this monitor; repeat for more.
+        #[arg(long = "output", value_name = "MONITOR")]
+        outputs: Vec<String>,
+    },
     /// Show or change when wallpapers pause and how fast scenes run
     /// (remembered). Presets: balanced, quality, gaming, battery.
     Policy {
@@ -99,6 +119,30 @@ enum Command {
         #[arg(value_enum)]
         action: AutostartAction,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum PlaylistAction {
+    /// List the saved playlists.
+    List,
+    /// Save a playlist (replacing one with the same name).
+    Save {
+        name: String,
+        /// Wallpapers (folders or files), in order.
+        #[arg(required = true)]
+        items: Vec<PathBuf>,
+        /// Minutes per wallpaper.
+        #[arg(long, default_value_t = 30, conflicts_with = "at")]
+        every: u32,
+        /// Play in random order.
+        #[arg(long, conflicts_with = "at")]
+        shuffle: bool,
+        /// Time of day (HH:MM) each wallpaper starts, one per wallpaper.
+        #[arg(long, value_name = "HH:MM")]
+        at: Vec<String>,
+    },
+    /// Delete a playlist.
+    Delete { name: String },
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -177,6 +221,16 @@ fn autostart(action: AutostartAction) -> Result<()> {
         },
     }
     Ok(())
+}
+
+/// `HH:MM` → minutes after midnight.
+fn minutes(time: &str) -> Result<u32> {
+    let (h, m) = time
+        .split_once(':')
+        .with_context(|| format!("expected HH:MM, got {time}"))?;
+    let (h, m): (u32, u32) = (h.trim().parse()?, m.trim().parse()?);
+    anyhow::ensure!(h < 24 && m < 60, "no such time {time}");
+    Ok(h * 60 + m)
 }
 
 fn print_policy(p: &Policy) {
@@ -284,6 +338,54 @@ fn run(cli: Cli) -> Result<()> {
         Command::Quit => Request::Quit,
         Command::Autostart { action } => return autostart(action),
         Command::Library { folder, json } => return library(folder, json),
+        Command::Playlist { action } => match action {
+            PlaylistAction::List => Request::Playlists,
+            PlaylistAction::Delete { name } => Request::DeletePlaylist { name },
+            PlaylistAction::Save {
+                name,
+                items,
+                every,
+                shuffle,
+                at,
+            } => {
+                let items = items
+                    .iter()
+                    .map(std::path::absolute)
+                    .collect::<std::io::Result<Vec<_>>>()?;
+                let schedule = if at.is_empty() {
+                    Schedule::Interval { minutes: every }
+                } else {
+                    if at.len() != items.len() {
+                        bail!(
+                            "give one --at time per wallpaper ({} wallpapers)",
+                            items.len()
+                        );
+                    }
+                    Schedule::TimeOfDay {
+                        starts: at.iter().map(|t| minutes(t)).collect::<Result<_>>()?,
+                    }
+                };
+                Request::SavePlaylist {
+                    playlist: Playlist {
+                        name,
+                        items,
+                        order: if shuffle {
+                            Order::Shuffle
+                        } else {
+                            Order::Sequential
+                        },
+                        schedule,
+                    },
+                }
+            }
+        },
+        Command::Play { name, outputs } => Request::Play {
+            name,
+            outputs: (!outputs.is_empty()).then_some(outputs),
+        },
+        Command::Next { outputs } => Request::Next {
+            outputs: (!outputs.is_empty()).then_some(outputs),
+        },
         Command::Policy {
             preset,
             on_fullscreen,
@@ -326,6 +428,36 @@ fn run(cli: Cli) -> Result<()> {
     match lumen_ipc::call(&request)? {
         Response::Ok => Ok(()),
         Response::Error { message } => bail!("{message}"),
+        Response::Playlists { playlists } => {
+            if playlists.is_empty() {
+                println!("no playlists (`lumen playlist save <name> <wallpapers…>`)");
+            }
+            for p in &playlists {
+                let how = match &p.schedule {
+                    Schedule::Interval { minutes } => format!(
+                        "every {minutes} min{}",
+                        if p.order == Order::Shuffle {
+                            ", shuffled"
+                        } else {
+                            ""
+                        }
+                    ),
+                    Schedule::TimeOfDay { .. } => "by time of day".to_owned(),
+                };
+                println!("{}  ({} wallpapers, {how})", p.name, p.items.len());
+                for (i, item) in p.items.iter().enumerate() {
+                    let at = match &p.schedule {
+                        Schedule::TimeOfDay { starts } => starts
+                            .get(i)
+                            .map(|m| format!("{:02}:{:02}  ", m / 60, m % 60))
+                            .unwrap_or_default(),
+                        Schedule::Interval { .. } => String::new(),
+                    };
+                    println!("    {at}{}", item.display());
+                }
+            }
+            Ok(())
+        }
         Response::Properties { values } => {
             for (name, value) in &values {
                 println!("{name} = {value}");
@@ -365,6 +497,9 @@ fn run(cli: Cli) -> Result<()> {
                 if verbose {
                     println!("    id   {}", o.id);
                 }
+                if let Some(p) = &o.playlist {
+                    println!("    playlist {p}");
+                }
                 // Per monitor when monitors differ (or on request).
                 if (verbose || status.outputs.iter().any(|x| x.content != status.content))
                     && let Some(c) = &o.content
@@ -401,5 +536,13 @@ mod tests {
         assert_eq!(c["color"], "1 0 0");
         assert!(c["old"].is_null());
         assert!(changes(&["nope".into()], &[]).is_err());
+    }
+
+    #[test]
+    fn times_of_day() {
+        assert_eq!(minutes("07:30").unwrap(), 450);
+        assert_eq!(minutes("0:00").unwrap(), 0);
+        assert!(minutes("24:00").is_err());
+        assert!(minutes("noon").is_err());
     }
 }
