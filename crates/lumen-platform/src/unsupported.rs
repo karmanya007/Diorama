@@ -168,6 +168,19 @@ impl MediaWatcher {
 
 /// Uninhabited until a non-Windows backend exists.
 #[derive(Debug)]
+pub enum ProcessMonitor {}
+
+impl ProcessMonitor {
+    pub fn new() -> Result<Self> {
+        Err(crate::Error::Unsupported)
+    }
+    pub fn sample(&mut self, _processes: &[u32], _trees: &[u32]) -> crate::ProcessLoad {
+        match *self {}
+    }
+}
+
+/// Uninhabited until a non-Windows backend exists.
+#[derive(Debug)]
 pub enum SystemMonitor {}
 
 impl SystemMonitor {

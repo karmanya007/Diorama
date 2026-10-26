@@ -98,6 +98,9 @@ enum Command {
         #[arg(long, value_parser = clap::value_parser!(u32).range(1..=240))]
         fps: Option<u32>,
     },
+    /// What showing each wallpaper has cost (measured while it played
+    /// alone), heaviest first.
+    Costs,
     /// Pause every monitor until `lumen resume`.
     Pause,
     /// Undo `lumen pause` (automatic pause rules still apply).
@@ -383,6 +386,7 @@ fn run(cli: Cli) -> Result<()> {
             name,
             outputs: (!outputs.is_empty()).then_some(outputs),
         },
+        Command::Costs => Request::Costs,
         Command::Next { outputs } => Request::Next {
             outputs: (!outputs.is_empty()).then_some(outputs),
         },
@@ -455,6 +459,30 @@ fn run(cli: Cli) -> Result<()> {
                     };
                     println!("    {at}{}", item.display());
                 }
+            }
+            Ok(())
+        }
+        Response::Costs { mut costs } => {
+            if costs.is_empty() {
+                println!("nothing measured yet (costs are measured while a wallpaper plays alone)");
+            }
+            costs.sort_by(|a, b| (b.gpu + b.cpu).total_cmp(&(a.gpu + a.cpu)));
+            for c in &costs {
+                let fps = if c.fps > 0 {
+                    format!(", {} fps", c.fps)
+                } else {
+                    String::new()
+                };
+                println!(
+                    "{:5.1}% GPU {:5.1}% CPU {:5} MB video memory {:5} MB memory  {}  ({:.1} MP{fps}, {} min)",
+                    c.gpu,
+                    c.cpu,
+                    c.vram_mb,
+                    c.ram_mb,
+                    c.path.display(),
+                    c.pixels as f64 / 1e6,
+                    c.seconds / 60
+                );
             }
             Ok(())
         }

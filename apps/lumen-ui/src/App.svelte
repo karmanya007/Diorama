@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  import { app, refreshStatus, scan, attempt } from './lib/state.svelte.js';
+  import { app, refreshStatus, refreshCosts, scan, attempt } from './lib/state.svelte.js';
   import * as api from './lib/api.js';
   import Library from './lib/Library.svelte';
   import Monitors from './lib/Monitors.svelte';
@@ -19,10 +19,14 @@
   onMount(() => {
     (async () => {
       await refreshStatus();
-      await scan();
+      await Promise.all([scan(), refreshCosts()]);
     })();
     const timer = setInterval(refreshStatus, 3000);
-    return () => clearInterval(timer);
+    const costTimer = setInterval(refreshCosts, 30000);
+    return () => {
+      clearInterval(timer);
+      clearInterval(costTimer);
+    };
   });
 
   const paused = $derived(app.status?.user_paused ?? false);

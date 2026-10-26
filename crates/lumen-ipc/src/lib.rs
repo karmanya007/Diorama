@@ -317,10 +317,31 @@ pub enum Request {
     SetPolicy {
         policy: Policy,
     },
+    /// What showing each wallpaper has cost, as measured so far.
+    Costs,
     /// Pause all outputs regardless of policy until `Resume`.
     Pause,
     Resume,
     Quit,
+}
+
+/// What showing a wallpaper costs (P12): Lumen's load (daemon, web hosts and
+/// their browser processes) averaged while it played alone, on `pixels`
+/// pixels of monitors at a scene frame rate cap of `fps`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Cost {
+    pub path: PathBuf,
+    /// Percent of all processors.
+    pub cpu: f32,
+    /// Percent of the busiest GPU engine.
+    pub gpu: f32,
+    /// Dedicated video memory and memory (working sets), in MiB.
+    pub vram_mb: u32,
+    pub ram_mb: u32,
+    pub pixels: u64,
+    pub fps: u32,
+    /// How long it was measured.
+    pub seconds: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -381,6 +402,9 @@ pub enum Response {
     },
     Playlists {
         playlists: Vec<Playlist>,
+    },
+    Costs {
+        costs: Vec<Cost>,
     },
     Error {
         message: String,

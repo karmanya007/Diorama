@@ -16,9 +16,9 @@ mod windows;
 
 #[cfg(windows)]
 pub use windows::{
-    MediaWatcher, Platform, SystemMonitor, Waker, WallpaperWindow, autostart, cache_dir,
-    config_dir, day_fraction, detach_console, no_console, set_autostart, set_os_wallpaper,
-    steam_dir, ui_language,
+    MediaWatcher, Platform, ProcessMonitor, SystemMonitor, Waker, WallpaperWindow, autostart,
+    cache_dir, config_dir, day_fraction, detach_console, no_console, set_autostart,
+    set_os_wallpaper, steam_dir, ui_language,
 };
 
 #[cfg(not(windows))]
@@ -26,9 +26,9 @@ mod unsupported;
 
 #[cfg(not(windows))]
 pub use unsupported::{
-    MediaWatcher, Platform, SystemMonitor, Waker, WallpaperWindow, autostart, cache_dir,
-    config_dir, day_fraction, detach_console, no_console, set_autostart, set_os_wallpaper,
-    steam_dir, ui_language,
+    MediaWatcher, Platform, ProcessMonitor, SystemMonitor, Waker, WallpaperWindow, autostart,
+    cache_dir, config_dir, day_fraction, detach_console, no_console, set_autostart,
+    set_os_wallpaper, steam_dir, ui_language,
 };
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -79,6 +79,19 @@ pub enum MediaPlayback {
     Stopped,
     Playing,
     Paused,
+}
+
+/// Load of a group of processes (see `ProcessMonitor`).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct ProcessLoad {
+    /// Percent of all processors.
+    pub cpu: f32,
+    /// Percent: their busiest GPU engine.
+    pub gpu: f32,
+    /// Dedicated video memory and working sets, in bytes.
+    pub vram: u64,
+    pub ram: u64,
+    pub processes: u32,
 }
 
 /// One reading of the machine's load (for wallpapers that show it).

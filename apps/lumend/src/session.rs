@@ -597,6 +597,14 @@ impl Session {
         }
     }
 
+    /// Process id of the web wallpaper host, if this session shows one.
+    pub fn web_pid(&self) -> Option<u32> {
+        match &self.renderer {
+            Renderer::Web(host) => host.pid(),
+            _ => None,
+        }
+    }
+
     /// The web wallpaper host, if this session shows one.
     pub fn web(&mut self) -> Option<&mut crate::web::WebHost> {
         match &mut self.renderer {

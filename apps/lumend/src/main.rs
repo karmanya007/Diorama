@@ -8,6 +8,7 @@
 //! or the GPU is lost (P11). Video never opens an audio device (P10).
 
 mod clock;
+mod costs;
 mod headless;
 mod media;
 mod playlist;
@@ -369,6 +370,7 @@ fn main() -> Result<()> {
         reset_gpu: false,
         lost_adapter: None,
         quit: false,
+        costs: costs::Costs::load(lumen_platform::cache_dir().as_deref()),
     };
 
     let start_path = args
@@ -474,6 +476,7 @@ fn main() -> Result<()> {
     {
         daemon.tick(&jobs)?;
     }
+    daemon.costs.save();
     drop(daemon);
     tracing::info!("exiting");
     Ok(())
@@ -883,6 +886,8 @@ struct Daemon<'p> {
     /// The GPU that was lost and when (for [`SAME_ADAPTER_GRACE`]).
     lost_adapter: Option<(AdapterKey, Instant)>,
     quit: bool,
+    /// What each wallpaper costs to show, measured as it plays.
+    costs: costs::Costs,
     config_dir: Option<PathBuf>,
     os_fallback: bool,
     /// Soundtrack volume 0–100; 0 means no audio player at all.
@@ -914,7 +919,13 @@ impl Daemon<'_> {
             .map(Slot::wait)
             .min()
             .unwrap_or(Duration::from_secs(1));
-        let wait = content_wait.min(self.next_coverage.saturating_duration_since(Instant::now()));
+        let wait = content_wait
+            .min(self.next_coverage.saturating_duration_since(Instant::now()))
+            .min(
+                self.costs
+                    .next_sample()
+                    .saturating_duration_since(Instant::now()),
+            );
         let events = self.platform.poll_events(wait);
         if let Some(gpu) = &self.gpu {
             gpu.maintain();
@@ -1018,6 +1029,14 @@ impl Daemon<'_> {
                 }
             }
         }
+
+        let showing = self.showing_alone();
+        let hosts: Vec<u32> = self
+            .slots
+            .iter()
+            .filter_map(|s| s.session.as_ref()?.web_pid())
+            .collect();
+        self.costs.sample(showing, &[std::process::id()], &hosts);
 
         // Replaced wallpapers go once every new one has drawn (or in time).
         if !self.retiring.is_empty() {
@@ -1472,6 +1491,45 @@ impl Daemon<'_> {
     }
 
     /// The wallpaper on the primary monitor (else the first).
+    /// The wallpaper playing alone on every monitor that shows anything
+    /// (what its cost is measured on).
+    fn showing_alone(&self) -> Option<costs::Showing> {
+        if !self.retiring.is_empty() {
+            return None;
+        }
+        let mut showing: Option<costs::Showing> = None;
+        for slot in &self.slots {
+            let Some(session) = &slot.session else {
+                continue;
+            };
+            if !slot.shown || session.outputs.iter().any(|o| o.paused) {
+                return None;
+            }
+            let pixels: u64 = session
+                .outputs
+                .iter()
+                .map(|o| u64::from(o.info.width) * u64::from(o.info.height))
+                .sum();
+            match &mut showing {
+                None => {
+                    showing = Some(costs::Showing {
+                        path: slot.wallpaper.path.clone(),
+                        pixels,
+                        // Only scenes run at the policy's frame rate.
+                        fps: if slot.wallpaper.kind == MediaKind::Scene {
+                            self.fps
+                        } else {
+                            0
+                        },
+                    });
+                }
+                Some(s) if s.path == slot.wallpaper.path => s.pixels += pixels,
+                Some(_) => return None,
+            }
+        }
+        showing
+    }
+
     fn tray_state(&self) -> TrayState {
         TrayState {
             paused: self.conditions.user_paused,
@@ -1593,6 +1651,9 @@ impl Daemon<'_> {
             }
             Request::Playlists => Response::Playlists {
                 playlists: self.playlists.clone(),
+            },
+            Request::Costs => Response::Costs {
+                costs: self.costs.list(),
             },
             Request::Play { name, outputs } => match self.claim(outputs) {
                 Ok(claim) => ok_or_error(self.play(&name, claim)),

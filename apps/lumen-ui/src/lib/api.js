@@ -13,6 +13,7 @@ export async function call(request) {
 }
 
 export const status = () => call({ cmd: 'status' });
+export const costs = async () => (await call({ cmd: 'costs' })).costs;
 export const library = (folders) => invoke('library', { folders });
 export const presets = () => invoke('presets');
 export const autostart = () => invoke('autostart');

@@ -152,7 +152,7 @@ impl Drop for SystemMonitor {
     }
 }
 
-fn pdh(call: &'static str, status: u32) -> Result<()> {
+pub(super) fn pdh(call: &'static str, status: u32) -> Result<()> {
     if status == 0 {
         Ok(())
     } else {
@@ -165,7 +165,7 @@ fn pdh(call: &'static str, status: u32) -> Result<()> {
 
 /// (instance name, value) for every instance of a wildcard counter; empty
 /// while the counter has no data yet.
-fn counter_array(counter: PDH_HCOUNTER) -> Vec<(String, f64)> {
+pub(super) fn counter_array(counter: PDH_HCOUNTER) -> Vec<(String, f64)> {
     let (mut bytes, mut count) = (0u32, 0u32);
     // SAFETY: the first call sizes the buffer, the second fills it; item
     // names point into the same buffer, read before it is dropped.

@@ -1,5 +1,5 @@
 <script>
-  import { app, scan } from './state.svelte.js';
+  import { app, scan, costOf, weight } from './state.svelte.js';
   import Preview from './Preview.svelte';
 
   const KINDS = [
@@ -9,7 +9,7 @@
     { id: 'web', label: 'Web' },
     { id: 'image', label: 'Images' },
   ];
-  const SORTS = { name: 'Name', modified: 'Recently changed', size: 'Size on disk' };
+  const SORTS = { name: 'Name', modified: 'Recently changed', size: 'Size on disk', light: 'Lightest first' };
 
   let query = $state('');
   let kind = $state('all');
@@ -47,6 +47,12 @@
       name: (a, b) => a.title.localeCompare(b.title),
       modified: (a, b) => b.modified - a.modified,
       size: (a, b) => b.size - a.size,
+      // Measured ones by load, then the rest by name.
+      light: (a, b) => {
+        const [x, y] = [costOf(a), costOf(b)];
+        if (x && y) return x.gpu + x.cpu - (y.gpu + y.cpu);
+        return x ? -1 : y ? 1 : a.title.localeCompare(b.title);
+      },
     }[sort];
     return list.sort(by);
   });
@@ -133,6 +139,10 @@
         <Preview path={item.preview} live={hovered === item.path} alt="" />
         <span class="kind">{item.kind}</span>
         {#if isPlaying(item)}<span class="live">Showing</span>{/if}
+        {#if costOf(item)}
+          {@const w = weight(costOf(item))}
+          <span class="cost {w}" title="Measured while it played: {costOf(item).gpu.toFixed(0)}% GPU, {costOf(item).cpu.toFixed(0)}% CPU">{w}</span>
+        {/if}
       </div>
       <div class="name">{item.title}</div>
     </div>
@@ -253,6 +263,37 @@
 
   .kind {
     left: 8px;
+  }
+
+  .cost {
+    position: absolute;
+    left: 8px;
+    bottom: 8px;
+    padding: 1px 7px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: capitalize;
+    background: rgba(10, 8, 20, 0.62);
+    color: #fff;
+  }
+
+  .cost::before {
+    content: '';
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    margin-right: 5px;
+    border-radius: 50%;
+    background: var(--ok);
+  }
+
+  .cost.moderate::before {
+    background: var(--warn);
+  }
+
+  .cost.heavy::before {
+    background: var(--danger);
   }
 
   .live {

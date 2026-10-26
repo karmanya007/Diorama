@@ -233,6 +233,10 @@ impl WebHost {
         }
     }
 
+    pub fn pid(&self) -> Option<u32> {
+        self.child.as_ref().map(Child::id)
+    }
+
     /// Whether the host process is still running.
     pub fn alive(&mut self) -> bool {
         self.child

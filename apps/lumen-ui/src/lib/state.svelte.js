@@ -7,6 +7,8 @@ export const app = $state({
   /** Why lumend cannot be reached, if it cannot. */
   offline: '',
   items: [],
+  /** What showing each wallpaper has cost (lumend measures it, P12). */
+  costs: [],
   scanning: false,
   /** The library item shown in the details panel. */
   selected: null,
@@ -43,6 +45,14 @@ export async function refreshStatus() {
   }
 }
 
+export async function refreshCosts() {
+  try {
+    app.costs = await api.costs();
+  } catch {
+    // Older daemon or offline: nothing measured to show.
+  }
+}
+
 export async function scan() {
   app.scanning = true;
   try {
@@ -65,6 +75,19 @@ export function itemFor(path) {
     app.items.find((i) => p.startsWith(norm(i.path) + '/')) ??
     null
   );
+}
+
+/** The measured cost of a library item, or null. */
+export function costOf(item) {
+  const p = norm(item.path);
+  return app.costs.find((c) => norm(c.path) === p || norm(c.path).startsWith(p + '/')) ?? null;
+}
+
+/** 'light', 'moderate' or 'heavy': how much showing it loads the machine. */
+export function weight(cost) {
+  if (cost.gpu >= 30 || cost.cpu >= 10) return 'heavy';
+  if (cost.gpu >= 10 || cost.cpu >= 4) return 'moderate';
+  return 'light';
 }
 
 /** A monitor's short name. */

@@ -1,10 +1,11 @@
 <script>
-  import { app, attempt, refreshStatus, toast, monitorName } from './state.svelte.js';
+  import { app, attempt, refreshStatus, toast, monitorName, costOf, weight } from './state.svelte.js';
   import * as api from './api.js';
   import Preview from './Preview.svelte';
   import Properties from './Properties.svelte';
 
   const item = $derived(app.selected);
+  const cost = $derived(item ? costOf(item) : null);
   const outputs = $derived(app.status?.outputs ?? []);
   let fit = $state('');
   let layout = $state('per-output');
@@ -79,6 +80,21 @@
     {/if}
     {#if item.description}
       <p class="desc">{plain(item.description)}</p>
+    {/if}
+    {#if cost}
+      <p class="cost">
+        <span class="dot {weight(cost)}"></span>
+        <span>
+          <strong>{weight(cost)[0].toUpperCase() + weight(cost).slice(1)}</strong>:
+          {cost.gpu.toFixed(1)}% GPU, {cost.cpu.toFixed(1)}% CPU, {cost.vram_mb} MB video memory,
+          {cost.ram_mb} MB memory
+          <span class="muted">
+            (measured {Math.max(1, Math.round(cost.seconds / 60))} min on {(cost.pixels / 1e6).toFixed(1)} megapixels{cost.fps
+              ? ` at ${cost.fps} fps`
+              : ''})
+          </span>
+        </span>
+      </p>
     {/if}
 
     <h3>Show on</h3>
@@ -213,5 +229,29 @@
 
   select {
     min-width: 0;
+  }
+
+  .cost {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    margin: 0;
+    font-size: 13px;
+  }
+
+  .dot {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--ok);
+  }
+
+  .dot.moderate {
+    background: var(--warn);
+  }
+
+  .dot.heavy {
+    background: var(--danger);
   }
 </style>
