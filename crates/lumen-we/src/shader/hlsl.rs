@@ -43,12 +43,16 @@ const PRELUDE: &str = r"#define vec2 float2
 #define CAST4U(x) ((uint4)(x))
 #define CAST4(x) ((float4)(x))
 #define CAST3X3(x) ((float3x3)(x))
-#define DECLARE_SAMPLER2D_PARAMETER(t) Texture2D t, SamplerState t ## SamplerState
-#define MAKE_SAMPLER2D_ARGUMENT(t) t, t ## SamplerState
-#define texSample2D(s, u) s.Sample(s ## SamplerState, u)
-#define texSample2DLod(s, u, m) s.SampleLevel(s ## SamplerState, u, m)
+// `LUMEN_SS(s)` expands `s` before pasting, so a sampler aliased by a
+// macro (`#define g_NormalMapSampler g_Texture1`) finds its sampler state.
+#define LUMEN_PASTE_SS(s) s ## SamplerState
+#define LUMEN_SS(s) LUMEN_PASTE_SS(s)
+#define DECLARE_SAMPLER2D_PARAMETER(t) Texture2D t, SamplerState LUMEN_SS(t)
+#define MAKE_SAMPLER2D_ARGUMENT(t) t, LUMEN_SS(t)
+#define texSample2D(s, u) s.Sample(LUMEN_SS(s), u)
+#define texSample2DLod(s, u, m) s.SampleLevel(LUMEN_SS(s), u, m)
 #define texLoad2D(s, u, r) s.Load(int3((u) * (r), 0))
-#define texSample3D(s, u) s.Sample(s ## SamplerState, u)
+#define texSample3D(s, u) s.Sample(LUMEN_SS(s), u)
 #define texSample2DBackBuffer(s, u, r) texSample2D(s, (u))
 ";
 

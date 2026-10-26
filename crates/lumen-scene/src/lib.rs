@@ -17,7 +17,10 @@ pub mod particles;
 pub mod puppet;
 pub mod space;
 pub use particles::ParticleSystem;
-pub use space::{Camera, IDENTITY_MAT4, Mat4, affine_mat4, mat4_mul, node_world_mat4};
+pub use space::{
+    Camera, CameraKey, CameraShot, IDENTITY_MAT4, Mat4, affine_mat4, camera_on_path, mat4_mul,
+    node_world_mat4,
+};
 
 /// Index into [`Scene::textures`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -35,6 +38,8 @@ pub struct Scene {
     /// Perspective scenes: the camera (layers are then placed by
     /// [`ImageLayer::world`] in 3D world units).
     pub camera: Option<Camera>,
+    /// The camera's path, if it moves along one (older WE scenes).
+    pub camera_paths: Vec<CameraShot>,
     /// `general.zoom` of an orthographic scene: the camera zooms about the
     /// scene centre (`None` = 1). Capture 914 of 3195058405 (zoom 1.05):
     /// layer sizes and their distances from the centre both scale by 1.05,
@@ -458,6 +463,8 @@ pub struct ModelVertex {
     /// xyz + handedness.
     pub tangent: [f32; 4],
     pub uv: [f32; 2],
+    /// Lightmap coordinates (zero when the mesh has none).
+    pub uv2: [f32; 2],
 }
 
 /// Which faces a model hides (WE `cullmode`).

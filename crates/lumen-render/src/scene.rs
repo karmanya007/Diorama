@@ -156,6 +156,8 @@ struct GpuPass {
     /// Placement and camera of a pass drawn into the scene or a group target
     /// (moved by parallax each frame); `None` for passes into layer targets.
     placement: Option<(Rows, Rows)>,
+    /// Drawn with the scene camera (follows it along a camera path).
+    scene_camera: bool,
     /// Indexed draw (models): `vertex_count` is then the index count.
     indices: Option<wgpu::Buffer>,
     /// Draws with the scene depth buffer (models).
@@ -223,6 +225,12 @@ pub struct SceneRenderer {
     last_time: Option<f32>,
     /// Scene pixels (world units in perspective scenes) → clip space.
     camera: Rows,
+    /// Perspective scenes on a camera path: the camera, its path, the output
+    /// size (aspect) and whether it moved this frame.
+    scene_camera: Option<ir::Camera>,
+    camera_paths: Vec<ir::CameraShot>,
+    output_size: [u32; 2],
+    camera_moved: bool,
     /// `g_EyePosition` of perspective scenes.
     eye: Option<[f32; 3]>,
     /// Camera right, up and backward axes in world space (perspective
@@ -577,6 +585,10 @@ impl SceneRenderer {
             point_light_colors: point_light_colors(&scene.point_lights),
             last_time: None,
             camera: camera_rows(scene, output),
+            scene_camera: scene.camera.filter(|c| c.node.is_none()),
+            camera_paths: scene.camera_paths.clone(),
+            output_size: output,
+            camera_moved: false,
             eye: scene.camera.map(|c| c.view(&scene.nodes).1),
             camera_axes: scene.camera.and_then(|c| {
                 let world = lumen_scene::space::invert_mat4(c.view(&scene.nodes).0)?;
@@ -1682,6 +1694,23 @@ impl SceneRenderer {
                 .collect();
             layout.write(buf, "g_LPoint_Origin", &origins);
             layout.write(buf, "g_LPoint_Color", &self.point_light_colors);
+            // Older shaders (WE's `generic`): four lights as positions and
+            // colour × intensity with radius. Unused slots are far, black and
+            // of radius 1 (a zero radius divides by zero in the falloff).
+            let slot = |i: usize| lights.get(i);
+            let positions: Vec<f32> = (0..4)
+                .flat_map(|i| slot(i).map_or([1e6; 3], |l| l.origin))
+                .collect();
+            let color_radius: Vec<f32> = (0..4)
+                .flat_map(|i| {
+                    slot(i).map_or([0.0, 0.0, 0.0, 1.0], |l| {
+                        let [r, g, b] = l.color.map(|c| c * l.intensity);
+                        [r, g, b, l.radius.max(1e-3)]
+                    })
+                })
+                .collect();
+            layout.write(buf, "g_LightsPosition", &positions);
+            layout.write(buf, "g_LightsColorRadius", &color_radius);
             let tubes = &ctx.scene.tube_lights;
             let pack = |f: fn(&ir::TubeLight) -> [f32; 4]| -> Vec<f32> {
                 tubes.iter().flat_map(f).collect()
@@ -1853,6 +1882,7 @@ impl SceneRenderer {
                 Geometry::Direct { model, camera, .. } => Some((model, camera)),
                 _ => None,
             },
+            scene_camera: matches!(plan.geometry, Geometry::Direct { camera, .. } if camera == self.camera),
             indices,
             depth,
             dirty: false,
@@ -1942,7 +1972,29 @@ fn read_target(gpu: &Gpu, target: &Target) -> Option<Vec<u8>> {
 }
 
 impl SceneRenderer {
+    /// Moves the camera along its path for `time`.
+    fn follow_camera_path(&mut self, time: f32) {
+        self.camera_moved = false;
+        let Some(camera) = self.scene_camera else {
+            return;
+        };
+        let Some(moved) = ir::camera_on_path(&camera, &self.camera_paths, time) else {
+            return;
+        };
+        let (view, eye) = moved.view(&[]);
+        let [w, h] = self.output_size;
+        let rows = mat_mul(view, moved.projection(w as f32 / h.max(1) as f32));
+        if rows != self.camera {
+            self.camera = rows;
+            self.eye = Some(eye);
+            self.camera_axes = lumen_scene::space::invert_mat4(view)
+                .map(|world| std::array::from_fn(|r| [world[r][0], world[r][1], world[r][2]]));
+            self.camera_moved = true;
+        }
+    }
+
     fn render_impl(&mut self, gpu: &Gpu, inputs: &FrameInputs) {
+        self.follow_camera_path(inputs.time);
         let mut encoder = gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -2224,12 +2276,24 @@ impl SceneRenderer {
             (&program.fs_uniforms, &mut pass.fs_data, &pass.fs_buffer),
         ] {
             let mut dirty = layout.write(buf, "g_Time", &[inputs.time]);
-            if let (true, Some((base, camera))) = (moved, pass.placement) {
+            let follow = self.camera_moved && pass.scene_camera;
+            if let (true, Some((base, camera))) = (moved || follow, pass.placement) {
+                let camera = if pass.scene_camera {
+                    self.camera
+                } else {
+                    camera
+                };
                 let model = offset_transform(base, offset);
                 let mvp = upload_matrix(mat_mul(model, camera));
                 dirty |= layout.write(buf, "g_ModelViewProjectionMatrix", &mvp);
                 dirty |= layout.write(buf, "g_ModelMatrix", &upload_matrix(model));
                 dirty |= layout.write(buf, "g_NormalModelMatrix", &normal_matrix(model));
+                if follow {
+                    dirty |= layout.write(buf, "g_ViewProjectionMatrix", &upload_matrix(camera));
+                    if let Some(eye) = self.eye {
+                        dirty |= layout.write(buf, "g_EyePosition", &eye);
+                    }
+                }
             }
             dirty |= layout.write(buf, "g_Daytime", &[inputs.daytime]);
             dirty |= layout.write(buf, "g_LPoint_Color", &self.point_light_colors);
@@ -2478,6 +2542,8 @@ fn model_vertices(attributes: &[ir::Attribute], model: &ir::Model) -> Vec<f32> {
                 "a_Normal" => [nx, ny, nz, 0.0],
                 "a_Tangent4" | "a_Tangent" => v.tangent,
                 "a_TexCoord" => [v.uv[0], v.uv[1], 0.0, 0.0],
+                // Lightmapped materials: uv and lightmap uv in one vec4.
+                "a_TexCoordVec4" => [v.uv[0], v.uv[1], v.uv2[0], v.uv2[1]],
                 "a_Color" | "a_Color4u" => [1.0; 4],
                 _ => [0.0; 4],
             };

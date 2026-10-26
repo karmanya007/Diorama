@@ -419,6 +419,41 @@ impl Importer<'_> {
                 near: num("nearz", 0.01),
                 far: num("farz", 10000.0),
             });
+            // `camera.paths`: files of shots the camera flies through.
+            for file in camera["paths"].as_array().into_iter().flatten() {
+                let Some(path) = file.as_str() else { continue };
+                let Ok(json) = self.vfs.read_json(path) else {
+                    self.skip(format!("camera path {path}"));
+                    continue;
+                };
+                for shot in json["paths"].as_array().into_iter().flatten() {
+                    let keys = shot["transforms"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .map(|k| lumen_scene::CameraKey {
+                            time: k
+                                .get("timestamp")
+                                .and_then(floats)
+                                .and_then(|v| v.first().copied())
+                                .unwrap_or(0.0),
+                            eye: vec_n(k.get("eye"), [0.0, 0.0, 1.0]),
+                            center: vec_n(k.get("center"), [0.0; 3]),
+                            up: vec_n(k.get("up"), [0.0, 1.0, 0.0]),
+                        })
+                        .collect::<Vec<_>>();
+                    let duration = shot
+                        .get("duration")
+                        .and_then(floats)
+                        .and_then(|v| v.first().copied())
+                        .unwrap_or(0.0);
+                    if !keys.is_empty() && duration > 0.0 {
+                        self.scene
+                            .camera_paths
+                            .push(lumen_scene::CameraShot { duration, keys });
+                    }
+                }
+            }
         }
         if boolean(general.get("cameraparallax"), false) {
             let num = |k: &str, d: f32| {
@@ -527,6 +562,7 @@ impl Importer<'_> {
                         normal: v.normal,
                         tangent: v.tangent,
                         uv: v.uv,
+                        uv2: v.uv2,
                     })
                     .collect(),
                 indices: sub.indices,
@@ -851,7 +887,8 @@ impl Importer<'_> {
         let origin = [transform[4], transform[5], z];
         let (radius, exponent) = (number("radius", 1000.0), number("exponent", 1.0));
         match kind {
-            "lpoint" => {
+            // `point`: the same light in older scenes (WE's own Arsenal, Demon Core).
+            "lpoint" | "point" => {
                 let index = self.scene.point_lights.len();
                 self.scene.point_lights.push(lumen_scene::PointLight {
                     origin,

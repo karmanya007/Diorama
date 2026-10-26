@@ -186,6 +186,63 @@ pub struct Camera {
     pub far: f32,
 }
 
+/// One shot of a camera path (WE `camera.paths`): the camera moves through
+/// its keys over `duration` seconds; shots play one after another, looping.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CameraShot {
+    pub duration: f32,
+    pub keys: Vec<CameraKey>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CameraKey {
+    /// Seconds into the shot.
+    pub time: f32,
+    pub eye: [f32; 3],
+    pub center: [f32; 3],
+    pub up: [f32; 3],
+}
+
+/// `camera` placed on its path at `time` (shots in order, looping; linear
+/// between keys). `None` without a path.
+pub fn camera_on_path(camera: &Camera, shots: &[CameraShot], time: f32) -> Option<Camera> {
+    let total: f32 = shots.iter().map(|s| s.duration.max(0.0)).sum();
+    if total <= 0.0 {
+        return None;
+    }
+    let mut t = time.rem_euclid(total);
+    let shot = shots.iter().find(|s| {
+        if t < s.duration {
+            return true;
+        }
+        t -= s.duration.max(0.0);
+        false
+    })?;
+    let keys = &shot.keys;
+    let first = keys.first()?;
+    let after = keys.iter().position(|k| k.time > t);
+    let (eye, center, up) = match after {
+        Some(0) | None if keys.len() == 1 => (first.eye, first.center, first.up),
+        Some(0) => (first.eye, first.center, first.up),
+        None => {
+            let last = keys[keys.len() - 1];
+            (last.eye, last.center, last.up)
+        }
+        Some(i) => {
+            let (a, b) = (keys[i - 1], keys[i]);
+            let f = ((t - a.time) / (b.time - a.time).max(1e-6)).clamp(0.0, 1.0);
+            let mix = |x: [f32; 3], y: [f32; 3]| [0, 1, 2].map(|j| x[j] + (y[j] - x[j]) * f);
+            (mix(a.eye, b.eye), mix(a.center, b.center), mix(a.up, b.up))
+        }
+    };
+    Some(Camera {
+        eye,
+        center,
+        up,
+        ..*camera
+    })
+}
+
 fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
@@ -248,6 +305,45 @@ impl Camera {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cameras_follow_their_path_shot_by_shot() {
+        let camera = Camera {
+            node: None,
+            eye: [0.0; 3],
+            center: [0.0, 0.0, -1.0],
+            up: [0.0, 1.0, 0.0],
+            fov: 50.0,
+            near: 0.01,
+            far: 100.0,
+        };
+        let key = |time: f32, x: f32| CameraKey {
+            time,
+            eye: [x, 0.0, 0.0],
+            center: [x, 0.0, -1.0],
+            up: [0.0, 1.0, 0.0],
+        };
+        let shots = [
+            CameraShot {
+                duration: 10.0,
+                keys: vec![key(0.0, 0.0), key(10.0, 10.0)],
+            },
+            CameraShot {
+                duration: 5.0,
+                keys: vec![key(0.0, 100.0), key(5.0, 110.0)],
+            },
+        ];
+        let x = |t: f32| camera_on_path(&camera, &shots, t).unwrap().eye[0];
+        assert!((x(5.0) - 5.0).abs() < 1e-4, "halfway through shot 1");
+        assert!((x(12.5) - 105.0).abs() < 1e-4, "halfway through shot 2");
+        assert!((x(17.5) - 2.5).abs() < 1e-4, "loops");
+        assert_eq!(
+            camera_on_path(&camera, &shots, 1.0).unwrap().fov,
+            50.0,
+            "keeps the lens"
+        );
+        assert!(camera_on_path(&camera, &[], 1.0).is_none());
+    }
 
     fn close(a: Mat4, b: Mat4) -> bool {
         a.iter()
