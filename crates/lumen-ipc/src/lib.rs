@@ -133,6 +133,18 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         outputs: Option<Vec<String>>,
     },
+    /// Change property values of a wallpaper (remembered): name → value;
+    /// `null` returns a property to WE's choice or the project default.
+    /// Showing wallpapers update at once.
+    SetProperties {
+        path: PathBuf,
+        properties: serde_json::Map<String, serde_json::Value>,
+    },
+    /// A wallpaper's property values as Lumen applies them: the project's
+    /// defaults, then WE's choices, then those set in Lumen.
+    Properties {
+        path: PathBuf,
+    },
     /// Video soundtrack volume, 0–100 (0 = muted, no audio device opened).
     Volume {
         percent: u8,
@@ -188,7 +200,12 @@ pub struct ContentStatus {
 pub enum Response {
     Ok,
     Status(Status),
-    Error { message: String },
+    Properties {
+        values: serde_json::Map<String, serde_json::Value>,
+    },
+    Error {
+        message: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -43,7 +43,8 @@ pub enum Content {
 pub struct SceneSource {
     dir: PathBuf,
     we_assets: Option<PathBuf>,
-    we_config: Option<PathBuf>,
+    /// Property values: WE's choices and the user's overrides.
+    choices: crate::properties::Values,
     imported: std::cell::RefCell<Option<Box<lumen_scene::Scene>>>,
 }
 
@@ -55,7 +56,7 @@ impl SceneSource {
             None => Ok(Box::new(crate::headless::load_scene(
                 &self.dir,
                 self.we_assets.as_deref(),
-                self.we_config.as_deref(),
+                &self.choices,
             )?)),
         }
     }
@@ -69,6 +70,16 @@ pub struct Wallpaper {
     pub content: Content,
 }
 
+/// The path a wallpaper is known by (and its overrides kept under): the
+/// project folder for scenes and web pages, else the file.
+pub fn wallpaper_path(path: &Path, kind: Option<MediaKind>) -> Option<PathBuf> {
+    Some(match kind.or_else(|| MediaKind::from_path(path))? {
+        MediaKind::Scene => scene_dir(path),
+        MediaKind::Web if !path.is_dir() => path.parent()?.to_path_buf(),
+        _ => path.to_path_buf(),
+    })
+}
+
 /// A scene project folder from the folder itself or one of its files.
 fn scene_dir(path: &Path) -> PathBuf {
     if path.is_dir() {
@@ -80,12 +91,14 @@ fn scene_dir(path: &Path) -> PathBuf {
 }
 
 impl Wallpaper {
+    /// `overrides`: property values chosen in Lumen, over WE's choices.
     pub fn load(
         path: &Path,
         kind: Option<MediaKind>,
         look: Look,
         we_assets: Option<&Path>,
         we_config: Option<&Path>,
+        overrides: &crate::properties::Values,
     ) -> Result<Self> {
         let kind = kind
             .or_else(|| MediaKind::from_path(path))
@@ -95,7 +108,7 @@ impl Wallpaper {
             _ => path.to_path_buf(),
         };
         if kind == MediaKind::Web {
-            let source = crate::web::WebSource::new(path, we_config)?;
+            let source = crate::web::WebSource::new(path, we_config, overrides.clone())?;
             return Ok(Self {
                 path: source.dir.clone(),
                 kind,
@@ -114,14 +127,16 @@ impl Wallpaper {
             ),
             // Import now so a broken scene is reported by `lumen set`.
             MediaKind::Web => unreachable!("handled above"),
-            MediaKind::Scene => Content::Scene(SceneSource {
-                dir: path.to_path_buf(),
-                we_assets: we_assets.map(Path::to_path_buf),
-                we_config: we_config.map(Path::to_path_buf),
-                imported: std::cell::RefCell::new(Some(Box::new(crate::headless::load_scene(
-                    path, we_assets, we_config,
-                )?))),
-            }),
+            MediaKind::Scene => {
+                let choices = crate::properties::choices(we_config, path, overrides);
+                let scene = crate::headless::load_scene(path, we_assets, &choices)?;
+                Content::Scene(SceneSource {
+                    dir: path.to_path_buf(),
+                    we_assets: we_assets.map(Path::to_path_buf),
+                    choices,
+                    imported: std::cell::RefCell::new(Some(Box::new(scene))),
+                })
+            }
         };
         Ok(Self {
             path: path.to_path_buf(),
@@ -363,7 +378,7 @@ impl Session {
                 let factory = crate::headless::layer_factory(
                     &source.dir,
                     source.we_assets.as_deref(),
-                    source.we_config.as_deref(),
+                    &source.choices,
                     &scene,
                 )
                 .map(|f| (f, compiler.clone()));

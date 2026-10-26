@@ -1215,6 +1215,7 @@ dependencies = [
  "clap",
  "lumen-ipc",
  "lumen-platform",
+ "serde_json",
 ]
 
 [[package]]

@@ -15,6 +15,7 @@ anyhow.workspace = true
 clap.workspace = true
 lumen-ipc.workspace = true
 lumen-platform.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

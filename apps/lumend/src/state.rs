@@ -26,6 +26,16 @@ pub struct State {
     /// Web wallpaper folders the user let use the network.
     #[serde(default)]
     pub web_network: Vec<PathBuf>,
+    /// Property values set in Lumen, per wallpaper.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub properties: Vec<SavedProperties>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SavedProperties {
+    /// The wallpaper's folder (scenes, web pages) or file.
+    pub path: PathBuf,
+    pub values: crate::properties::Values,
 }
 
 impl Default for State {
@@ -36,6 +46,7 @@ impl Default for State {
             wallpaper: None,
             volume: 0,
             web_network: Vec::new(),
+            properties: Vec::new(),
         }
     }
 }
@@ -116,6 +127,10 @@ mod tests {
             ],
             volume: 40,
             web_network: vec![PathBuf::from("C:/web/clock")],
+            properties: vec![SavedProperties {
+                path: PathBuf::from("C:/web/clock"),
+                values: [("speed".to_owned(), serde_json::json!(3))].into(),
+            }],
             ..State::default()
         };
         save(&dir, &state).unwrap();

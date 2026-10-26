@@ -26,7 +26,7 @@ pub fn shader_compiler() -> Result<ShaderCompiler> {
 pub fn layer_factory(
     dir: &Path,
     assets: Option<&Path>,
-    we_config: Option<&Path>,
+    choices: &crate::properties::Values,
     scene: &lumen_scene::Scene,
 ) -> Option<lumen_we::scene::LayerFactory> {
     if !scene
@@ -36,31 +36,25 @@ pub fn layer_factory(
     {
         return None;
     }
-    let choices = we_config
-        .map(|c| lumen_we::config::user_properties_from_file(c, dir, 0))
-        .unwrap_or_default();
-    lumen_we::scene::LayerFactory::new(dir, assets, &Limits::default(), &choices, scene)
+    lumen_we::scene::LayerFactory::new(dir, assets, &Limits::default(), choices, scene)
         .inspect_err(|e| tracing::warn!("scripts cannot create layers: {e}"))
         .ok()
 }
 
-/// Imports a WE scene with the user's own WE choices (`we_config`) applied.
+/// Imports a WE scene with the user's property `choices` applied.
 pub fn load_scene(
     dir: &Path,
     assets: Option<&Path>,
-    we_config: Option<&Path>,
+    choices: &crate::properties::Values,
 ) -> Result<lumen_scene::Scene> {
     let started = Instant::now();
-    let choices = we_config
-        .map(|c| lumen_we::config::user_properties_from_file(c, dir, 0))
-        .unwrap_or_default();
     if !choices.is_empty() {
         tracing::info!(
             count = choices.len(),
-            "applying the wallpaper's WE property choices"
+            "applying the wallpaper's property choices"
         );
     }
-    let mut scene = lumen_we::scene::import_with_choices(dir, assets, &Limits::default(), &choices)
+    let mut scene = lumen_we::scene::import_with_choices(dir, assets, &Limits::default(), choices)
         .with_context(|| format!("importing {}", dir.display()))?;
     // Debugging aid: `LUMEN_HIDE_LAYERS` / `LUMEN_ONLY_LAYERS` (comma-separated
     // layer indices or name fragments) drop some layers / all others.
@@ -170,7 +164,8 @@ pub fn render_to_png(
         dump_targets,
         present,
     } = *request;
-    let scene = load_scene(scene_dir, assets, we_config)?;
+    let choices = crate::properties::choices(we_config, scene_dir, &Default::default());
+    let scene = load_scene(scene_dir, assets, &choices)?;
     let gpu = Gpu::new(gpu_options)?;
     let compiler = shader_compiler()?;
     let started = Instant::now();
@@ -182,8 +177,7 @@ pub fn render_to_png(
     });
     let mut renderer = SceneRenderer::new(&gpu, &scene, &compiler, output)?;
     tracing::info!(ms = started.elapsed().as_millis(), "scene renderer built");
-    let factory =
-        layer_factory(scene_dir, assets, we_config, &scene).map(|f| (f, compiler.clone()));
+    let factory = layer_factory(scene_dir, assets, &choices, &scene).map(|f| (f, compiler.clone()));
     // Run scripts from the scene's start (up to a minute back) at 30 fps:
     // scripts that ease, integrate or count frames end where they would have
     // while playing (3509243656 spins its sky by 3°/s of runtime). They load

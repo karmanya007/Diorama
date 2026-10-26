@@ -36,11 +36,17 @@ pub struct WebSource {
     /// Page relative to `dir`.
     pub file: String,
     pub we_config: Option<PathBuf>,
+    /// Property values chosen in Lumen, over WE's choices.
+    pub overrides: crate::properties::Values,
 }
 
 impl WebSource {
     /// From a project folder, its `project.json`, or an HTML page.
-    pub fn new(path: &Path, we_config: Option<&Path>) -> Result<Self> {
+    pub fn new(
+        path: &Path,
+        we_config: Option<&Path>,
+        overrides: crate::properties::Values,
+    ) -> Result<Self> {
         let (dir, file) = if path.is_dir() {
             (path.to_path_buf(), None)
         } else {
@@ -67,6 +73,7 @@ impl WebSource {
             dir,
             file,
             we_config: we_config.map(Path::to_path_buf),
+            overrides,
         })
     }
 
@@ -75,14 +82,15 @@ impl WebSource {
         lumen_we::config::web_language_from_file(self.we_config.as_deref()?)
     }
 
-    /// The user's property choices from Wallpaper Engine (keyed by the page).
-    fn choices(&self) -> Map<String, Value> {
-        self.we_config
-            .as_deref()
-            .map(|c| lumen_we::config::user_properties_from_file(c, &self.dir.join(&self.file), 0))
-            .unwrap_or_default()
-            .into_iter()
-            .collect()
+    /// The user's property choices: WE's (keyed by the page), then Lumen's.
+    pub fn choices(&self) -> Map<String, Value> {
+        crate::properties::choices(
+            self.we_config.as_deref(),
+            &self.dir.join(&self.file),
+            &self.overrides,
+        )
+        .into_iter()
+        .collect()
     }
 }
 
@@ -219,6 +227,11 @@ impl WebHost {
         } else {
             Snapshot::Pending
         }
+    }
+
+    /// New property values for the page (`applyUserProperties`).
+    pub fn set_properties(&mut self, choices: Map<String, Value>) {
+        self.send(&json!({ "properties": choices }));
     }
 
     /// `(output id, paused)` for every output: pages on covered monitors
@@ -397,15 +410,20 @@ mod tests {
         .unwrap();
         std::fs::write(dir.join("page.html"), "<p>").unwrap();
         std::fs::write(dir.join("other.html"), "<p>").unwrap();
-        assert_eq!(WebSource::new(&dir, None).unwrap().file, "page.html");
         assert_eq!(
-            WebSource::new(&dir.join("project.json"), None)
+            WebSource::new(&dir, None, Default::default()).unwrap().file,
+            "page.html"
+        );
+        assert_eq!(
+            WebSource::new(&dir.join("project.json"), None, Default::default())
                 .unwrap()
                 .file,
             "page.html"
         );
         assert_eq!(
-            WebSource::new(&dir.join("other.html"), None).unwrap().file,
+            WebSource::new(&dir.join("other.html"), None, Default::default())
+                .unwrap()
+                .file,
             "other.html"
         );
         std::fs::write(
@@ -413,7 +431,7 @@ mod tests {
             r#"{"type": "web", "file": "gone.html"}"#,
         )
         .unwrap();
-        assert!(WebSource::new(&dir, None).is_err());
+        assert!(WebSource::new(&dir, None, Default::default()).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

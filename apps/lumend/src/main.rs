@@ -11,6 +11,7 @@ mod clock;
 mod headless;
 mod media;
 mod policy;
+mod properties;
 mod scripts;
 mod session;
 mod slots;
@@ -338,6 +339,7 @@ fn main() -> Result<()> {
         next_audio_check: Instant::now() + AUDIO_CHECK_INTERVAL,
         web_network: args.web_network,
         web_allowed: Vec::new(),
+        overrides: Vec::new(),
         fps: args.fps,
         we_config: we_config_path(&args),
         we_assets: args.we_assets.is_dir().then(|| args.we_assets.clone()),
@@ -371,17 +373,13 @@ fn main() -> Result<()> {
     let saved_state = config_dir.as_deref().map(state::load).unwrap_or_default();
     daemon.volume = args.volume.unwrap_or(saved_state.volume).min(100);
     daemon.web_allowed = saved_state.web_network.clone();
-    let load = |path: &Path, kind: Option<MediaKind>, look: Look| {
-        Wallpaper::load(
-            path,
-            kind,
-            look,
-            daemon.we_assets.as_deref(),
-            daemon.we_config.as_deref(),
-        )
-    };
+    daemon.overrides = saved_state
+        .properties
+        .iter()
+        .map(|p| (p.path.clone(), p.values.clone()))
+        .collect();
     if let Some(path) = start_path {
-        match load(path, None, look) {
+        match daemon.load(path, None, look) {
             Ok(w) => {
                 if let Err(e) = daemon.set_wallpaper(w, Vec::new()) {
                     tracing::warn!("{e:#}");
@@ -399,7 +397,7 @@ fn main() -> Result<()> {
                 fit: s.fit,
                 layout: s.layout,
             };
-            match load(&s.path, Some(s.kind), look) {
+            match daemon.load(&s.path, Some(s.kind), look) {
                 Ok(w) => slots.push(Slot::new(w, s.outputs, args.fps)),
                 Err(e) => tracing::error!("start-up wallpaper {}: {e:#}", s.path.display()),
             }
@@ -757,6 +755,8 @@ struct Daemon<'p> {
     /// Web wallpaper folders allowed to use the network (`lumen set
     /// --allow-network`), remembered in the state file.
     web_allowed: Vec<PathBuf>,
+    /// Property values set in Lumen, per wallpaper path.
+    overrides: Vec<(PathBuf, properties::Values)>,
 }
 
 impl Daemon<'_> {
@@ -883,6 +883,109 @@ impl Daemon<'_> {
         Ok(())
     }
 
+    /// Property values set in Lumen for the wallpaper at `path` (see
+    /// [`session::wallpaper_path`]).
+    fn overrides_of(&self, path: &Path) -> properties::Values {
+        self.overrides
+            .iter()
+            .find(|(p, _)| same_path(p, path))
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default()
+    }
+
+    /// Loads a wallpaper with its property overrides.
+    fn load(&self, path: &Path, kind: Option<MediaKind>, look: Look) -> Result<Wallpaper> {
+        let overrides = session::wallpaper_path(path, kind)
+            .map(|p| self.overrides_of(&p))
+            .unwrap_or_default();
+        Wallpaper::load(
+            path,
+            kind,
+            look,
+            self.we_assets.as_deref(),
+            self.we_config.as_deref(),
+            &overrides,
+        )
+    }
+
+    /// Changes property values of a wallpaper; those showing it update.
+    fn set_properties(
+        &mut self,
+        path: &Path,
+        changes: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<()> {
+        let key = session::wallpaper_path(path, None)
+            .with_context(|| format!("unknown media type for {}", path.display()))?;
+        let mut values = self.overrides_of(&key);
+        properties::merge(&mut values, changes);
+        self.overrides.retain(|(p, _)| !same_path(p, &key));
+        if !values.is_empty() {
+            self.overrides.push((key.clone(), values.clone()));
+        }
+        self.persist();
+        // Pages hear the new values; scenes are imported again.
+        let mut reload = Vec::new();
+        for (i, slot) in self.slots.iter_mut().enumerate() {
+            if !same_path(&slot.wallpaper.path, &key) {
+                continue;
+            }
+            match &mut slot.wallpaper.content {
+                Content::Web(source) => {
+                    source.overrides = values.clone();
+                    let choices = source.choices();
+                    if let Some(web) = slot.session.as_mut().and_then(Session::web) {
+                        web.set_properties(choices);
+                    }
+                }
+                Content::Scene(_) => reload.push(i),
+                Content::Image(_) | Content::Video(_) => {}
+            }
+        }
+        for &i in &reload {
+            let (path, kind, look) = {
+                let w = &self.slots[i].wallpaper;
+                (w.path.clone(), w.kind, w.look)
+            };
+            let wallpaper = self.load(&path, Some(kind), look)?;
+            let slot = &mut self.slots[i];
+            slot.wallpaper = wallpaper;
+            slot.session = None;
+            slot.shown_on.clear();
+        }
+        if !reload.is_empty() {
+            self.rebuild(false);
+        }
+        Ok(())
+    }
+
+    /// A wallpaper's property values as it sees them.
+    fn properties(&self, path: &Path) -> Result<properties::Values> {
+        let kind = MediaKind::from_path(path)
+            .with_context(|| format!("unknown media type for {}", path.display()))?;
+        let key = session::wallpaper_path(path, Some(kind))
+            .with_context(|| format!("unknown media type for {}", path.display()))?;
+        let dir = if key.is_dir() {
+            key.clone()
+        } else {
+            key.parent().map(Path::to_path_buf).unwrap_or_default()
+        };
+        // WE keeps web pages' choices under the page itself.
+        let we_key = match kind {
+            MediaKind::Web => dir.join(
+                properties::project(&dir)["file"]
+                    .as_str()
+                    .unwrap_or("index.html"),
+            ),
+            _ => key.clone(),
+        };
+        Ok(properties::effective(
+            &dir,
+            &we_key,
+            self.we_config.as_deref(),
+            &self.overrides_of(&key),
+        ))
+    }
+
     fn network_allowed(&self, path: &Path) -> bool {
         self.web_allowed.iter().any(|p| same_path(p, path))
     }
@@ -904,6 +1007,14 @@ impl Daemon<'_> {
             wallpapers: self.slots.iter().map(Slot::saved).collect(),
             volume: self.volume,
             web_network: self.web_allowed.clone(),
+            properties: self
+                .overrides
+                .iter()
+                .map(|(path, values)| state::SavedProperties {
+                    path: path.clone(),
+                    values: values.clone(),
+                })
+                .collect(),
             ..state::State::default()
         };
         if let Err(e) = state::save(dir, &state) {
@@ -1070,22 +1181,24 @@ impl Daemon<'_> {
                         .or(current.map(|l| l.layout))
                         .unwrap_or(Layout::PerOutput),
                 };
-                ok_or_error(
-                    Wallpaper::load(
-                        &path,
-                        kind,
-                        look,
-                        self.we_assets.as_deref(),
-                        self.we_config.as_deref(),
-                    )
-                    .and_then(|w| {
-                        if let Some(allow) = network {
-                            self.set_network_allowed(&w.path, allow);
-                        }
-                        self.set_wallpaper(w, claim)
-                    }),
-                )
+                ok_or_error(self.load(&path, kind, look).and_then(|w| {
+                    if let Some(allow) = network {
+                        self.set_network_allowed(&w.path, allow);
+                    }
+                    self.set_wallpaper(w, claim)
+                }))
             }
+            Request::SetProperties { path, properties } => {
+                ok_or_error(self.set_properties(&path, &properties))
+            }
+            Request::Properties { path } => match self.properties(&path) {
+                Ok(values) => Response::Properties {
+                    values: values.into_iter().collect(),
+                },
+                Err(e) => Response::Error {
+                    message: format!("{e:#}"),
+                },
+            },
             Request::Volume { percent } => {
                 self.volume = percent.min(100);
                 for slot in &mut self.slots {

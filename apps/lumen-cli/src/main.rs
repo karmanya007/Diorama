@@ -43,6 +43,19 @@ enum Command {
         #[arg(long = "output", value_name = "MONITOR")]
         outputs: Vec<String>,
     },
+    /// Show a wallpaper's properties, or change them (remembered; showing
+    /// wallpapers update at once).
+    Props {
+        /// The wallpaper (folder or file).
+        path: PathBuf,
+        /// `name=value` to set; the value is JSON (`5`, `true`, `"text"`) or
+        /// else taken as text.
+        #[arg(value_name = "NAME=VALUE")]
+        set: Vec<String>,
+        /// Return this property to WE's choice or the project default; repeat for more.
+        #[arg(long, value_name = "NAME")]
+        reset: Vec<String>,
+    },
     /// Video soundtrack volume, 0–100 (0 mutes and closes the audio device).
     Volume {
         #[arg(value_parser = clap::value_parser!(u8).range(0..=100))]
@@ -124,6 +137,23 @@ fn autostart(action: AutostartAction) -> Result<()> {
     Ok(())
 }
 
+/// `name=value` settings and names to reset as one change set.
+fn changes(set: &[String], reset: &[String]) -> Result<serde_json::Map<String, serde_json::Value>> {
+    let mut out = serde_json::Map::new();
+    for item in set {
+        let Some((name, value)) = item.split_once('=') else {
+            bail!("expected NAME=VALUE, got {item}");
+        };
+        let value = serde_json::from_str(value)
+            .unwrap_or_else(|_| serde_json::Value::String(value.to_owned()));
+        out.insert(name.trim().to_owned(), value);
+    }
+    for name in reset {
+        out.insert(name.clone(), serde_json::Value::Null);
+    }
+    Ok(out)
+}
+
 fn run(cli: Cli) -> Result<()> {
     let verbose = matches!(cli.command, Command::Status { verbose: true });
     let request = match cli.command {
@@ -161,6 +191,17 @@ fn run(cli: Cli) -> Result<()> {
                 LayoutArg::Span => Layout::Span,
             }),
         },
+        Command::Props { path, set, reset } => {
+            let path = std::path::absolute(&path)?;
+            if set.is_empty() && reset.is_empty() {
+                Request::Properties { path }
+            } else {
+                Request::SetProperties {
+                    path,
+                    properties: changes(&set, &reset)?,
+                }
+            }
+        }
         Command::Volume { percent } => Request::Volume { percent },
         Command::Pause => Request::Pause,
         Command::Resume => Request::Resume,
@@ -171,6 +212,12 @@ fn run(cli: Cli) -> Result<()> {
     match lumen_ipc::call(&request)? {
         Response::Ok => Ok(()),
         Response::Error { message } => bail!("{message}"),
+        Response::Properties { values } => {
+            for (name, value) in &values {
+                println!("{name} = {value}");
+            }
+            Ok(())
+        }
         Response::Status(status) => {
             match &status.content {
                 Some(c) => println!(
@@ -215,5 +262,30 @@ fn run(cli: Cli) -> Result<()> {
             }
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn property_changes_parse_json_or_text() {
+        let c = changes(
+            &[
+                "speed=5".into(),
+                "on=true".into(),
+                "title=hello world".into(),
+                "color=\"1 0 0\"".into(),
+            ],
+            &["old".into()],
+        )
+        .unwrap();
+        assert_eq!(c["speed"], 5);
+        assert_eq!(c["on"], true);
+        assert_eq!(c["title"], "hello world");
+        assert_eq!(c["color"], "1 0 0");
+        assert!(c["old"].is_null());
+        assert!(changes(&["nope".into()], &[]).is_err());
     }
 }
