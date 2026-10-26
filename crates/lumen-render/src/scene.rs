@@ -1281,8 +1281,18 @@ impl SceneRenderer {
             layer.size
         };
         let ping = [
-            self.alloc_target(device, &format!("{} a", layer.name), target_size, &mut owned),
-            self.alloc_target(device, &format!("{} b", layer.name), target_size, &mut owned),
+            self.alloc_target(
+                device,
+                &format!("{} a", layer.name),
+                target_size,
+                &mut owned,
+            ),
+            self.alloc_target(
+                device,
+                &format!("{} b", layer.name),
+                target_size,
+                &mut owned,
+            ),
         ];
         let mut current = ping[0];
 
