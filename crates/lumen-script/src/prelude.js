@@ -505,7 +505,13 @@
 			this.control = {
 				get frameCount() { return self.length; },
 				get rate() { return self.rate; }, set rate(r) { self.rate = Number(r) || 0; },
-				play() { if (!self.playing) { self.startedAt = engine.runtime - self.held; self.playing = true; } },
+				play() {
+					if (self.playing) return;
+					// A play-once animation that has ended starts over (a jump played per click).
+					if (self.mode === 'single' && self.held * self.fps * self.rate >= self.length) self.held = 0;
+					self.startedAt = engine.runtime - self.held;
+					self.playing = true;
+				},
 				pause() { if (self.playing) { self.held = self.time(); self.playing = false; } },
 				stop() { self.playing = false; self.held = 0; },
 				isPlaying() { return self.playing; },
@@ -607,6 +613,11 @@
 			} catch (e) { fail(s, handler, e); }
 		}
 	}
+	const CURSOR = ['cursorEnter', 'cursorLeave', 'cursorMove', 'cursorDown', 'cursorUp', 'cursorClick'];
+	function listens(node) {
+		return scripts.some((s) => s.node === node && !s.disabled && s.ns
+			&& CURSOR.some((h) => typeof s.ns[h] === 'function'));
+	}
 	// Events for every script (media integration …).
 	function revive(v) {
 		if (v && typeof v === 'object' && Array.isArray(v.vec3)) return vec3(v.vec3);
@@ -627,7 +638,17 @@
 			for (const s of soundByNode.values()) if (s.i < state.sounds.length) s.playing = !!state.sounds[s.i];
 		}
 		fillAudio(state.audio);
-		const hits = new Map((state.hits || []).map((h) => [h[0], [h[1], h[2]]]));
+		// Only the topmost layer under the cursor that listens to the cursor
+		// gets its events: dragging the front window of two overlapping ones
+		// moves that one only (Pixel Desktop). Layers without cursor scripts
+		// let events through.
+		const rank = new Map(objects.map((o, i) => [o.__n, i]));
+		let top = null;
+		for (const h of state.hits || []) {
+			if (!listens(h[0])) continue;
+			if (top === null || (rank.get(h[0]) ?? -1) > (rank.get(top[0]) ?? -1)) top = h;
+		}
+		const hits = new Map(top ? [[top[0], [top[1], top[2]]]] : []);
 		const moved = lastCursor !== cx + ',' + cy;
 		lastCursor = cx + ',' + cy;
 		for (const [n, local] of hovered) if (!hits.has(n)) dispatch(n, 'cursorLeave', world, local);

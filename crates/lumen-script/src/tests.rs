@@ -273,6 +273,34 @@ fn scripts_start_paused_animations() {
 }
 
 #[test]
+fn finished_single_animations_play_again() {
+    // Pixel Desktop's chicken jumps by playing a single animation per click.
+    let replay = script(
+        "let done = false; export function update(v) { if (engine.runtime >= 2 && !done) { done = true; thisLayer.getAnimation().play(); } return v; }",
+        1,
+        ScriptTarget::Other("x".into()),
+        "{}",
+    );
+    let mut s = scene(vec![replay]);
+    s.animations = vec![animation(
+        &RAMP.replace("MODE", "single"),
+        ScriptTarget::Origin(1),
+    )];
+    let mut host = ScriptHost::new(&s, [100, 100], CLOCK).unwrap().unwrap();
+    let mut x = 0.0;
+    for t in [0.0, 1.2, 2.0, 2.5] {
+        if let Some(tr) = host.update(&inputs(t)).get(&1).and_then(|c| c.transform) {
+            x = tr[4];
+        }
+        if t == 1.2 {
+            assert!((x - 15.0).abs() < 1e-3, "held at the end: {x}");
+        }
+    }
+    // Started over at 2 s: half way at 2.5 s.
+    assert!((x - 10.0).abs() < 1e-3, "{x}");
+}
+
+#[test]
 fn clicks_reach_the_layer_under_the_cursor() {
     let button = script(
         "export function cursorClick(event) { thisScene.getLayer('clock').text = 'clicked ' + event.localPosition.x; }",
@@ -296,6 +324,41 @@ fn clicks_reach_the_layer_under_the_cursor() {
     // Pressed on the layer, released outside it (10 × 10 around 0): no click.
     host.update(&at(true, 2.0));
     assert!(host.update(&at(false, 40.0)).is_empty());
+}
+
+#[test]
+fn only_the_topmost_listening_layer_gets_cursor_events() {
+    // Layers 0 (x = 0) and 1 (x = 5, drawn above) overlap at x 0–5.
+    let mark = |node: usize, tag: &str| {
+        script(
+            &format!(
+                "export function cursorDown() {{ thisScene.getLayer('clock').text += '{tag}'; }}"
+            ),
+            node,
+            ScriptTarget::Other(format!("down{node}")),
+            "{}",
+        )
+    };
+    let press = |scripts: Vec<Script>| {
+        let mut host = ScriptHost::new(&scene(scripts), [100, 100], CLOCK)
+            .unwrap()
+            .unwrap();
+        let at = |down: bool| Inputs {
+            cursor: [3.0, 0.0],
+            pointer_active: true,
+            left_down: down,
+            ..inputs(0.0)
+        };
+        host.update(&at(false));
+        host.update(&at(true)).get(&0).and_then(|c| c.text.clone())
+    };
+    // Two overlapping windows: only the front one starts dragging.
+    assert_eq!(
+        press(vec![mark(0, "B"), mark(1, "T")]).as_deref(),
+        Some("12:34T")
+    );
+    // A front layer without cursor scripts lets the event through.
+    assert_eq!(press(vec![mark(0, "B")]).as_deref(), Some("12:34B"));
 }
 
 #[test]

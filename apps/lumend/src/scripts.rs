@@ -364,3 +364,78 @@ fn thumbnail_event(m: &MediaInfo) -> serde_json::Value {
         "highContrastColor": v(c.high_contrast),
     })
 }
+
+/// Plays a real scene's scripts with clicks, off-screen: `LUMEN_TEST_SCENE`
+/// (a Workshop folder, never committed) and `LUMEN_TEST_CLICKS`
+/// (`layer name@seconds;…`). Prints visibility changes.
+#[cfg(test)]
+mod scene_probe {
+    use super::*;
+
+    #[test]
+    #[ignore = "needs LUMEN_TEST_SCENE and LUMEN_TEST_CLICKS"]
+    fn click_through_scene() {
+        let dir = PathBuf::from(std::env::var("LUMEN_TEST_SCENE").unwrap());
+        let clicks: Vec<(String, f32)> = std::env::var("LUMEN_TEST_CLICKS")
+            .unwrap()
+            .split(';')
+            .filter_map(|c| {
+                let (name, at) = c.rsplit_once('@')?;
+                Some((name.to_owned(), at.parse().ok()?))
+            })
+            .collect();
+        let assets = Path::new(crate::headless::DEFAULT_WE_ASSETS);
+        let scene = crate::headless::load_scene(&dir, Some(assets), &Default::default()).unwrap();
+        let mut host = ScriptHost::new(&scene, [scene.width, scene.height], 0.0)
+            .unwrap()
+            .unwrap();
+        let names: Vec<String> = scene.layers.iter().map(|l| l.name.clone()).collect();
+        let mut place: Vec<[f32; 6]> = scene.layers.iter().map(|l| l.transform).collect();
+        let mut visible: Vec<bool> = scene.layers.iter().map(|l| l.visible).collect();
+        let end = clicks.iter().map(|c| c.1).fold(0.0, f32::max) + 3.0;
+        let dt = 1.0 / 30.0;
+        let mut cursor = [0.0, 0.0];
+        let mut t = 0.0f32;
+        while t < end {
+            // Press on the frame of a click, release on the next.
+            let pressing = clicks.iter().find(|c| t >= c.1 && t < c.1 + dt);
+            if let Some((name, _)) = pressing {
+                let i = names.iter().position(|n| n == name).expect("layer name");
+                cursor = [place[i][4], place[i][5]];
+                println!(
+                    "{t:6.2}s click {name} at {cursor:?} (visible {})",
+                    visible[i]
+                );
+            }
+            let changes = host.update(&Inputs {
+                clock_ms: f64::from(t) * 1000.0,
+                runtime: f64::from(t),
+                frametime: f64::from(dt),
+                cursor,
+                daytime: 0.5,
+                pointer_active: true,
+                left_down: pressing.is_some(),
+                audio: [[0.0; 64]; 2],
+            });
+            for (i, c) in changes {
+                if let Some(tr) = c.transform {
+                    if std::env::var("LUMEN_TEST_TRACE").is_ok_and(|n| n == names[i]) {
+                        println!("{t:6.2}s {} at ({:.0}, {:.0})", names[i], tr[4], tr[5]);
+                    }
+                    place[i] = tr;
+                }
+                if let Some(v) = c.visible
+                    && v != visible[i]
+                {
+                    visible[i] = v;
+                    println!(
+                        "{t:6.2}s {} {}",
+                        names[i],
+                        if v { "shown" } else { "hidden" }
+                    );
+                }
+            }
+            t += dt;
+        }
+    }
+}
