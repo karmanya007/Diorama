@@ -257,8 +257,15 @@ fn state_json(scene: &Scene, canvas: [u32; 2]) -> String {
                 "style": l.text.as_ref().map(|t| text_style(scene, t)),
                 "size": l.size,
                 "frames": texture_frames(scene, l),
+                // Per pass, the material keys scripts may set (getMaterial).
                 "effects": l.effects.iter()
-                    .map(|e| json!({"name": e.name, "visible": e.visible}))
+                    .map(|e| json!({
+                        "name": e.name,
+                        "visible": e.visible,
+                        "materials": e.passes.iter()
+                            .map(|p| scene.programs.get(p.program.0).map(|g| &g.material_keys))
+                            .collect::<Vec<_>>(),
+                    }))
                     .collect::<Vec<_>>(),
             })
         })
@@ -374,9 +381,17 @@ impl ScriptHost {
             let attach: Function = lumen.get("attach").map_err(js_err)?;
             for (i, script) in scene.scripts.iter().enumerate() {
                 let this = script.node.map_or("null".to_owned(), |n| n.to_string());
+                // Scripts on an effect's values see that effect as thisObject.
+                let object = match &script.target {
+                    ScriptTarget::EffectVisible { layer, effect }
+                    | ScriptTarget::Constant { layer, effect, .. } => {
+                        format!("__lumen.effectFor({layer}, {effect})")
+                    }
+                    _ => "thisLayer".to_owned(),
+                };
                 // Same line as the source's first line: error lines stay right.
                 let source = format!(
-                    "const thisLayer = __lumen.layerFor({this}); const thisObject = thisLayer; {}",
+                    "const thisLayer = __lumen.layerFor({this}); const thisObject = {object}; {}",
                     script.source
                 );
                 let loaded = Module::declare(ctx.clone(), format!("script{i}"), source)

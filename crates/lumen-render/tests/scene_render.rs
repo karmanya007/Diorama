@@ -67,6 +67,7 @@ fn program(name: &str, src: &str) -> ShaderProgram {
             },
         ],
         texture_bindings: BTreeMap::from([(0, 0)]),
+        material_keys: BTreeMap::new(),
     }
 }
 

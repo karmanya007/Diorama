@@ -1698,6 +1698,13 @@ impl Importer<'_> {
             }
         }
 
+        let material_keys = uniforms
+            .iter()
+            .filter_map(|d| {
+                let key = d.annotation.as_ref()?["material"].as_str()?;
+                Some((key.to_ascii_lowercase(), d.name.clone()))
+            })
+            .collect();
         let id = ProgramId(self.scene.programs.len());
         self.scene.programs.push(ShaderProgram {
             name: name.to_owned(),
@@ -1707,6 +1714,7 @@ impl Importer<'_> {
             fragment_entry: hlsl.fragment_entry.to_owned(),
             attributes,
             texture_bindings,
+            material_keys,
         });
         self.program_uniforms.insert(id, uniforms);
         self.programs.insert(key, id);

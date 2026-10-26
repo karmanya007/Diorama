@@ -562,6 +562,9 @@ pub struct ShaderProgram {
     pub attributes: Vec<Attribute>,
     /// Texture slot → binding index `i` (texture at `2i`, sampler at `2i + 1`, group 1).
     pub texture_bindings: BTreeMap<u32, u32>,
+    /// Material key (lower case, e.g. `raythreshold`) → uniform name: what
+    /// scripts set through `getMaterial()`.
+    pub material_keys: BTreeMap<String, String>,
 }
 
 /// `[m0..m5]` for translate · rotate(z) · scale, see [`ImageLayer::transform`].

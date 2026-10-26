@@ -71,8 +71,24 @@
 		}
 		setMaterialProperty() {}
 		executeMaterialFunction() {}
-		getMaterial() { return this; }
-		getMaterialCount() { return 1; }
+		// A pass's material: setting a key (`raythreshold`) sets the uniform
+		// it is bound to, like the effect's constantshadervalues.
+		getMaterial(i) {
+			const keys = ((layers[this.__l].effects[this.__e].materials || [])[i | 0]) || {};
+			const l = this.__l, e = this.__e, pass = i | 0;
+			const values = {};
+			return new Proxy(values, {
+				get: (t, k) => t[k],
+				set: (t, k, v) => {
+					t[k] = v;
+					const uniform = keys[String(k).toLowerCase()];
+					const n = numbers(v);
+					if (uniform && n) constantChanges.push([l, e, pass, uniform, n]);
+					return true;
+				},
+			});
+		}
+		getMaterialCount() { return ((layers[this.__l].effects[this.__e].materials) || []).length; }
 	}
 
 	const noopAnimation = {
@@ -242,7 +258,11 @@
 		getLayerByID(id) { return objects.find((o) => nodes[o.__n].id === id) || null; },
 		enumerateLayers() { return objects.slice(); },
 		getLayerCount() { return objects.length; },
-		getLayerIndex(layer) { return objects.indexOf(layer); },
+		// By layer object or name (Dino Run: getLayerIndex('postprocess')).
+		getLayerIndex(layer) {
+			if (typeof layer === 'string') return objects.findIndex((o) => nodes[o.__n].name === layer);
+			return objects.indexOf(layer);
+		},
 		// A layer from a model path or an object config (`image`/`text` plus
 		// placement and style); the host imports and draws it from the next
 		// frame on. Drawn above everything until sortLayer() moves it.
@@ -549,6 +569,7 @@
 		});
 	};
 	L.layerFor = (node) => node === null ? null : byNode[node];
+	L.effectFor = (layer, effect) => new Effect(layer, effect);
 	L.attach = function (index, ns) { scripts[index].ns = ns; };
 
 	L.start = function () {
