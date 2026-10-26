@@ -18,6 +18,7 @@ mod session;
 mod slots;
 mod sounds;
 mod state;
+mod tray;
 mod videos;
 mod web;
 
@@ -33,7 +34,7 @@ use lumen_gpu::{Backend, Gpu, GpuOptions};
 use lumen_ipc::MediaKind;
 use lumen_ipc::{ContentStatus, Fit, Layout, OutputStatus, Request, Response, Status};
 use lumen_media::AudioPlayer;
-use lumen_platform::{Coverage, DesktopEvent, Platform};
+use lumen_platform::{Coverage, DesktopEvent, Platform, TrayCommand, TrayState};
 
 use crate::clock::{SceneClock, VideoClock};
 use crate::policy::{Conditions, update_pauses};
@@ -454,6 +455,17 @@ fn main() -> Result<()> {
         for slot in &mut daemon.slots {
             slot.start_audio(volume);
         }
+    }
+
+    // Notification-area icon: open the UI, next, pause/resume, quit.
+    let size = platform.tray_icon_size();
+    let shown = tray::icon(size).and_then(|rgba| {
+        platform
+            .show_tray(&rgba, size, daemon.tray_state())
+            .context("tray icon")
+    });
+    if let Err(e) = shown {
+        tracing::warn!("{e:#}");
     }
 
     while !stop.load(Ordering::SeqCst)
@@ -917,9 +929,11 @@ impl Daemon<'_> {
             match e {
                 DesktopEvent::SessionLocked => self.conditions.locked = true,
                 DesktopEvent::SessionUnlocked => self.conditions.locked = false,
+                DesktopEvent::Tray(command) => self.on_tray(*command),
                 _ => {}
             }
         }
+        self.platform.set_tray_state(self.tray_state());
         if Instant::now() >= self.next_battery {
             self.conditions.on_battery = self.platform.on_battery();
             self.next_battery = Instant::now() + BATTERY_INTERVAL;
@@ -1458,6 +1472,27 @@ impl Daemon<'_> {
     }
 
     /// The wallpaper on the primary monitor (else the first).
+    fn tray_state(&self) -> TrayState {
+        TrayState {
+            paused: self.conditions.user_paused,
+            can_next: self.slots.iter().any(|s| s.run.is_some()),
+        }
+    }
+
+    /// A choice from the notification-area icon: what the CLI would ask for.
+    fn on_tray(&mut self, command: TrayCommand) {
+        let request = match command {
+            TrayCommand::OpenUi => return tray::open_ui(),
+            TrayCommand::Next => Request::Next { outputs: None },
+            TrayCommand::Pause => Request::Pause,
+            TrayCommand::Resume => Request::Resume,
+            TrayCommand::Quit => Request::Quit,
+        };
+        if let Response::Error { message } = self.handle(request) {
+            tracing::warn!("tray: {message}");
+        }
+    }
+
     fn main_slot(&self) -> Option<&Slot> {
         self.slots.iter().find(|s| s.primary).or(self.slots.first())
     }

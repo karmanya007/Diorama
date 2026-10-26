@@ -151,6 +151,28 @@ pub enum DesktopEvent {
     /// The user session was locked (lock screen shown).
     SessionLocked,
     SessionUnlocked,
+    /// Chosen from the notification-area icon.
+    Tray(TrayCommand),
+}
+
+/// A choice from the notification-area icon (its menu, or a click on it:
+/// `OpenUi`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrayCommand {
+    OpenUi,
+    Next,
+    Pause,
+    Resume,
+    Quit,
+}
+
+/// What the notification-area icon's menu offers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TrayState {
+    /// Paused by the user: the menu offers Resume instead of Pause.
+    pub paused: bool,
+    /// A playlist is running (Next wallpaper is enabled).
+    pub can_next: bool,
 }
 
 impl DesktopEvent {

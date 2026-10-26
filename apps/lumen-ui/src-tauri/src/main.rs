@@ -133,6 +133,14 @@ async fn blocking<T: Send + 'static>(
 
 fn main() {
     let result = tauri::Builder::default()
+        // A second start (e.g. lumend's tray "Open Lumen") shows this window.
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            if let Some(window) = app.webview_windows().values().next() {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             ipc,

@@ -5,6 +5,7 @@ mod media;
 mod metrics;
 mod outputs;
 mod system;
+mod tray;
 mod windows_list;
 
 pub use media::MediaWatcher;
@@ -49,7 +50,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{PCWSTR, w};
 
 use crate::{
-    Coverage, DesktopEvent, DesktopPointer, Error, OutputInfo, Result, SurfaceHandles, classify,
+    Coverage, DesktopEvent, DesktopPointer, Error, OutputInfo, Result, SurfaceHandles, TrayState,
+    classify,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
 use windows::Win32::UI::Input::{
@@ -315,6 +317,22 @@ impl Platform {
         }
     }
 
+    /// Side in pixels of the icon [`Platform::show_tray`] wants.
+    pub fn tray_icon_size(&self) -> u32 {
+        tray::icon_size()
+    }
+
+    /// Shows Lumen's icon in the notification area: `rgba` is a
+    /// `size`×`size` picture (straight alpha). Its menu's choices arrive as
+    /// [`DesktopEvent::Tray`]; it comes back after Explorer restarts.
+    pub fn show_tray(&self, rgba: &[u8], size: u32, state: TrayState) -> Result<()> {
+        tray::show(self.control, rgba, size, state)
+    }
+
+    pub fn set_tray_state(&self, state: TrayState) {
+        tray::set_state(state);
+    }
+
     /// Pumps window messages for up to `timeout` and returns desktop events
     /// raised meanwhile. Returns early as soon as any message arrives.
     pub fn poll_events(&self, timeout: Duration) -> Vec<DesktopEvent> {
@@ -334,6 +352,7 @@ impl Platform {
 
 impl Drop for Platform {
     fn drop(&mut self) {
+        tray::hide();
         // SAFETY: control window was created by us on this thread.
         unsafe {
             let _ = WTSUnRegisterSessionNotification(self.control);
@@ -492,11 +511,16 @@ unsafe fn register_class(
 unsafe extern "system" fn control_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     if msg == TASKBAR_CREATED.with(Cell::get) && msg != 0 {
         tracing::info!("Explorer restarted (TaskbarCreated)");
+        tray::add();
         push_event(DesktopEvent::DesktopReset);
         return LRESULT(0);
     }
     if msg == WM_DISPLAYCHANGE {
         push_event(DesktopEvent::OutputsChanged);
+    }
+    if msg == tray::WM_LUMEN_TRAY {
+        tray::on_message(wp, lp);
+        return LRESULT(0);
     }
     if msg == WM_INPUT {
         // SAFETY: lp is the HRAWINPUT of this WM_INPUT message.

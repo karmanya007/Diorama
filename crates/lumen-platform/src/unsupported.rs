@@ -51,6 +51,16 @@ impl Platform {
 
     pub fn lower_priority(&self) {}
 
+    pub fn tray_icon_size(&self) -> u32 {
+        16
+    }
+
+    pub fn show_tray(&self, _rgba: &[u8], _size: u32, _state: crate::TrayState) -> Result<()> {
+        Err(Error::Unsupported)
+    }
+
+    pub fn set_tray_state(&self, _state: crate::TrayState) {}
+
     pub fn waker(&self) -> Waker {
         Waker
     }

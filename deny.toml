@@ -8,6 +8,12 @@ ignore = [
     # macro crate reached only through Tauri's Linux GTK 3 stack
     # (glib-macros 0.18). Revisit when Tauri moves to GTK 4.
     { id = "RUSTSEC-2024-0370", reason = "unmaintained build-time macro via tauri's Linux GTK stack" },
+    # zbus 5 split crates (unmaintained since merged into zbus 6, no known
+    # vulnerability): Linux D-Bus of tauri-plugin-single-instance. Revisit
+    # when the plugin moves to zbus 6.
+    { id = "RUSTSEC-2026-0370", reason = "zvariant merged into zbus 6; via tauri-plugin-single-instance on Linux" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names merged into zbus 6; via tauri-plugin-single-instance on Linux" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive merged into zbus 6; via tauri-plugin-single-instance on Linux" },
 ]
 
 [licenses]
