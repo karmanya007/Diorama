@@ -239,14 +239,17 @@ fn parallax_moves_layers_away_from_the_cursor() {
         mouse_influence: 1.0,
         delay: 0.0,
     });
-    // Cursor at the left edge: shift = 0.25 · 64 · (0.5 − 0) = +8 px.
+    // Cursor at the left edge: shift = 0.25 · 64 · (0.5 − 0) = +8 px, plus
+    // the depth spread 0.25 · (16 − 32) = −4 px: the 32 px layer at x 0..32
+    // moves to 4..36.
     let img = render(&gpu, &compiler, &s, [0.0, 0.5]);
-    assert_eq!(px(&img, 64, 1, 16), [0, 0, 0, 255], "left edge uncovered");
+    assert_eq!(px(&img, 64, 2, 16), [0, 0, 0, 255], "left edge uncovered");
     assert_eq!(
-        px(&img, 64, 39, 16),
+        px(&img, 64, 34, 16),
         [255, 0, 0, 255],
         "right edge moved in"
     );
+    assert_eq!(px(&img, 64, 38, 16), [0, 0, 0, 255], "by 4 px, not more");
 }
 
 #[test]

@@ -10,6 +10,12 @@ publish.workspace = true
 name = "lumen-ui"
 path = "src/main.rs"
 
+[features]
+# Serve the built front end from the binary. Without it Tauri loads the Vite
+# dev server (`npm run dev`); `cargo build` alone must give a working app.
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

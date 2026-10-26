@@ -11,7 +11,7 @@ pub use media::MediaWatcher;
 pub use metrics::SystemMonitor;
 
 pub use system::{
-    autostart, cache_dir, config_dir, day_fraction, detach_console, set_autostart,
+    autostart, cache_dir, config_dir, day_fraction, detach_console, no_console, set_autostart,
     set_os_wallpaper, steam_dir, ui_language,
 };
 

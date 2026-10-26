@@ -252,6 +252,8 @@ fn main() -> Result<()> {
     let config_dir = lumen_platform::config_dir();
     init_logging(args.background, config_dir.as_deref());
     let platform = Platform::new().context("platform init")?;
+    // DXC runs per new shader variant; no console window may flash.
+    lumen_gpu::shader::set_process_hook(lumen_platform::no_console);
 
     if let (Some(scene), Some(out)) = (&args.scene, &args.frame_out) {
         let assets = args.we_assets.is_dir().then_some(args.we_assets.as_path());
@@ -541,7 +543,15 @@ struct Slot {
     fallback_pending: bool,
     /// The playlist this wallpaper came from.
     run: Option<Run>,
+    /// Failed attempts to show it since it last showed (see [`MAX_TRIES`]).
+    failures: u32,
+    /// Why it last failed to show.
+    error: Option<String>,
 }
+
+/// Attempts to show a wallpaper before giving up until the desktop changes
+/// (a missing shader compiler or a broken scene does not fix itself).
+const MAX_TRIES: u32 = 3;
 
 /// A playlist playing on a slot.
 struct Run {
@@ -603,6 +613,8 @@ impl Slot {
             audio_loop: None,
             fallback_pending: false,
             run: None,
+            failures: 0,
+            error: None,
         }
     }
 
@@ -922,9 +934,11 @@ impl Daemon<'_> {
                 }
             }
         }
-        if events.iter().any(|e| e.needs_rebuild()) || self.needs_rebuild {
+        let desktop_changed = events.iter().any(|e| e.needs_rebuild());
+        if desktop_changed || self.needs_rebuild {
             tracing::info!(?events, device_lost, "rebuilding wallpaper");
-            self.rebuild(true);
+            // A changed desktop rebuilds everything; otherwise only what is missing.
+            self.rebuild(desktop_changed);
             return Ok(());
         }
 
@@ -1272,13 +1286,17 @@ impl Daemon<'_> {
             .collect();
         let primary = infos.iter().find(|o| o.primary).map(|o| o.id.0.clone());
         for ((slot, group), network) in self.slots.iter_mut().zip(groups).zip(networks) {
+            if all {
+                slot.failures = 0;
+            }
             let ids: Vec<String> = group.iter().map(|o| o.id.0.clone()).collect();
             let was_primary = slot.primary;
             slot.primary = primary.as_ref().is_some_and(|p| ids.contains(p));
             if slot.primary != was_primary {
                 slot.start_audio(self.volume);
             }
-            if !all && slot.session.is_some() && slot.shown_on == ids {
+            if !all && slot.session.is_some() && slot.shown_on == ids || slot.failures >= MAX_TRIES
+            {
                 continue;
             }
             // Surfaces/windows go first; they reference the old device and old Explorer windows.
@@ -1295,12 +1313,23 @@ impl Daemon<'_> {
                         tracing::warn!("re-showing current frame failed: {e:#}");
                     }
                     slot.session = Some(session);
+                    slot.failures = 0;
+                    slot.error = None;
                     slot.set_sound_volume(self.volume);
                 }
                 Err(e) => {
-                    tracing::warn!("{e:#}; retrying");
+                    slot.failures += 1;
+                    slot.error = Some(format!("{e:#}"));
                     slot.shown_on.clear();
-                    self.needs_rebuild = true;
+                    if slot.failures < MAX_TRIES {
+                        tracing::warn!(path = %slot.wallpaper.path.display(), "{e:#}; retrying");
+                        self.needs_rebuild = true;
+                    } else {
+                        tracing::error!(
+                            path = %slot.wallpaper.path.display(),
+                            "cannot show this wallpaper: {e:#}"
+                        );
+                    }
                 }
             }
         }
@@ -1344,6 +1373,12 @@ impl Daemon<'_> {
             new.fallback_pending = false;
         }
         new.start_audio(self.volume);
+        if let Some(error) = new.error.clone() {
+            // Its monitors show nothing rather than keep a wallpaper that cannot show.
+            self.slots.pop();
+            self.persist();
+            anyhow::bail!("{error}");
+        }
         if self.needs_rebuild {
             anyhow::bail!(
                 "wallpaper loaded but could not be shown yet; retrying in the background"

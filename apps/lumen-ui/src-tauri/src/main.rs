@@ -107,8 +107,9 @@ fn daemon_exe() -> PathBuf {
 /// Starts lumend in the background and waits until it answers.
 fn start_daemon() -> Result<(), String> {
     let exe = daemon_exe();
-    std::process::Command::new(&exe)
-        .arg("--background")
+    let mut cmd = std::process::Command::new(&exe);
+    lumen_platform::no_console(&mut cmd);
+    cmd.arg("--background")
         .spawn()
         .map_err(|e| format!("starting {}: {e}", exe.display()))?;
     let deadline = Instant::now() + Duration::from_secs(8);

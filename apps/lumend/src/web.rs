@@ -143,6 +143,7 @@ impl WebHost {
     ) -> Result<Self> {
         let exe = webhost_exe();
         let mut cmd = Command::new(&exe);
+        lumen_platform::no_console(&mut cmd);
         cmd.arg(&source.dir)
             .arg("--file")
             .arg(&source.file)

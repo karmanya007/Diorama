@@ -20,11 +20,13 @@ export const setAutostart = (on) => invoke('set_autostart', { on });
 /** A local file as an image URL the page may load. */
 export const fileUrl = (path) => (path ? convertFileSrc(path) : '');
 
-/** Show `path` on `outputs` (output ids; empty: every monitor). */
-export function setWallpaper(path, outputs, fit) {
+/** Show `path` on `outputs` (output ids; empty: every monitor), with
+ * `layout` 'per-output' (each shows all of it) or 'span' (one across them). */
+export function setWallpaper(path, outputs, fit, layout) {
   const request = { cmd: 'set', path };
   if (outputs?.length) request.outputs = outputs;
   if (fit) request.fit = fit;
+  if (layout) request.layout = layout;
   return call(request);
 }
 

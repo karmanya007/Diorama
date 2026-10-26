@@ -2,7 +2,8 @@
 //! uniform-buffer reflection.
 //!
 //! DXC is an external tool for now: `LUMEN_DXC`, then `dxc/dxc.exe` or
-//! `dxc.exe` beside the running executable, then `dxc` on `PATH`. Compiled
+//! `dxc.exe` beside the running executable, then the repository's
+//! `.tools/dxc` above it (development builds), then `dxc` on `PATH`. Compiled
 //! SPIR-V is cached by a hash of (compiler flags, entry, profile, source), so
 //! DXC only runs the first time a shader variant is seen.
 
@@ -79,9 +80,26 @@ pub struct ShaderCompiler {
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// How DXC processes are started, set once by the program (lumend hides
+/// their console windows; that is OS code this crate does not hold).
+static PROCESS_HOOK: std::sync::OnceLock<fn(&mut Command)> = std::sync::OnceLock::new();
+
+/// Adjusts every DXC process before it starts (first call wins).
+pub fn set_process_hook(hook: fn(&mut Command)) {
+    let _ = PROCESS_HOOK.set(hook);
+}
+
+fn dxc_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    let mut cmd = Command::new(program);
+    if let Some(hook) = PROCESS_HOOK.get() {
+        hook(&mut cmd);
+    }
+    cmd
+}
+
 impl ShaderCompiler {
     pub fn new(dxc: PathBuf, cache_dir: Option<PathBuf>) -> Self {
-        let version = Command::new(&dxc)
+        let version = dxc_command(&dxc)
             .arg("--version")
             .output()
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
@@ -107,12 +125,19 @@ impl ShaderCompiler {
                 candidates.push(dir.join("dxc").join(name));
                 candidates.push(dir.join(name));
             }
+            // Development builds (`target/<profile>/`): the repository's
+            // pinned copy from scripts/fetch-dxc.
+            for up in dir.ancestors().skip(1).take(3) {
+                for name in ["dxc", "dxc.exe"] {
+                    candidates.push(up.join(".tools").join("dxc").join(name));
+                }
+            }
         }
         if let Some(found) = candidates.into_iter().find(|p| p.is_file()) {
             return Ok(Self::new(found, cache_dir));
         }
         // Last resort: PATH.
-        match Command::new("dxc").arg("--version").output() {
+        match dxc_command("dxc").arg("--version").output() {
             Ok(out) if out.status.success() => Ok(Self::new("dxc".into(), cache_dir)),
             _ => Err(ShaderError::NoCompiler),
         }
@@ -145,7 +170,7 @@ impl ShaderCompiler {
         let input = stem.with_extension("hlsl");
         let output = stem.with_extension("spv");
         std::fs::write(&input, source)?;
-        let run = Command::new(&self.dxc)
+        let run = dxc_command(&self.dxc)
             .args(FLAGS)
             .args(["-T", stage.profile(), "-E", entry])
             .arg("-Fo")

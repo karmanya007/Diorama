@@ -7,6 +7,7 @@
   const item = $derived(app.selected);
   const outputs = $derived(app.status?.outputs ?? []);
   let fit = $state('');
+  let layout = $state('per-output');
   let busy = $state(false);
   let lists = $state([]);
   let addTo = $state('');
@@ -29,7 +30,8 @@
   async function show() {
     busy = true;
     await attempt(async () => {
-      await api.setWallpaper(item.path, app.target, fit || undefined);
+      const span = layout === 'span' && (app.target.length === 0 || app.target.length > 1);
+      await api.setWallpaper(item.path, app.target, fit || undefined, span ? 'span' : 'per-output');
       toast(`Showing ${item.title}`);
       await refreshStatus();
     });
@@ -88,6 +90,12 @@
         </button>
       {/each}
     </div>
+    {#if outputs.length > 1 && app.target.length !== 1}
+      <div class="segmented" role="group" aria-label="Layout">
+        <button class:on={layout === 'per-output'} onclick={() => (layout = 'per-output')}>Whole picture on each</button>
+        <button class:on={layout === 'span'} onclick={() => (layout = 'span')}>Span across them</button>
+      </div>
+    {/if}
     <div class="row">
       <select bind:value={fit} aria-label="Fit">
         <option value="">Fit: as before</option>
@@ -175,6 +183,26 @@
   .pill {
     border-radius: 999px;
     padding: 4px 12px;
+  }
+
+  .segmented {
+    display: flex;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    overflow: hidden;
+  }
+
+  .segmented button {
+    flex: 1;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    padding: 6px 8px;
+  }
+
+  .segmented button.on {
+    background: var(--accent-soft);
+    font-weight: 600;
   }
 
   .pill.on {

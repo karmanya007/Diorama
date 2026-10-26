@@ -107,6 +107,9 @@ pub fn cache_dir() -> Option<std::path::PathBuf> {
         .map(|d| d.join("lumen"))
 }
 
+/// Starts `cmd` without a console window (nothing to do here).
+pub fn no_console(_cmd: &mut std::process::Command) {}
+
 /// Steam's install folder: `~/.local/share/Steam` or `~/.steam/steam`.
 pub fn steam_dir() -> Option<std::path::PathBuf> {
     let home = std::path::PathBuf::from(std::env::var_os("HOME")?);

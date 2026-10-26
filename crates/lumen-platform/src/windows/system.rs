@@ -32,6 +32,15 @@ pub fn config_dir() -> Option<PathBuf> {
     std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("Lumen"))
 }
 
+/// Starts `cmd` without a console window: console programs started by a
+/// program without a console (lumend in the background, the UI) would
+/// otherwise flash one.
+pub fn no_console(cmd: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    cmd.creation_flags(CREATE_NO_WINDOW);
+}
+
 /// Steam's install folder (`HKCU\Software\Valve\Steam\SteamPath`).
 pub fn steam_dir() -> Option<PathBuf> {
     // SAFETY: two-call RegGetValueW pattern with correctly sized buffers.
