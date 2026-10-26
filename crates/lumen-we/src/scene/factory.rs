@@ -173,6 +173,7 @@ impl LayerFactory {
         }
 
         let mut importer = Importer::new(&self.vfs, &self.limits);
+        importer.properties = self.properties.clone();
         importer.scene = std::mem::take(&mut self.scene);
         importer.textures = std::mem::take(&mut self.textures);
         importer.programs = std::mem::take(&mut self.programs);

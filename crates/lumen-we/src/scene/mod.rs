@@ -97,6 +97,7 @@ pub fn import_with(vfs: &Vfs, limits: &Limits, properties: &Properties) -> Resul
         }
     }
     let mut importer = Importer::new(vfs, limits);
+    importer.properties = properties.clone();
     importer.scene_header(&json);
     importer.scene.user_properties = user_properties_json(vfs, properties);
     importer.scene.scheme_color = properties
@@ -293,6 +294,8 @@ struct Importer<'a> {
     texture_formats: HashMap<TextureId, i64>,
     /// Textures whose mip chain Lumen generated (the TEX stores one level).
     generated_mips: HashSet<TextureId>,
+    /// Values of the user properties (materials bind some through `usershadervalues`).
+    properties: Properties,
 }
 
 /// A synthetic pass of an engine post-processing chain (bloom).
@@ -343,6 +346,34 @@ impl<'a> Importer<'a> {
             fonts: HashMap::new(),
             texture_formats: HashMap::new(),
             generated_mips: HashSet::new(),
+            properties: Properties::default(),
+        }
+    }
+
+    /// A material, with the values of user properties its passes bind
+    /// through `usershadervalues` (`{"schemecolor": "color1"}`: property →
+    /// shader alias) written into their `constantshadervalues`.
+    fn read_material(&self, path: &str) -> Result<Value> {
+        let mut material = self.vfs.read_json(path)?;
+        bind_user_shader_values(&mut material, &self.properties);
+        Ok(material)
+    }
+}
+
+/// See [`Importer::read_material`].
+fn bind_user_shader_values(material: &mut Value, properties: &Properties) {
+    for pass in material["passes"].as_array_mut().into_iter().flatten() {
+        let Some(bindings) = pass["usershadervalues"].as_object().cloned() else {
+            continue;
+        };
+        for (property, alias) in bindings {
+            let (Some(alias), Some(value)) = (alias.as_str(), properties.0.get(&property)) else {
+                continue;
+            };
+            if !pass["constantshadervalues"].is_object() {
+                pass["constantshadervalues"] = Value::Object(serde_json::Map::new());
+            }
+            pass["constantshadervalues"][alias] = value.clone();
         }
     }
 }
@@ -461,7 +492,7 @@ impl Importer<'_> {
             .read(path)
             .ok_or_else(|| unsupported("missing model", path))?;
         let mesh = crate::mdl::MdlMesh::parse(&bytes)?;
-        let material = self.vfs.read_json(&mesh.material)?;
+        let material = self.read_material(&mesh.material)?;
         let raster = &material["passes"][0];
         let mut object_constants = serde_json::Map::new();
         if let Some(v) = object.get("brightness") {
@@ -1074,7 +1105,7 @@ impl Importer<'_> {
         let material_path = model["material"]
             .as_str()
             .ok_or_else(|| unsupported("model without material", model_path))?;
-        let material = self.vfs.read_json(material_path)?;
+        let material = self.read_material(material_path)?;
 
         // Object-level values the albedo material reads by key.
         let mut object_constants = serde_json::Map::new();
@@ -1321,7 +1352,7 @@ impl Importer<'_> {
             let material_path = p["material"]
                 .as_str()
                 .ok_or_else(|| unsupported("effect pass without material", file))?;
-            let material = self.vfs.read_json(material_path)?;
+            let material = self.read_material(material_path)?;
             let scene_pass = overrides.and_then(|o| o.get(i));
             let spec = self.pass_spec(&material, scene_pass)?;
             let mut pass = self.pass(&spec, Some(&fbos))?;
@@ -1863,6 +1894,30 @@ fn lookup<'v>(map: &'v serde_json::Map<String, Value>, key: &str) -> Option<&'v 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn user_shader_values_become_material_constants() {
+        let mut material = serde_json::json!({"passes": [{
+            "shader": "particle",
+            "usershadervalues": {"schemecolor": "color1", "color2": "color2", "unset": "x"},
+            "constantshadervalues": {"color1": "1 1 1"}
+        }]});
+        let properties = Properties(
+            [
+                ("schemecolor".to_owned(), Value::from("0.8 0.4 0.05")),
+                ("color2".to_owned(), Value::from("0.5 0.45 0.1")),
+            ]
+            .into(),
+        );
+        bind_user_shader_values(&mut material, &properties);
+        let c = &material["passes"][0]["constantshadervalues"];
+        assert_eq!(c["color1"], "0.8 0.4 0.05", "the user's value wins");
+        assert_eq!(c["color2"], "0.5 0.45 0.1");
+        assert!(
+            c.get("x").is_none(),
+            "properties without a value add nothing"
+        );
+    }
 
     #[test]
     fn box_halving_averages_and_handles_odd_sizes() {

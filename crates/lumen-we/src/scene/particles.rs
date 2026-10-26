@@ -330,7 +330,7 @@ impl Importer<'_> {
         let material_path = json["material"]
             .as_str()
             .ok_or_else(|| unsupported("particle system without material", path))?;
-        let material = self.vfs.read_json(material_path)?;
+        let material = self.read_material(material_path)?;
         let mut spec = self.pass_spec(&material, None)?;
         let sprite_sheet = spec
             .textures
