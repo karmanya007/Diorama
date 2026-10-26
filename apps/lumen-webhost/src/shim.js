@@ -65,6 +65,8 @@
 		state.loaded = true;
 		deliver();
 		if (state.paused) { pause(true); }
+		// Two frames after load the page has painted: the host may show it.
+		nativeRaf(() => nativeRaf(() => report({ kind: 'ready' })));
 	});
 	L.properties = (p) => {
 		state.properties = p;

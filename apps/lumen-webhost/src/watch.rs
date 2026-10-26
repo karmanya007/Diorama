@@ -29,6 +29,8 @@ struct Inner {
     seen: Mutex<HashSet<String>>,
     /// Network files that failed while the network is off.
     blocked: AtomicUsize,
+    /// A page reported it has painted (not yet taken).
+    ready: AtomicBool,
     errors: AtomicUsize,
 }
 
@@ -45,6 +47,7 @@ impl Reports {
                 allow_network,
                 seen: Mutex::new(HashSet::new()),
                 blocked: AtomicUsize::new(0),
+                ready: AtomicBool::new(false),
                 errors: AtomicUsize::new(0),
             }),
         }
@@ -57,6 +60,7 @@ impl Reports {
         };
         let text = |k: &str| msg[k].as_str().unwrap_or_default().to_owned();
         match msg["kind"].as_str() {
+            Some("ready") => self.inner.ready.store(true, Ordering::SeqCst),
             Some("load-failed") => {
                 let url = text("url");
                 if !self.first(format!("load {url}")) {
@@ -100,6 +104,11 @@ impl Reports {
             }
             _ => {}
         }
+    }
+
+    /// Whether a page reported it has painted since the last call.
+    pub fn take_ready(&self) -> bool {
+        self.inner.ready.swap(false, Ordering::SeqCst)
     }
 
     /// Why a page might be stuck, for the watchdog's warning.

@@ -293,21 +293,30 @@ pub fn rect_of(o: &OutputInfo) -> Rect {
 }
 
 impl Session {
-    /// Shows `wallpaper` on the monitors `infos`.
+    /// Shows `wallpaper` on the monitors `infos`. `below`: its windows go
+    /// under a wallpaper being replaced until [`Self::raise`] (web: until the
+    /// page has painted).
     pub fn build(
         platform: &Platform,
         gpu: &Gpu,
         wallpaper: &Wallpaper,
         infos: Vec<OutputInfo>,
         web_network: bool,
+        below: bool,
     ) -> Result<Self> {
         let look = wallpaper.look;
         let canvas = Rect::bounding(infos.iter().map(rect_of)).context("no outputs found")?;
         if let Content::Web(source) = &wallpaper.content {
             // The host makes its own windows; outputs here only track pauses.
             let ids: Vec<String> = infos.iter().map(|o| o.id.0.clone()).collect();
-            let host =
-                crate::web::WebHost::spawn(source, web_network, look.layout == Layout::Span, &ids)?;
+            let host = crate::web::WebHost::spawn(
+                source,
+                web_network,
+                look.layout == Layout::Span,
+                &ids,
+                below,
+                platform.waker(),
+            )?;
             let outputs = infos
                 .into_iter()
                 .map(|info| Output {
@@ -329,9 +338,12 @@ impl Session {
 
         let mut outputs = Vec::new();
         for info in infos {
-            let window = platform
-                .create_wallpaper(&info)
-                .with_context(|| format!("wallpaper window for {}", info.device))?;
+            let window = if below {
+                platform.create_wallpaper_below(&info)
+            } else {
+                platform.create_wallpaper(&info)
+            }
+            .with_context(|| format!("wallpaper window for {}", info.device))?;
             let handles = window.handles();
             // SAFETY: `window` is stored next to the surface in `Output` and dropped after it.
             let surface = unsafe {
@@ -534,6 +546,15 @@ impl Session {
             self.present_all(gpu)?;
         }
         Ok(())
+    }
+
+    /// Puts its windows above any wallpaper being replaced.
+    pub fn raise(&self) {
+        for o in &self.outputs {
+            if let Some(w) = &o.window {
+                w.raise();
+            }
+        }
     }
 
     /// The web wallpaper host, if this session shows one.

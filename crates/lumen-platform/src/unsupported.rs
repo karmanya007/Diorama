@@ -21,6 +21,10 @@ impl Platform {
         Err(Error::Unsupported)
     }
 
+    pub fn create_wallpaper_below(&self, _output: &OutputInfo) -> Result<WallpaperWindow> {
+        Err(Error::Unsupported)
+    }
+
     pub fn create_offscreen(&self, _width: u32, _height: u32) -> Result<WallpaperWindow> {
         Err(Error::Unsupported)
     }
@@ -86,6 +90,10 @@ impl Waker {
 pub enum WallpaperWindow {}
 
 impl WallpaperWindow {
+    pub fn raise(&self) {
+        match *self {}
+    }
+
     pub fn handles(&self) -> SurfaceHandles {
         match *self {}
     }

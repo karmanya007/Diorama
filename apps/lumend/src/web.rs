@@ -2,9 +2,11 @@
 //! the user's property choices, pause state, audio, media and the cursor as
 //! JSON lines on its stdin (closing stdin ends it).
 
-use std::io::Write;
+use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -115,8 +117,11 @@ fn webhost_exe() -> PathBuf {
 }
 
 pub struct WebHost {
-    child: Child,
+    /// `None` once handed to the reaper thread (drop).
+    child: Option<Child>,
     stdin: Option<ChildStdin>,
+    /// The page has painted (the host printed `ready`).
+    ready: Arc<AtomicBool>,
     media: MediaTracker,
     audio: Option<SceneAudio>,
     started: Instant,
@@ -135,11 +140,15 @@ pub struct WebHost {
 
 impl WebHost {
     /// A host showing `source` on the monitors `outputs` (output ids).
+    /// `below`: its windows stay under the wallpaper being replaced until the
+    /// page has painted; `waker` is woken then.
     pub fn spawn(
         source: &WebSource,
         allow_network: bool,
         span: bool,
         outputs: &[String],
+        below: bool,
+        waker: lumen_platform::Waker,
     ) -> Result<Self> {
         let exe = webhost_exe();
         let mut cmd = Command::new(&exe);
@@ -148,7 +157,10 @@ impl WebHost {
             .arg("--file")
             .arg(&source.file)
             .stdin(Stdio::piped())
-            .stdout(Stdio::null());
+            .stdout(Stdio::piped());
+        if below {
+            cmd.arg("--below");
+        }
         if allow_network {
             cmd.arg("--allow-network");
         }
@@ -162,9 +174,27 @@ impl WebHost {
             .spawn()
             .with_context(|| format!("starting {}", exe.display()))?;
         let stdin = child.stdin.take();
+        let ready = Arc::new(AtomicBool::new(!below));
+        if let Some(stdout) = child.stdout.take() {
+            // The host prints `ready` once its page has painted; the rest is ignored.
+            let flag = Arc::clone(&ready);
+            std::thread::Builder::new()
+                .name("webhost-out".into())
+                .spawn(move || {
+                    for line in std::io::BufReader::new(stdout).lines() {
+                        let Ok(line) = line else { break };
+                        if line.trim() == "ready" {
+                            flag.store(true, Ordering::SeqCst);
+                            waker.wake();
+                        }
+                    }
+                })
+                .context("starting the web host reader")?;
+        }
         let mut host = Self {
-            child,
+            child: Some(child),
             stdin,
+            ready,
             media: MediaTracker::start(),
             audio: SceneAudio::start(),
             started: Instant::now(),
@@ -205,7 +235,14 @@ impl WebHost {
 
     /// Whether the host process is still running.
     pub fn alive(&mut self) -> bool {
-        matches!(self.child.try_wait(), Ok(None))
+        self.child
+            .as_mut()
+            .is_some_and(|c| matches!(c.try_wait(), Ok(None)))
+    }
+
+    /// Whether the page has painted and its windows are up.
+    pub fn ready(&self) -> bool {
+        self.ready.load(Ordering::SeqCst)
     }
 
     /// A PNG of the page at `path`, asked for once the page had time to load:
@@ -326,17 +363,25 @@ impl WebHost {
 
 impl Drop for WebHost {
     fn drop(&mut self) {
-        // Closing stdin asks the host to exit; make sure it does.
+        // Closing stdin asks the host to exit; a thread makes sure it does,
+        // so switching wallpapers never waits for it.
         self.stdin = None;
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while Instant::now() < deadline {
-            if !matches!(self.child.try_wait(), Ok(None)) {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        let _ = std::thread::Builder::new()
+            .name("webhost-reaper".into())
+            .spawn(move || {
+                let deadline = Instant::now() + Duration::from_secs(2);
+                while Instant::now() < deadline {
+                    if !matches!(child.try_wait(), Ok(None)) {
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+            });
     }
 }
 

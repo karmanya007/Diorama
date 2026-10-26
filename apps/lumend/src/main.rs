@@ -358,6 +358,7 @@ fn main() -> Result<()> {
         playlists: Vec::new(),
         rng: playlist::Rng::from_time(),
         folders: Vec::new(),
+        retiring: Vec::new(),
         fps: Policy::default().fps,
         we_config: we_config_path(&args),
         we_assets: args.we_assets.is_dir().then(|| args.we_assets.clone()),
@@ -547,6 +548,21 @@ struct Slot {
     failures: u32,
     /// Why it last failed to show.
     error: Option<String>,
+    /// Its session has drawn and its windows are on top (until then a
+    /// replaced wallpaper stays visible above it).
+    shown: bool,
+}
+
+/// How long a replaced wallpaper may stay up while the new one gets ready.
+const RETIRE_AFTER: Duration = Duration::from_secs(6);
+
+/// Keeps a replaced wallpaper's windows on screen, silent and frozen, until
+/// the new one has drawn (see `Daemon::retiring`).
+fn retire(retiring: &mut Vec<(Session, Instant)>, mut session: Session) {
+    if let Some(sounds) = session.scene_sounds() {
+        sounds.set_master(0.0);
+    }
+    retiring.push((session, Instant::now() + RETIRE_AFTER));
 }
 
 /// Attempts to show a wallpaper before giving up until the desktop changes
@@ -615,6 +631,7 @@ impl Slot {
             run: None,
             failures: 0,
             error: None,
+            shown: false,
         }
     }
 
@@ -733,6 +750,9 @@ impl Slot {
         }
 
         if let Some(web) = session.web() {
+            if !self.shown && web.ready() {
+                self.shown = true;
+            }
             if !web.alive() {
                 tracing::warn!("web wallpaper host exited; restarting");
                 return Ok(Flow::Rebuild);
@@ -771,6 +791,10 @@ impl Slot {
                 tracing::warn!("scene frame failed: {e:#}; resetting GPU");
                 return Ok(Flow::ResetGpu);
             }
+            if !self.shown {
+                session.raise();
+                self.shown = true;
+            }
             if self.fallback_pending {
                 self.fallback_pending = false;
                 scene_fallback(config_dir, gpu, session, span);
@@ -785,6 +809,10 @@ impl Slot {
             if let Err(e) = session.show_video_frame(gpu, frame) {
                 tracing::warn!("video frame failed: {e:#}; resetting GPU");
                 return Ok(Flow::ResetGpu);
+            }
+            if !self.shown {
+                session.raise();
+                self.shown = true;
             }
             if self.fallback_pending {
                 self.fallback_pending = false;
@@ -860,6 +888,9 @@ struct Daemon<'p> {
     rng: playlist::Rng,
     /// Folders the library also lists (kept for the UI).
     folders: Vec<PathBuf>,
+    /// Replaced wallpapers still on screen until their successors have drawn
+    /// (no black gap when switching), each with a deadline.
+    retiring: Vec<(Session, Instant)>,
 }
 
 impl Daemon<'_> {
@@ -898,6 +929,7 @@ impl Daemon<'_> {
         if device_lost {
             // Everything holding the old device goes first: D3D12 hands back the
             // same (removed) device for an adapter while one is still alive.
+            self.retiring.clear();
             for slot in &mut self.slots {
                 slot.session = None;
             }
@@ -973,6 +1005,14 @@ impl Daemon<'_> {
             }
         }
 
+        // Replaced wallpapers go once every new one has drawn (or in time).
+        if !self.retiring.is_empty() {
+            let all_shown = self.slots.iter().all(|s| s.session.is_none() || s.shown);
+            let now = Instant::now();
+            self.retiring
+                .retain(|(_, until)| !all_shown && now < *until);
+        }
+
         self.advance_playlists(None);
 
         if Instant::now() >= self.next_audio_check {
@@ -1045,7 +1085,9 @@ impl Daemon<'_> {
                     let fps = self.fps;
                     let slot = &mut self.slots[i];
                     slot.wallpaper = w;
-                    slot.session = None;
+                    if let Some(old) = slot.session.take() {
+                        retire(&mut self.retiring, old);
+                    }
                     slot.shown_on.clear();
                     slot.clock = VideoClock::default();
                     slot.scene_clock = SceneClock::new(fps);
@@ -1184,7 +1226,9 @@ impl Daemon<'_> {
             let wallpaper = self.load(&path, Some(kind), look)?;
             let slot = &mut self.slots[i];
             slot.wallpaper = wallpaper;
-            slot.session = None;
+            if let Some(old) = slot.session.take() {
+                retire(&mut self.retiring, old);
+            }
             slot.shown_on.clear();
         }
         if !reload.is_empty() {
@@ -1264,6 +1308,9 @@ impl Daemon<'_> {
     /// those whose monitors changed. Failures are retried next tick.
     fn rebuild(&mut self, all: bool) {
         self.needs_rebuild = false;
+        if all {
+            self.retiring.clear();
+        }
         // Without a device, the GPU re-init in `tick` asks for a rebuild later.
         let Some(gpu) = self.gpu.as_ref() else {
             return;
@@ -1299,14 +1346,25 @@ impl Daemon<'_> {
             {
                 continue;
             }
-            // Surfaces/windows go first; they reference the old device and old Explorer windows.
-            slot.session = None;
+            // After a desktop reset or device loss the old surfaces and windows
+            // go first (they reference the old device and Explorer windows);
+            // otherwise the old wallpaper stays up until the new one has drawn.
+            match slot.session.take() {
+                Some(old) if !all => retire(&mut self.retiring, old),
+                _ => {}
+            }
             slot.shown_on = ids;
             if group.is_empty() {
                 continue;
             }
-            match Session::build(self.platform, gpu, &slot.wallpaper, group, network) {
+            let below = !self.retiring.is_empty();
+            match Session::build(self.platform, gpu, &slot.wallpaper, group, network, below) {
                 Ok(mut session) => {
+                    // Images are drawn while building; the rest after their first frame.
+                    slot.shown = !below || slot.wallpaper.kind == MediaKind::Image;
+                    if below && slot.shown {
+                        session.raise();
+                    }
                     if let Some(frame) = slot.clock.current.as_ref()
                         && let Err(e) = session.show_video_frame(gpu, frame)
                     {
@@ -1349,6 +1407,8 @@ impl Daemon<'_> {
             if let Some(c) = left {
                 slot.claim = c;
                 kept.push(slot);
+            } else if let Some(old) = slot.session.take() {
+                retire(&mut self.retiring, old);
             }
         }
         self.slots = kept;

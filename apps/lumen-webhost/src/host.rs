@@ -6,10 +6,10 @@ use crate::watch::{Reports, Watchdog};
 use crate::{properties, protocol};
 
 use std::collections::HashMap;
-use std::io::{BufRead, IsTerminal};
+use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock, mpsc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -20,6 +20,8 @@ use wry::dpi::{PhysicalPosition, PhysicalSize};
 use wry::{Rect, WebContext, WebView, WebViewBuilder};
 
 const SHIM: &str = include_str!("shim.js");
+/// With `--below`: raise the windows by now even if no page said it painted.
+const SHOW_AFTER: Duration = Duration::from_secs(6);
 
 #[derive(Parser, Debug)]
 #[command(about = "Hosts a Wallpaper Engine web wallpaper behind the desktop icons")]
@@ -43,6 +45,11 @@ struct Args {
     /// One page across all monitors (their bounding box) instead of one per monitor.
     #[arg(long)]
     span: bool,
+    /// Create the windows below the other wallpaper windows and raise them
+    /// once the page has painted (lumend replacing a wallpaper); prints
+    /// `ready` then.
+    #[arg(long)]
+    below: bool,
     /// Only these monitors (output ids, comma-separated); default: all.
     #[arg(long, value_delimiter = ',')]
     outputs: Vec<String>,
@@ -154,6 +161,8 @@ struct Host {
     reports: Reports,
     /// Answers for widgets polling the PerformanceMonitor app.
     performance: Performance,
+    /// Create windows below the other wallpaper windows (until shown).
+    below: bool,
 }
 
 impl Host {
@@ -187,9 +196,12 @@ impl Host {
     }
 
     fn screen(&mut self, platform: &Platform, output: &OutputInfo) -> Result<Screen> {
-        let window = platform
-            .create_wallpaper(output)
-            .context("creating the wallpaper window")?;
+        let window = if self.below {
+            platform.create_wallpaper_below(output)
+        } else {
+            platform.create_wallpaper(output)
+        }
+        .context("creating the wallpaper window")?;
         self.page(window, output)
     }
 
@@ -376,6 +388,7 @@ fn run(args: Args) -> Result<()> {
         paused_all: false,
         reports: Reports::new(root.clone(), args.allow_network),
         performance: Performance::default(),
+        below: args.below,
     };
     host.set_properties(&choices);
     // General properties reach the init script; the rest needs the pages.
@@ -392,6 +405,9 @@ fn run(args: Args) -> Result<()> {
         return snapshot(&mut host, &platform, &args, out, early, &rx);
     }
     let mut screens = build(&mut host, &platform, args.span, &args.outputs)?;
+    // Shown (raised) once a page has painted, or after a while regardless.
+    let built = Instant::now();
+    let mut shown = !host.below;
     for c in early {
         apply(&mut host, &screens, &platform, c);
     }
@@ -400,8 +416,18 @@ fn run(args: Args) -> Result<()> {
             if event.needs_rebuild() {
                 tracing::info!(?event, "rebuilding web wallpaper windows");
                 screens.clear();
+                // Nothing to hide behind after a desktop reset.
+                host.below = false;
                 screens = build(&mut host, &platform, args.span, &args.outputs)?;
             }
+        }
+        if !shown && (host.reports.take_ready() || built.elapsed() > SHOW_AFTER) {
+            shown = true;
+            for s in &screens {
+                s.window.raise();
+            }
+            println!("ready");
+            let _ = std::io::stdout().flush();
         }
         for s in &mut screens {
             s.window.keep_in_place();

@@ -38,13 +38,13 @@ use windows::Win32::UI::HiDpi::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    GWLP_USERDATA, GetCursorPos, GetParent, GetWindowLongPtrW, GetWindowRect, HWND_TOP,
-    MA_NOACTIVATE, MSG, MsgWaitForMultipleObjects, PM_REMOVE, PeekMessageW, PostMessageW,
-    QS_ALLINPUT, RegisterClassExW, RegisterWindowMessageW, SWP_NOACTIVATE, SWP_NOZORDER,
-    SWP_SHOWWINDOW, SetWindowLongPtrW, SetWindowPos, TranslateMessage, WM_APP, WM_DESTROY,
-    WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_MOUSEACTIVATE, WM_WTSSESSION_CHANGE, WNDCLASSEXW, WS_CHILD,
-    WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE, WTS_SESSION_LOCK,
-    WTS_SESSION_UNLOCK,
+    GWLP_USERDATA, GetCursorPos, GetParent, GetWindowLongPtrW, GetWindowRect, HWND_BOTTOM,
+    HWND_TOP, MA_NOACTIVATE, MSG, MsgWaitForMultipleObjects, PM_REMOVE, PeekMessageW, PostMessageW,
+    QS_ALLINPUT, RegisterClassExW, RegisterWindowMessageW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SWP_NOZORDER, SWP_SHOWWINDOW, SetWindowLongPtrW, SetWindowPos, TranslateMessage, WM_APP,
+    WM_DESTROY, WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_MOUSEACTIVATE, WM_WTSSESSION_CHANGE,
+    WNDCLASSEXW, WS_CHILD, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
+    WS_VISIBLE, WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
 };
 use windows::core::{PCWSTR, w};
 
@@ -193,6 +193,17 @@ impl Platform {
 
     /// Creates a window covering `output`, parented behind the desktop icons.
     pub fn create_wallpaper(&self, output: &OutputInfo) -> Result<WallpaperWindow> {
+        self.wallpaper_window(output, false)
+    }
+
+    /// Like [`Self::create_wallpaper`], but below the other wallpaper
+    /// windows: a wallpaper being replaced stays visible until this one has
+    /// drawn and is [raised](WallpaperWindow::raise).
+    pub fn create_wallpaper_below(&self, output: &OutputInfo) -> Result<WallpaperWindow> {
+        self.wallpaper_window(output, true)
+    }
+
+    fn wallpaper_window(&self, output: &OutputInfo, below: bool) -> Result<WallpaperWindow> {
         let (host, layout) = desktop::wallpaper_host()?;
         tracing::debug!(?layout, output = %output.device, "attaching wallpaper window");
 
@@ -219,10 +230,11 @@ impl Platform {
                 None,
             )
             .map_err(|e| os_err("CreateWindowExW(wallpaper)", &e))?;
-            // Above any other wallpaper host child (e.g. another wallpaper app), still below the icons.
+            // Above any other wallpaper host child (e.g. another wallpaper app),
+            // still below the icons; or at the bottom until raised.
             SetWindowPos(
                 hwnd,
-                Some(HWND_TOP),
+                Some(if below { HWND_BOTTOM } else { HWND_TOP }),
                 origin[0].x,
                 origin[0].y,
                 output.width as i32,
@@ -340,6 +352,22 @@ pub struct WallpaperWindow {
 }
 
 impl WallpaperWindow {
+    /// Brings the window above the other wallpaper windows (still below the icons).
+    pub fn raise(&self) {
+        // SAFETY: z-order change of our own window.
+        unsafe {
+            let _ = SetWindowPos(
+                self.hwnd,
+                Some(HWND_TOP),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE,
+            );
+        }
+    }
+
     pub fn handles(&self) -> SurfaceHandles {
         // HWNDs are never null for a created window; fall back defensively anyway.
         let hwnd = NonZeroIsize::new(self.hwnd.0 as isize).unwrap_or(NonZeroIsize::MIN);
