@@ -330,19 +330,12 @@ fn run(args: Args) -> Result<()> {
             waker.wake();
         });
     }
-    let mut choices = Map::new();
-    let mut early = Vec::new();
+    let (mut choices, mut early) = (Map::new(), Vec::new());
     if driven {
-        // lumend's first lines (properties, general) arrive together.
-        let mut wait = Duration::from_secs(2);
-        while let Ok(message) = rx.recv_timeout(wait) {
-            match message {
-                Some(Command::Properties(c)) => choices = c,
-                Some(other) => early.push(other),
-                None if args.snapshot.is_none() => return Ok(()),
-                None => break,
-            }
-            wait = Duration::from_millis(100);
+        let closed;
+        (choices, early, closed) = first_messages(&rx);
+        if closed && args.snapshot.is_none() {
+            return Ok(());
         }
     }
 
@@ -752,6 +745,30 @@ fn apply(host: &mut Host, screens: &[Screen], platform: &Platform, command: Comm
     }
 }
 
+/// lumend's first lines, read before the pages exist: the user's choices,
+/// the other messages so far, and whether lumend has gone. Properties and
+/// general come together; anything else ends the wait (audio follows every
+/// 33 ms, so waiting for a gap would wait forever).
+fn first_messages(
+    rx: &mpsc::Receiver<Option<Command>>,
+) -> (Map<String, Value>, Vec<Command>, bool) {
+    let (mut choices, mut early) = (Map::new(), Vec::new());
+    let mut wait = Duration::from_secs(2);
+    while let Ok(message) = rx.recv_timeout(wait) {
+        match message {
+            Some(Command::Properties(c)) => choices = c,
+            Some(c @ Command::General(_)) => early.push(c),
+            Some(other) => {
+                early.push(other);
+                break;
+            }
+            None => return (choices, early, true),
+        }
+        wait = Duration::from_millis(100);
+    }
+    (choices, early, false)
+}
+
 /// `update`'s keys over `general`'s (lumend sends only what it knows).
 fn merge(general: &mut Value, update: &Value) {
     match (general.as_object_mut(), update.as_object()) {
@@ -777,6 +794,40 @@ pub fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn first_messages_stop_at_the_audio_stream() {
+        let (tx, rx) = mpsc::channel();
+        for line in [
+            r#"{"properties":{"speed":2}}"#,
+            r#"{"general":{"language":"de-de"}}"#,
+            r#"{"audio":[0.1]}"#,
+        ] {
+            tx.send(parse(line)).unwrap();
+        }
+        // lumend keeps streaming audio while the host starts.
+        let feeder = std::thread::spawn(move || {
+            for _ in 0..40 {
+                if tx.send(parse(r#"{"audio":[0.2]}"#)).is_err() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(30));
+            }
+        });
+        let start = std::time::Instant::now();
+        let (choices, early, closed) = first_messages(&rx);
+        assert!(
+            start.elapsed() < Duration::from_millis(500),
+            "{:?}",
+            start.elapsed()
+        );
+        assert_eq!(choices["speed"], 2);
+        assert_eq!(early.len(), 2);
+        assert!(matches!(early[0], Command::General(_)) && matches!(early[1], Command::Audio(_)));
+        assert!(!closed);
+        drop(rx);
+        feeder.join().unwrap();
+    }
 
     #[test]
     fn commands_parse() {
