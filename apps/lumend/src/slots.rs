@@ -27,14 +27,15 @@ pub fn assign(claims: &[Vec<String>], outputs: &[OutputInfo]) -> Vec<Vec<OutputI
 }
 
 /// Output ids for what the user typed: an id or a device name
-/// (`\\.\DISPLAY1`, any case).
+/// (`\\.\DISPLAY1` or `DISPLAY1`, any case).
 pub fn resolve(names: &[String], outputs: &[OutputInfo]) -> Result<Vec<String>, String> {
+    let bare = |s: &str| s.trim_start_matches(['\\', '.']).to_ascii_lowercase();
     names
         .iter()
         .map(|name| {
             outputs
                 .iter()
-                .find(|o| o.id.0 == *name || o.device.eq_ignore_ascii_case(name))
+                .find(|o| o.id.0 == *name || bare(&o.device) == bare(name))
                 .map(|o| o.id.0.clone())
                 .ok_or_else(|| format!("no monitor {name} (`lumen status` lists them)"))
         })
@@ -96,6 +97,7 @@ mod tests {
             ["DEL-1"]
         );
         assert_eq!(resolve(&["DEL-1".into()], &outputs).unwrap(), ["DEL-1"]);
+        assert_eq!(resolve(&["display1".into()], &outputs).unwrap(), ["DEL-1"]);
         assert!(resolve(&["X".into()], &outputs).is_err());
     }
 

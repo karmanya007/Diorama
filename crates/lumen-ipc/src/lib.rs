@@ -77,8 +77,10 @@ impl MediaKind {
     /// folders (`project.json` with `"type": "web"`) and HTML pages are web.
     pub fn from_path(path: &std::path::Path) -> Option<Self> {
         if path.is_dir() {
-            if project_type(&path.join("project.json")).as_deref() == Some("web") {
-                return Some(Self::Web);
+            match project_type(&path.join("project.json")).as_deref() {
+                Some("web") => return Some(Self::Web),
+                Some("video") => return Some(Self::Video),
+                _ => {}
             }
             return ["scene.pkg", "scene.json"]
                 .iter()

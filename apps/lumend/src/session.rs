@@ -76,8 +76,23 @@ pub fn wallpaper_path(path: &Path, kind: Option<MediaKind>) -> Option<PathBuf> {
     Some(match kind.or_else(|| MediaKind::from_path(path))? {
         MediaKind::Scene => scene_dir(path),
         MediaKind::Web if !path.is_dir() => path.parent()?.to_path_buf(),
+        MediaKind::Video if path.is_dir() => project_video(path)?,
         _ => path.to_path_buf(),
     })
+}
+
+/// The video a WE video project folder plays (its `file`, inside the folder).
+fn project_video(dir: &Path) -> Option<PathBuf> {
+    let file = crate::properties::project(dir)["file"].as_str()?.to_owned();
+    let rel = Path::new(&file);
+    if !rel
+        .components()
+        .all(|c| matches!(c, std::path::Component::Normal(_)))
+    {
+        return None;
+    }
+    let path = dir.join(rel);
+    path.is_file().then_some(path)
 }
 
 /// A scene project folder from the folder itself or one of its files.
@@ -105,6 +120,8 @@ impl Wallpaper {
             .with_context(|| format!("unknown media type for {}", path.display()))?;
         let path = &match kind {
             MediaKind::Scene => scene_dir(path),
+            MediaKind::Video if path.is_dir() => project_video(path)
+                .with_context(|| format!("no video file in {}", path.display()))?,
             _ => path.to_path_buf(),
         };
         if kind == MediaKind::Web {
