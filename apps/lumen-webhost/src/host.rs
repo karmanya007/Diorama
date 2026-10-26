@@ -43,6 +43,9 @@ struct Args {
     /// One page across all monitors (their bounding box) instead of one per monitor.
     #[arg(long)]
     span: bool,
+    /// Only these monitors (output ids, comma-separated); default: all.
+    #[arg(long, value_delimiter = ',')]
+    outputs: Vec<String>,
     /// Instead of showing the wallpaper, render it off-screen and save a
     /// PNG of the page after `--after` seconds (tests; nothing on the desktop).
     #[arg(long)]
@@ -388,7 +391,7 @@ fn run(args: Args) -> Result<()> {
     if let Some(out) = &args.snapshot {
         return snapshot(&mut host, &platform, &args, out, early, &rx);
     }
-    let mut screens = build(&mut host, &platform, args.span)?;
+    let mut screens = build(&mut host, &platform, args.span, &args.outputs)?;
     for c in early {
         apply(&mut host, &screens, &platform, c);
     }
@@ -397,7 +400,7 @@ fn run(args: Args) -> Result<()> {
             if event.needs_rebuild() {
                 tracing::info!(?event, "rebuilding web wallpaper windows");
                 screens.clear();
-                screens = build(&mut host, &platform, args.span)?;
+                screens = build(&mut host, &platform, args.span, &args.outputs)?;
             }
         }
         for s in &mut screens {
@@ -666,8 +669,11 @@ fn capture(_webview: &WebView, _platform: &Platform) -> Result<Vec<u8>> {
     anyhow::bail!("snapshots need WebView2 (Windows)")
 }
 
-fn build(host: &mut Host, platform: &Platform, span: bool) -> Result<Vec<Screen>> {
+fn build(host: &mut Host, platform: &Platform, span: bool, only: &[String]) -> Result<Vec<Screen>> {
     let mut outputs = platform.outputs()?;
+    if !only.is_empty() {
+        outputs.retain(|o| only.contains(&o.id.0));
+    }
     if span {
         outputs = span_output(&outputs).into_iter().collect();
     }

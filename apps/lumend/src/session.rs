@@ -261,19 +261,21 @@ pub fn rect_of(o: &OutputInfo) -> Rect {
 }
 
 impl Session {
+    /// Shows `wallpaper` on the monitors `infos`.
     pub fn build(
         platform: &Platform,
         gpu: &Gpu,
         wallpaper: &Wallpaper,
+        infos: Vec<OutputInfo>,
         web_network: bool,
     ) -> Result<Self> {
         let look = wallpaper.look;
-        let infos = platform.outputs().context("enumerating outputs")?;
         let canvas = Rect::bounding(infos.iter().map(rect_of)).context("no outputs found")?;
         if let Content::Web(source) = &wallpaper.content {
             // The host makes its own windows; outputs here only track pauses.
+            let ids: Vec<String> = infos.iter().map(|o| o.id.0.clone()).collect();
             let host =
-                crate::web::WebHost::spawn(source, web_network, look.layout == Layout::Span)?;
+                crate::web::WebHost::spawn(source, web_network, look.layout == Layout::Span, &ids)?;
             let outputs = infos
                 .into_iter()
                 .map(|info| Output {

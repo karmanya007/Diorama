@@ -1,5 +1,5 @@
 //! Persisted daemon state (`<config dir>/state.json`): restores the last
-//! wallpaper on the next start (and after autostart at sign-in).
+//! wallpapers on the next start (and after autostart at sign-in).
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -8,12 +8,17 @@ use lumen_ipc::{Fit, Layout, MediaKind};
 use serde::{Deserialize, Serialize};
 
 const FILE: &str = "state.json";
-const VERSION: u32 = 1;
+/// 2: `wallpapers` (one per monitor group) replaced `wallpaper`.
+const VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct State {
     pub version: u32,
+    /// What plays where, in the order the user set them.
     #[serde(default)]
+    pub wallpapers: Vec<SavedWallpaper>,
+    /// Version 1's single wallpaper (read only).
+    #[serde(default, skip_serializing)]
     pub wallpaper: Option<SavedWallpaper>,
     /// Video soundtrack volume 0–100.
     #[serde(default)]
@@ -27,6 +32,7 @@ impl Default for State {
     fn default() -> Self {
         Self {
             version: VERSION,
+            wallpapers: Vec::new(),
             wallpaper: None,
             volume: 0,
             web_network: Vec::new(),
@@ -40,10 +46,24 @@ pub struct SavedWallpaper {
     pub kind: MediaKind,
     pub fit: Fit,
     pub layout: Layout,
+    /// Output ids it shows on; empty: every monitor no other wallpaper has.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outputs: Vec<String>,
 }
 
 /// Missing or unreadable state is not fatal: start empty and say why.
 pub fn load(dir: &Path) -> State {
+    let mut state = read(dir);
+    if let Some(w) = state.wallpaper.take()
+        && state.wallpapers.is_empty()
+    {
+        state.wallpapers.push(w);
+    }
+    state.version = VERSION;
+    state
+}
+
+fn read(dir: &Path) -> State {
     let path = dir.join(FILE);
     match std::fs::read(&path) {
         Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|e| {
@@ -78,18 +98,39 @@ mod tests {
         assert_eq!(load(&dir), State::default());
 
         let state = State {
-            version: VERSION,
-            wallpaper: Some(SavedWallpaper {
-                path: PathBuf::from("C:/walls/a.mp4"),
-                kind: MediaKind::Video,
-                fit: Fit::Fill,
-                layout: Layout::Span,
-            }),
+            wallpapers: vec![
+                SavedWallpaper {
+                    path: PathBuf::from("C:/walls/a.mp4"),
+                    kind: MediaKind::Video,
+                    fit: Fit::Fill,
+                    layout: Layout::Span,
+                    outputs: Vec::new(),
+                },
+                SavedWallpaper {
+                    path: PathBuf::from("C:/walls/b.png"),
+                    kind: MediaKind::Image,
+                    fit: Fit::Fit,
+                    layout: Layout::PerOutput,
+                    outputs: vec!["DEL-1".into()],
+                },
+            ],
             volume: 40,
             web_network: vec![PathBuf::from("C:/web/clock")],
+            ..State::default()
         };
         save(&dir, &state).unwrap();
         assert_eq!(load(&dir), state);
+
+        // Version 1 files still load.
+        std::fs::write(
+            dir.join(FILE),
+            br#"{"version":1,"wallpaper":{"path":"C:/w.png","kind":"image","fit":"fill","layout":"per-output"},"volume":5}"#,
+        )
+        .unwrap();
+        let old = load(&dir);
+        assert_eq!(old.wallpapers.len(), 1);
+        assert_eq!(old.wallpapers[0].path, PathBuf::from("C:/w.png"));
+        assert_eq!(old.volume, 5);
 
         std::fs::write(dir.join(FILE), b"{not json").unwrap();
         assert_eq!(load(&dir), State::default());

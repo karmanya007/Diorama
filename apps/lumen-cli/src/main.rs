@@ -17,8 +17,12 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Show what is playing and the state of each monitor.
-    Status,
-    /// Show an image or video.
+    Status {
+        /// Also print each monitor's id and wallpaper.
+        #[arg(short, long)]
+        verbose: bool,
+    },
+    /// Show a wallpaper (image, video, scene or web page).
     Set {
         path: PathBuf,
         #[arg(long, value_enum)]
@@ -34,6 +38,10 @@ enum Command {
         /// Web wallpapers: take network access away again (remembered).
         #[arg(long)]
         deny_network: bool,
+        /// Only on this monitor (device name such as `\\.\DISPLAY1`, or its
+        /// id from `lumen status -v`); repeat for more. Default: all monitors.
+        #[arg(long = "output", value_name = "MONITOR")]
+        outputs: Vec<String>,
     },
     /// Video soundtrack volume, 0–100 (0 mutes and closes the audio device).
     Volume {
@@ -117,8 +125,9 @@ fn autostart(action: AutostartAction) -> Result<()> {
 }
 
 fn run(cli: Cli) -> Result<()> {
+    let verbose = matches!(cli.command, Command::Status { verbose: true });
     let request = match cli.command {
-        Command::Status => Request::Status,
+        Command::Status { .. } => Request::Status,
         Command::Set {
             path,
             fit,
@@ -126,7 +135,9 @@ fn run(cli: Cli) -> Result<()> {
             kind,
             allow_network,
             deny_network,
+            outputs,
         } => Request::Set {
+            outputs: (!outputs.is_empty()).then_some(outputs),
             network: match (allow_network, deny_network) {
                 (true, _) => Some(true),
                 (_, true) => Some(false),
@@ -190,6 +201,17 @@ fn run(cli: Cli) -> Result<()> {
                     o.coverage,
                     o.name
                 );
+                if verbose {
+                    println!("    id   {}", o.id);
+                }
+                // Per monitor when monitors differ (or on request).
+                if (verbose || status.outputs.iter().any(|x| x.content != status.content))
+                    && let Some(c) = &o.content
+                {
+                    println!("    shows {:?} {}", c.kind, c.path.display());
+                } else if o.content.is_none() {
+                    println!("    shows nothing");
+                }
             }
             Ok(())
         }

@@ -127,6 +127,11 @@ pub enum Request {
         /// this wallpaper from now on; absent keeps the remembered choice.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         network: Option<bool>,
+        /// Only these monitors (output ids or device names such as
+        /// `\\.\DISPLAY1`); the others keep what they show. Absent: every
+        /// monitor shows this wallpaper.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outputs: Option<Vec<String>>,
     },
     /// Video soundtrack volume, 0–100 (0 = muted, no audio device opened).
     Volume {
@@ -153,6 +158,9 @@ pub struct OutputStatus {
     pub paused: bool,
     /// `visible`, `maximized` or `fullscreen`.
     pub coverage: String,
+    /// What this monitor shows.
+    #[serde(default)]
+    pub content: Option<ContentStatus>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -311,11 +319,13 @@ mod tests {
             fit: None,
             layout: Some(Layout::Span),
             network: None,
+            outputs: Some(vec!["DEL-1234".into()]),
         };
         let line = String::from_utf8(encode(&req).unwrap()).unwrap();
         assert!(line.ends_with('\n'));
         assert!(line.contains(r#""cmd":"set""#), "{line}");
         assert!(line.contains(r#""layout":"span""#), "{line}");
+        assert!(line.contains(r#""outputs":["DEL-1234"]"#), "{line}");
         assert!(!line.contains("fit"), "absent options are omitted: {line}");
         assert_eq!(decode::<Request>(&line).unwrap(), req);
     }

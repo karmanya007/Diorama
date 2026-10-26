@@ -13,6 +13,7 @@ mod media;
 mod policy;
 mod scripts;
 mod session;
+mod slots;
 mod sounds;
 mod state;
 mod videos;
@@ -330,22 +331,15 @@ fn main() -> Result<()> {
             on_battery: platform.on_battery(),
             ..Conditions::default()
         },
-        wallpaper: None,
-        session: None,
+        slots: Vec::new(),
         config_dir: config_dir.clone(),
         os_fallback: args.os_fallback,
-        fallback_pending: false,
         volume: 0,
-        audio: None,
-        audio_loop: None,
         next_audio_check: Instant::now() + AUDIO_CHECK_INTERVAL,
         web_network: args.web_network,
         web_allowed: Vec::new(),
-        clock: VideoClock::default(),
         fps: args.fps,
-        scene_clock: SceneClock::new(args.fps),
         we_config: we_config_path(&args),
-        pointer: [0.5, 0.5],
         we_assets: args.we_assets.is_dir().then(|| args.we_assets.clone()),
         next_coverage: Instant::now(),
         next_battery: Instant::now() + BATTERY_INTERVAL,
@@ -377,44 +371,45 @@ fn main() -> Result<()> {
     let saved_state = config_dir.as_deref().map(state::load).unwrap_or_default();
     daemon.volume = args.volume.unwrap_or(saved_state.volume).min(100);
     daemon.web_allowed = saved_state.web_network.clone();
-    let saved = saved_state.wallpaper;
-    let initial = match (
-        args.image
-            .as_ref()
-            .or(args.video.as_ref())
-            .or(args.scene.as_ref())
-            .or(args.web.as_ref()),
-        saved,
-    ) {
-        (Some(path), _) => Some((path.clone(), None, look)),
-        (None, Some(s)) => Some((
-            s.path,
-            Some(s.kind),
-            Look {
+    let load = |path: &Path, kind: Option<MediaKind>, look: Look| {
+        Wallpaper::load(
+            path,
+            kind,
+            look,
+            daemon.we_assets.as_deref(),
+            daemon.we_config.as_deref(),
+        )
+    };
+    if let Some(path) = start_path {
+        match load(path, None, look) {
+            Ok(w) => {
+                if let Err(e) = daemon.set_wallpaper(w, Vec::new()) {
+                    tracing::warn!("{e:#}");
+                }
+            }
+            Err(e) => tracing::error!("start-up wallpaper: {e:#}"),
+        }
+    } else if saved_state.wallpapers.is_empty() {
+        tracing::info!("no wallpaper yet; waiting for `lumen set <file>`");
+    } else {
+        // Last time's wallpapers, each on its monitors.
+        let mut slots = Vec::new();
+        for s in saved_state.wallpapers {
+            let look = Look {
                 fit: s.fit,
                 layout: s.layout,
-            },
-        )),
-        (None, None) => None,
-    };
-    match initial {
-        Some((path, kind, look)) => {
-            match Wallpaper::load(
-                &path,
-                kind,
-                look,
-                daemon.we_assets.as_deref(),
-                daemon.we_config.as_deref(),
-            ) {
-                Ok(w) => {
-                    if let Err(e) = daemon.set_wallpaper(w) {
-                        tracing::warn!("{e:#}");
-                    }
-                }
-                Err(e) => tracing::error!("start-up wallpaper: {e:#}"),
+            };
+            match load(&s.path, Some(s.kind), look) {
+                Ok(w) => slots.push(Slot::new(w, s.outputs, args.fps)),
+                Err(e) => tracing::error!("start-up wallpaper {}: {e:#}", s.path.display()),
             }
         }
-        None => tracing::info!("no wallpaper yet; waiting for `lumen set <file>`"),
+        daemon.slots = slots;
+        daemon.rebuild(true);
+        let volume = daemon.volume;
+        for slot in &mut daemon.slots {
+            slot.start_audio(volume);
+        }
     }
 
     while !stop.load(Ordering::SeqCst)
@@ -482,6 +477,252 @@ fn adapter_key(gpu: &Gpu) -> AdapterKey {
     (info.vendor, info.device, info.backend)
 }
 
+/// One wallpaper and the monitors it shows on.
+struct Slot {
+    /// Output ids it claims; empty: every monitor no other wallpaper claims.
+    claim: Vec<String>,
+    wallpaper: Wallpaper,
+    /// `None` while it shows nowhere (its monitors are unplugged) or between rebuilds.
+    session: Option<Session>,
+    /// Output ids the session was built for.
+    shown_on: Vec<String>,
+    /// Shows on the primary monitor: its soundtrack and sounds play and it
+    /// makes the OS fallback, so sounds never overlap.
+    primary: bool,
+    clock: VideoClock,
+    scene_clock: SceneClock,
+    /// Last cursor position over the scene (kept while it is elsewhere).
+    pointer: [f32; 2],
+    audio: Option<AudioPlayer>,
+    /// Video loop index the audio was last synced to; `None` = not started yet.
+    audio_loop: Option<u32>,
+    /// Fallback snapshot still to be taken from the next shown frame.
+    fallback_pending: bool,
+}
+
+/// What a slot's frame asks of the daemon.
+enum Flow {
+    Continue,
+    /// Windows or the web host went away: rebuild.
+    Rebuild,
+    /// A frame failed: recreate the GPU device.
+    ResetGpu,
+}
+
+impl Slot {
+    fn new(wallpaper: Wallpaper, claim: Vec<String>, fps: u32) -> Self {
+        Self {
+            claim,
+            wallpaper,
+            session: None,
+            shown_on: Vec::new(),
+            primary: false,
+            clock: VideoClock::default(),
+            scene_clock: SceneClock::new(fps),
+            pointer: [0.5, 0.5],
+            audio: None,
+            audio_loop: None,
+            fallback_pending: false,
+        }
+    }
+
+    fn saved(&self) -> state::SavedWallpaper {
+        state::SavedWallpaper {
+            path: self.wallpaper.path.clone(),
+            kind: self.wallpaper.kind,
+            fit: self.wallpaper.look.fit,
+            layout: self.wallpaper.look.layout,
+            outputs: self.claim.clone(),
+        }
+    }
+
+    fn content_status(&self) -> ContentStatus {
+        ContentStatus {
+            kind: self.wallpaper.kind,
+            path: self.wallpaper.path.clone(),
+            fit: self.wallpaper.look.fit,
+            layout: self.wallpaper.look.layout,
+        }
+    }
+
+    /// Time until this slot next needs the loop.
+    fn wait(&mut self) -> Duration {
+        match &self.wallpaper.content {
+            _ if self.session.is_none() => Duration::from_secs(1),
+            Content::Video(_) if self.clock.is_paused() => COVERAGE_INTERVAL,
+            Content::Video(player) => self.clock.time_until_next(player),
+            Content::Scene(_) if self.scene_clock.is_paused() => COVERAGE_INTERVAL,
+            Content::Scene(_) => self.scene_clock.time_until_next(),
+            Content::Web(_) => self
+                .session
+                .as_mut()
+                .and_then(Session::web)
+                .map_or(Duration::from_secs(1), |w| w.time_until_next()),
+            Content::Image(_) => Duration::from_secs(1),
+        }
+    }
+
+    /// (Re)creates the soundtrack player for a video on the primary monitor,
+    /// if volume > 0. Errors only mean silence; video is unaffected (P10).
+    fn start_audio(&mut self, volume: u8) {
+        self.audio = None;
+        self.audio_loop = None;
+        if volume == 0 || !self.primary || self.wallpaper.kind != MediaKind::Video {
+            return;
+        }
+        match AudioPlayer::spawn(&self.wallpaper.path, f32::from(volume) / 100.0) {
+            Ok(a) => self.audio = Some(a),
+            Err(e) => tracing::info!("no video audio: {e}"),
+        }
+    }
+
+    /// Scene sounds play only on the primary monitor's wallpaper.
+    fn set_sound_volume(&mut self, volume: u8) {
+        let master = if self.primary {
+            f32::from(volume) / 100.0
+        } else {
+            0.0
+        };
+        if let Some(sounds) = self.session.as_mut().and_then(Session::scene_sounds) {
+            sounds.set_master(master);
+        }
+    }
+
+    /// Pauses, web upkeep and due frames. `coverage`: re-check what covers the monitors.
+    fn frame(
+        &mut self,
+        platform: &Platform,
+        gpu: &Gpu,
+        policy: Policy,
+        conditions: Conditions,
+        coverage: bool,
+        config_dir: Option<&Path>,
+    ) -> Result<Flow> {
+        let Some(session) = self.session.as_mut() else {
+            return Ok(Flow::Continue);
+        };
+        let span = self.wallpaper.look.layout == Layout::Span;
+        if coverage {
+            let resumed = update_pauses(platform, session, policy, conditions);
+            let all_paused = session.outputs.iter().all(|o| o.paused);
+            match &self.wallpaper.content {
+                Content::Video(_) => {
+                    self.clock.set_paused(all_paused);
+                    if let (Some(audio), Some(_)) = (&self.audio, self.audio_loop) {
+                        audio.set_paused(all_paused);
+                    }
+                    // Freshly resumed outputs still show an old frame: present the current one now.
+                    if resumed && let Err(e) = session.present_all(gpu) {
+                        tracing::warn!("present failed: {e:#}; resetting GPU");
+                        return Ok(Flow::ResetGpu);
+                    }
+                }
+                Content::Scene(_) => {
+                    // Resuming makes the next frame due immediately.
+                    self.scene_clock.set_paused(all_paused);
+                    if let Some(sounds) = session.scene_sounds() {
+                        sounds.set_paused(all_paused);
+                    }
+                }
+                Content::Web(_) | Content::Image(_) => {}
+            }
+            let pauses: Vec<(String, bool)> = session
+                .outputs
+                .iter()
+                .map(|o| (o.info.id.0.clone(), o.paused))
+                .collect();
+            if let Some(web) = session.web() {
+                web.set_paused(pauses);
+            }
+        }
+
+        if let Some(web) = session.web() {
+            if !web.alive() {
+                tracing::warn!("web wallpaper host exited; restarting");
+                return Ok(Flow::Rebuild);
+            }
+            web.tick(platform);
+            if self.fallback_pending
+                && let Some(dir) = config_dir
+            {
+                let path = dir.join("fallback.png");
+                match web.snapshot(&path) {
+                    web::Snapshot::Pending => {}
+                    web::Snapshot::Ready => {
+                        self.fallback_pending = false;
+                        set_fallback(&path, span);
+                    }
+                    web::Snapshot::Failed => {
+                        self.fallback_pending = false;
+                        tracing::warn!("no web wallpaper snapshot for the OS fallback");
+                    }
+                }
+            }
+        }
+
+        if let Content::Scene(_) = &self.wallpaper.content
+            && self.scene_clock.frame_due()
+        {
+            let on_scene = platform.cursor_position().and_then(|c| session.pointer(c));
+            if let Some(p) = on_scene {
+                self.pointer = p;
+            }
+            // Cursor events only while the cursor is over the wallpaper.
+            let buttons = on_scene.map(|_| platform.desktop_pointer());
+            if let Err(e) =
+                session.show_scene_frame(gpu, self.scene_clock.time(), self.pointer, buttons)
+            {
+                tracing::warn!("scene frame failed: {e:#}; resetting GPU");
+                return Ok(Flow::ResetGpu);
+            }
+            if self.fallback_pending {
+                self.fallback_pending = false;
+                scene_fallback(config_dir, gpu, session, span);
+            }
+        }
+
+        if let Content::Video(player) = &self.wallpaper.content
+            && !self.clock.is_paused()
+            && let Some(frame) = self.clock.due_frame(player)
+        {
+            let loop_index = frame.loop_index;
+            if let Err(e) = session.show_video_frame(gpu, frame) {
+                tracing::warn!("video frame failed: {e:#}; resetting GPU");
+                return Ok(Flow::ResetGpu);
+            }
+            if self.fallback_pending {
+                self.fallback_pending = false;
+                self.video_fallback(config_dir);
+            }
+            // Audio starts with the first frame and restarts whenever the video wraps.
+            if let Some(audio) = &self.audio {
+                match self.audio_loop {
+                    None => audio.set_paused(false),
+                    Some(prev) if prev != loop_index => audio.restart(),
+                    Some(_) => {}
+                }
+                self.audio_loop = Some(loop_index);
+            }
+        }
+        Ok(Flow::Continue)
+    }
+
+    /// Saves the current video frame as a PNG and makes it the OS wallpaper.
+    fn video_fallback(&self, config_dir: Option<&Path>) {
+        let (Some(dir), Some(frame)) = (config_dir, self.clock.current.as_ref()) else {
+            return;
+        };
+        let path = dir.join("fallback.png");
+        let saved = image::RgbaImage::from_raw(frame.width, frame.height, frame.to_rgba())
+            .map(|img| img.save(&path));
+        match saved {
+            Some(Ok(())) => set_fallback(&path, self.wallpaper.look.layout == Layout::Span),
+            Some(Err(e)) => tracing::warn!("fallback snapshot not saved: {e}"),
+            None => tracing::warn!("fallback snapshot has wrong size"),
+        }
+    }
+}
+
 struct Daemon<'p> {
     platform: &'p Platform,
     /// `None` between a device loss and a successful re-init.
@@ -489,15 +730,11 @@ struct Daemon<'p> {
     gpu_options: GpuOptions,
     policy: Policy,
     conditions: Conditions,
-    wallpaper: Option<Wallpaper>,
-    session: Option<Session>,
-    clock: VideoClock,
+    /// What plays where, in the order the user set them.
+    slots: Vec<Slot>,
     fps: u32,
     /// Wallpaper Engine's `config.json` (per-wallpaper fit), if present.
     we_config: Option<PathBuf>,
-    scene_clock: SceneClock,
-    /// Last cursor position over the scene (kept while it is elsewhere).
-    pointer: [f32; 2],
     /// `<WE install>/assets` for scene built-ins, if present.
     we_assets: Option<PathBuf>,
     next_coverage: Instant,
@@ -512,13 +749,8 @@ struct Daemon<'p> {
     quit: bool,
     config_dir: Option<PathBuf>,
     os_fallback: bool,
-    /// Video fallback snapshot still to be taken from the next shown frame.
-    fallback_pending: bool,
     /// Soundtrack volume 0–100; 0 means no audio player at all.
     volume: u8,
-    audio: Option<AudioPlayer>,
-    /// Video loop index the audio was last synced to; `None` = not started yet.
-    audio_loop: Option<u32>,
     next_audio_check: Instant,
     /// Every web wallpaper may use the network (`--web-network`).
     web_network: bool,
@@ -530,18 +762,12 @@ struct Daemon<'p> {
 impl Daemon<'_> {
     /// One iteration: wait for events/IPC/next frame, then react.
     fn tick(&mut self, jobs: &Receiver<Job>) -> Result<()> {
-        let content_wait = match self.wallpaper.as_ref().map(|w| &w.content) {
-            Some(Content::Video(_)) if self.clock.is_paused() => COVERAGE_INTERVAL,
-            Some(Content::Video(player)) => self.clock.time_until_next(player),
-            Some(Content::Scene(_)) if self.scene_clock.is_paused() => COVERAGE_INTERVAL,
-            Some(Content::Scene(_)) => self.scene_clock.time_until_next(),
-            Some(Content::Web(_)) => self
-                .session
-                .as_mut()
-                .and_then(Session::web)
-                .map_or(Duration::from_secs(1), |w| w.time_until_next()),
-            _ => Duration::from_secs(1),
-        };
+        let content_wait = self
+            .slots
+            .iter_mut()
+            .map(Slot::wait)
+            .min()
+            .unwrap_or(Duration::from_secs(1));
         let wait = content_wait.min(self.next_coverage.saturating_duration_since(Instant::now()));
         let events = self.platform.poll_events(wait);
         if let Some(gpu) = &self.gpu {
@@ -569,7 +795,9 @@ impl Daemon<'_> {
         if device_lost {
             // Everything holding the old device goes first: D3D12 hands back the
             // same (removed) device for an adapter while one is still alive.
-            self.session = None;
+            for slot in &mut self.slots {
+                slot.session = None;
+            }
             if let Some(old) = self.gpu.take() {
                 self.lost_adapter = Some((adapter_key(&old), Instant::now()));
             }
@@ -605,162 +833,54 @@ impl Daemon<'_> {
         }
         if events.iter().any(|e| e.needs_rebuild()) || self.needs_rebuild {
             tracing::info!(?events, device_lost, "rebuilding wallpaper");
-            self.rebuild();
+            self.rebuild(true);
             return Ok(());
         }
 
         let Some(gpu) = self.gpu.as_ref() else {
             return Ok(());
         };
-        let Some(session) = self.session.as_mut() else {
-            return Ok(());
-        };
-        if Instant::now() >= self.next_coverage || events.iter().any(|e| !e.needs_rebuild()) {
+        let coverage =
+            Instant::now() >= self.next_coverage || events.iter().any(|e| !e.needs_rebuild());
+        if coverage {
             self.next_coverage = Instant::now() + COVERAGE_INTERVAL;
-            let resumed = update_pauses(self.platform, session, self.policy, self.conditions);
-            if let Some(Content::Video(_)) = self.wallpaper.as_ref().map(|w| &w.content) {
-                let all_paused = session.outputs.iter().all(|o| o.paused);
-                self.clock.set_paused(all_paused);
-                if let (Some(audio), Some(_)) = (&self.audio, self.audio_loop) {
-                    audio.set_paused(all_paused);
+        }
+        for slot in &mut self.slots {
+            let flow = slot.frame(
+                self.platform,
+                gpu,
+                self.policy,
+                self.conditions,
+                coverage,
+                self.config_dir.as_deref(),
+            )?;
+            match flow {
+                Flow::Continue => {}
+                Flow::Rebuild => {
+                    self.needs_rebuild = true;
+                    std::thread::sleep(REBUILD_RETRY);
+                    return Ok(());
                 }
-                // Freshly resumed outputs still show an old frame: present the current one now.
-                if resumed && let Err(e) = session.present_all(gpu) {
-                    tracing::warn!("present failed: {e:#}; resetting GPU");
+                Flow::ResetGpu => {
                     self.reset_gpu = true;
                     return Ok(());
                 }
-            }
-            let pauses: Vec<(String, bool)> = session
-                .outputs
-                .iter()
-                .map(|o| (o.info.id.0.clone(), o.paused))
-                .collect();
-            if let Some(web) = session.web() {
-                web.set_paused(pauses);
-            }
-            if let Some(Content::Scene(_)) = self.wallpaper.as_ref().map(|w| &w.content) {
-                // Resuming makes the next frame due immediately.
-                let all_paused = session.outputs.iter().all(|o| o.paused);
-                self.scene_clock.set_paused(all_paused);
-                if let Some(sounds) = session.scene_sounds() {
-                    sounds.set_paused(all_paused);
-                }
-            }
-        }
-
-        if let Some(web) = session.web() {
-            if !web.alive() {
-                tracing::warn!("web wallpaper host exited; restarting");
-                self.needs_rebuild = true;
-                std::thread::sleep(REBUILD_RETRY);
-                return Ok(());
-            }
-            web.tick(self.platform);
-            if self.fallback_pending
-                && let Some(dir) = self.config_dir.as_deref()
-            {
-                let path = dir.join("fallback.png");
-                match web.snapshot(&path) {
-                    web::Snapshot::Pending => {}
-                    web::Snapshot::Ready => {
-                        self.fallback_pending = false;
-                        let span = self
-                            .wallpaper
-                            .as_ref()
-                            .is_some_and(|w| w.look.layout == Layout::Span);
-                        set_fallback(&path, span);
-                    }
-                    web::Snapshot::Failed => {
-                        self.fallback_pending = false;
-                        tracing::warn!("no web wallpaper snapshot for the OS fallback");
-                    }
-                }
-            }
-        }
-
-        if let Some(Content::Scene(_)) = self.wallpaper.as_ref().map(|w| &w.content)
-            && self.scene_clock.frame_due()
-        {
-            let on_scene = self
-                .platform
-                .cursor_position()
-                .and_then(|c| session.pointer(c));
-            if let Some(p) = on_scene {
-                self.pointer = p;
-            }
-            // Cursor events only while the cursor is over the wallpaper.
-            let buttons = on_scene.map(|_| self.platform.desktop_pointer());
-            if let Err(e) =
-                session.show_scene_frame(gpu, self.scene_clock.time(), self.pointer, buttons)
-            {
-                tracing::warn!("scene frame failed: {e:#}; resetting GPU");
-                self.reset_gpu = true;
-                return Ok(());
-            }
-            if self.fallback_pending {
-                self.fallback_pending = false;
-                let span = self
-                    .wallpaper
-                    .as_ref()
-                    .is_some_and(|w| w.look.layout == Layout::Span);
-                scene_fallback(self.config_dir.as_deref(), gpu, session, span);
-            }
-        }
-
-        if let Some(Content::Video(player)) = self.wallpaper.as_ref().map(|w| &w.content)
-            && !self.clock.is_paused()
-            && let Some(frame) = self.clock.due_frame(player)
-        {
-            let loop_index = frame.loop_index;
-            if let Err(e) = session.show_video_frame(gpu, frame) {
-                tracing::warn!("video frame failed: {e:#}; resetting GPU");
-                self.reset_gpu = true;
-                return Ok(());
-            }
-            if self.fallback_pending {
-                self.fallback_pending = false;
-                self.video_fallback();
-            }
-            // Audio starts with the first frame and restarts whenever the video wraps.
-            if let Some(audio) = &self.audio {
-                match self.audio_loop {
-                    None => audio.set_paused(false),
-                    Some(prev) if prev != loop_index => audio.restart(),
-                    Some(_) => {}
-                }
-                self.audio_loop = Some(loop_index);
             }
         }
 
         if Instant::now() >= self.next_audio_check {
             self.next_audio_check = Instant::now() + AUDIO_CHECK_INTERVAL;
-            if self.audio.as_ref().is_some_and(AudioPlayer::needs_reopen) {
-                tracing::info!("audio device changed; reopening");
-                self.start_audio();
-            }
-            if let Some(sounds) = self.session.as_mut().and_then(Session::scene_sounds) {
-                sounds.check_devices();
+            for slot in &mut self.slots {
+                if slot.audio.as_ref().is_some_and(AudioPlayer::needs_reopen) {
+                    tracing::info!("audio device changed; reopening");
+                    slot.start_audio(self.volume);
+                }
+                if let Some(sounds) = slot.session.as_mut().and_then(Session::scene_sounds) {
+                    sounds.check_devices();
+                }
             }
         }
         Ok(())
-    }
-
-    /// (Re)creates the soundtrack player for the current video, if volume > 0.
-    /// Errors only mean silence; video is unaffected (P10).
-    fn start_audio(&mut self) {
-        self.audio = None;
-        self.audio_loop = None;
-        let Some(w) = self.wallpaper.as_ref() else {
-            return;
-        };
-        if self.volume == 0 || w.kind != MediaKind::Video {
-            return;
-        }
-        match AudioPlayer::spawn(&w.path, f32::from(self.volume) / 100.0) {
-            Ok(a) => self.audio = Some(a),
-            Err(e) => tracing::info!("no video audio: {e}"),
-        }
     }
 
     fn network_allowed(&self, path: &Path) -> bool {
@@ -775,18 +895,13 @@ impl Daemon<'_> {
         tracing::info!(path = %path.display(), allow, "web wallpaper network access");
     }
 
-    /// Remembers the wallpaper for the next start.
-    fn persist(&self, w: &Wallpaper) {
+    /// Remembers the wallpapers for the next start.
+    fn persist(&self) {
         let Some(dir) = self.config_dir.as_deref() else {
             return;
         };
         let state = state::State {
-            wallpaper: Some(state::SavedWallpaper {
-                path: w.path.clone(),
-                kind: w.kind,
-                fit: w.look.fit,
-                layout: w.look.layout,
-            }),
+            wallpapers: self.slots.iter().map(Slot::saved).collect(),
             volume: self.volume,
             web_network: self.web_allowed.clone(),
             ..state::State::default()
@@ -796,75 +911,104 @@ impl Daemon<'_> {
         }
     }
 
-    /// Saves the current video frame as a PNG and makes it the OS wallpaper.
-    fn video_fallback(&self) {
-        let (Some(dir), Some(frame), Some(w)) = (
-            self.config_dir.as_deref(),
-            self.clock.current.as_ref(),
-            self.wallpaper.as_ref(),
-        ) else {
-            return;
-        };
-        let path = dir.join("fallback.png");
-        let saved = image::RgbaImage::from_raw(frame.width, frame.height, frame.to_rgba())
-            .map(|img| img.save(&path));
-        match saved {
-            Some(Ok(())) => set_fallback(&path, w.look.layout == Layout::Span),
-            Some(Err(e)) => tracing::warn!("fallback snapshot not saved: {e}"),
-            None => tracing::warn!("fallback snapshot has wrong size"),
-        }
-    }
-
-    /// Recreates windows/surfaces for the current wallpaper. Failures are retried next tick.
-    fn rebuild(&mut self) {
-        // Surfaces/windows go first; they reference the old device and old Explorer windows.
-        self.session = None;
+    /// Recreates windows and surfaces: for every wallpaper (`all`), or only
+    /// those whose monitors changed. Failures are retried next tick.
+    fn rebuild(&mut self, all: bool) {
         self.needs_rebuild = false;
         // Without a device, the GPU re-init in `tick` asks for a rebuild later.
-        let (Some(wallpaper), Some(gpu)) = (self.wallpaper.as_ref(), self.gpu.as_ref()) else {
+        let Some(gpu) = self.gpu.as_ref() else {
             return;
         };
-        let network = self.web_network || self.network_allowed(&wallpaper.path);
-        match Session::build(self.platform, gpu, wallpaper, network) {
-            Ok(mut session) => {
-                if let Some(frame) = self.clock.current.as_ref()
-                    && let Err(e) = session.show_video_frame(gpu, frame)
-                {
-                    tracing::warn!("re-showing current frame failed: {e:#}");
-                }
-                if let Some(sounds) = session.scene_sounds() {
-                    sounds.set_master(f32::from(self.volume) / 100.0);
-                }
-                self.session = Some(session);
-                self.next_coverage = Instant::now();
-            }
+        let infos = match self.platform.outputs() {
+            Ok(infos) => infos,
             Err(e) => {
-                tracing::warn!("{e:#}; retrying");
+                tracing::warn!("enumerating outputs: {e:#}; retrying");
                 self.needs_rebuild = true;
                 std::thread::sleep(REBUILD_RETRY);
+                return;
             }
+        };
+        let claims: Vec<Vec<String>> = self.slots.iter().map(|s| s.claim.clone()).collect();
+        let groups = slots::assign(&claims, &infos);
+        let networks: Vec<bool> = self
+            .slots
+            .iter()
+            .map(|s| self.web_network || self.network_allowed(&s.wallpaper.path))
+            .collect();
+        let primary = infos.iter().find(|o| o.primary).map(|o| o.id.0.clone());
+        for ((slot, group), network) in self.slots.iter_mut().zip(groups).zip(networks) {
+            let ids: Vec<String> = group.iter().map(|o| o.id.0.clone()).collect();
+            let was_primary = slot.primary;
+            slot.primary = primary.as_ref().is_some_and(|p| ids.contains(p));
+            if slot.primary != was_primary {
+                slot.start_audio(self.volume);
+            }
+            if !all && slot.session.is_some() && slot.shown_on == ids {
+                continue;
+            }
+            // Surfaces/windows go first; they reference the old device and old Explorer windows.
+            slot.session = None;
+            slot.shown_on = ids;
+            if group.is_empty() {
+                continue;
+            }
+            match Session::build(self.platform, gpu, &slot.wallpaper, group, network) {
+                Ok(mut session) => {
+                    if let Some(frame) = slot.clock.current.as_ref()
+                        && let Err(e) = session.show_video_frame(gpu, frame)
+                    {
+                        tracing::warn!("re-showing current frame failed: {e:#}");
+                    }
+                    slot.session = Some(session);
+                    slot.set_sound_volume(self.volume);
+                }
+                Err(e) => {
+                    tracing::warn!("{e:#}; retrying");
+                    slot.shown_on.clear();
+                    self.needs_rebuild = true;
+                }
+            }
+        }
+        self.next_coverage = Instant::now();
+        if self.needs_rebuild {
+            std::thread::sleep(REBUILD_RETRY);
         }
     }
 
-    fn set_wallpaper(&mut self, wallpaper: Wallpaper) -> Result<()> {
-        self.session = None;
-        self.audio = None;
-        self.clock = VideoClock::default();
-        self.scene_clock = SceneClock::new(self.fps);
-        self.persist(&wallpaper);
-        if self.os_fallback {
-            match wallpaper.kind {
-                // Images are their own snapshot.
-                MediaKind::Image => {
-                    set_fallback(&wallpaper.path, wallpaper.look.layout == Layout::Span);
-                }
-                MediaKind::Video | MediaKind::Scene => self.fallback_pending = true,
-                MediaKind::Web => self.fallback_pending = true,
+    /// Shows `wallpaper` on the monitors `claim` (empty: all of them),
+    /// replacing what they showed.
+    fn set_wallpaper(&mut self, wallpaper: Wallpaper, claim: Vec<String>) -> Result<()> {
+        let claims: Vec<Vec<String>> = self.slots.iter().map(|s| s.claim.clone()).collect();
+        let left = slots::reclaim(&claims, &claim);
+        let mut kept = Vec::new();
+        for (mut slot, left) in self.slots.drain(..).zip(left) {
+            if let Some(c) = left {
+                slot.claim = c;
+                kept.push(slot);
             }
         }
-        self.wallpaper = Some(wallpaper);
-        self.start_audio();
-        self.rebuild();
+        self.slots = kept;
+        let mut slot = Slot::new(wallpaper, claim, self.fps);
+        if self.os_fallback {
+            // Taken from the first frame, if it lands on the primary monitor.
+            slot.fallback_pending = true;
+        }
+        self.slots.push(slot);
+        self.persist();
+        self.rebuild(false);
+        let new = self.slots.last_mut().context("wallpaper just added")?;
+        if self.os_fallback && new.primary && new.wallpaper.kind == MediaKind::Image {
+            // Images are their own snapshot.
+            new.fallback_pending = false;
+            set_fallback(
+                &new.wallpaper.path,
+                new.wallpaper.look.layout == Layout::Span,
+            );
+        }
+        if !new.primary {
+            new.fallback_pending = false;
+        }
+        new.start_audio(self.volume);
         if self.needs_rebuild {
             anyhow::bail!(
                 "wallpaper loaded but could not be shown yet; retrying in the background"
@@ -883,6 +1027,11 @@ impl Daemon<'_> {
         self.we_fit(path).unwrap_or(Fit::Fill)
     }
 
+    /// The wallpaper on the primary monitor (else the first).
+    fn main_slot(&self) -> Option<&Slot> {
+        self.slots.iter().find(|s| s.primary).or(self.slots.first())
+    }
+
     fn handle(&mut self, request: Request) -> Response {
         tracing::info!(?request, "control request");
         let ok_or_error = |r: Result<()>| match r {
@@ -899,8 +1048,19 @@ impl Daemon<'_> {
                 fit,
                 layout,
                 network,
+                outputs,
             } => {
-                let current = self.wallpaper.as_ref().map(|w| w.look);
+                let claim = match outputs {
+                    Some(names) => {
+                        let infos = self.platform.outputs().unwrap_or_default();
+                        match slots::resolve(&names, &infos) {
+                            Ok(ids) => ids,
+                            Err(message) => return Response::Error { message },
+                        }
+                    }
+                    None => Vec::new(),
+                };
+                let current = self.main_slot().map(|s| s.wallpaper.look);
                 let look = Look {
                     fit: fit
                         .or_else(|| self.we_fit(&path))
@@ -922,26 +1082,24 @@ impl Daemon<'_> {
                         if let Some(allow) = network {
                             self.set_network_allowed(&w.path, allow);
                         }
-                        self.set_wallpaper(w)
+                        self.set_wallpaper(w, claim)
                     }),
                 )
             }
             Request::Volume { percent } => {
                 self.volume = percent.min(100);
-                match (&self.audio, self.volume) {
-                    (_, 0) => {
-                        self.audio = None;
-                        self.audio_loop = None;
+                for slot in &mut self.slots {
+                    match (&slot.audio, self.volume) {
+                        (_, 0) => {
+                            slot.audio = None;
+                            slot.audio_loop = None;
+                        }
+                        (Some(audio), v) => audio.set_volume(f32::from(v) / 100.0),
+                        (None, _) => slot.start_audio(self.volume),
                     }
-                    (Some(audio), v) => audio.set_volume(f32::from(v) / 100.0),
-                    (None, _) => self.start_audio(),
+                    slot.set_sound_volume(self.volume);
                 }
-                if let Some(sounds) = self.session.as_mut().and_then(Session::scene_sounds) {
-                    sounds.set_master(f32::from(self.volume) / 100.0);
-                }
-                if let Some(w) = self.wallpaper.as_ref() {
-                    self.persist(w);
-                }
+                self.persist();
                 Response::Ok
             }
             Request::Pause | Request::Resume => {
@@ -957,47 +1115,56 @@ impl Daemon<'_> {
     }
 
     fn status(&self) -> Status {
-        let outputs = match &self.session {
-            Some(s) => s
-                .outputs
-                .iter()
-                .map(|o| (o.info.clone(), o.paused, o.coverage))
-                .collect(),
-            None => self
-                .platform
-                .outputs()
-                .unwrap_or_default()
-                .into_iter()
-                .map(|info| (info, false, Coverage::Visible))
-                .collect::<Vec<_>>(),
-        };
+        // Monitors with a wallpaper, then any showing nothing.
+        let mut outputs: Vec<OutputStatus> = Vec::new();
+        for slot in &self.slots {
+            let Some(session) = &slot.session else {
+                continue;
+            };
+            for o in &session.outputs {
+                outputs.push(output_status(
+                    o.info.clone(),
+                    o.paused,
+                    o.coverage,
+                    Some(slot.content_status()),
+                ));
+            }
+        }
+        for info in self.platform.outputs().unwrap_or_default() {
+            if !outputs.iter().any(|o| o.id == info.id.0) {
+                outputs.push(output_status(info, false, Coverage::Visible, None));
+            }
+        }
+        outputs.sort_by_key(|o| (o.x, o.y));
         Status {
             pid: std::process::id(),
             daemon_version: env!("CARGO_PKG_VERSION").to_owned(),
-            content: self.wallpaper.as_ref().map(|w| ContentStatus {
-                kind: w.kind,
-                path: w.path.clone(),
-                fit: w.look.fit,
-                layout: w.look.layout,
-            }),
+            content: self.main_slot().map(Slot::content_status),
             user_paused: self.conditions.user_paused,
             volume: self.volume,
-            outputs: outputs
-                .into_iter()
-                .map(|(info, paused, coverage)| OutputStatus {
-                    id: info.id.0,
-                    device: info.device,
-                    name: info.name,
-                    x: info.x,
-                    y: info.y,
-                    width: info.width,
-                    height: info.height,
-                    refresh_hz: f64::from(info.refresh_mhz) / 1000.0,
-                    primary: info.primary,
-                    paused,
-                    coverage: format!("{coverage:?}").to_lowercase(),
-                })
-                .collect(),
+            outputs,
         }
+    }
+}
+
+fn output_status(
+    info: lumen_platform::OutputInfo,
+    paused: bool,
+    coverage: Coverage,
+    content: Option<ContentStatus>,
+) -> OutputStatus {
+    OutputStatus {
+        id: info.id.0,
+        device: info.device,
+        name: info.name,
+        x: info.x,
+        y: info.y,
+        width: info.width,
+        height: info.height,
+        refresh_hz: f64::from(info.refresh_mhz) / 1000.0,
+        primary: info.primary,
+        paused,
+        coverage: format!("{coverage:?}").to_lowercase(),
+        content,
     }
 }

@@ -44,7 +44,7 @@ pub enum Error {
 /// Identity that survives reboots and Windows renumbering displays (P8).
 /// On Windows: the monitor device interface path from `QueryDisplayConfig`,
 /// which encodes EDID manufacturer/product and the connector instance.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct OutputId(pub String);
 
 /// What the system says is playing (any player using the OS media controls).
@@ -118,7 +118,7 @@ pub struct DesktopPointer {
     pub left_down: bool,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct OutputInfo {
     pub id: OutputId,
     /// Human-readable monitor name (EDID friendly name), may be empty.

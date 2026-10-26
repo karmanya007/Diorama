@@ -126,7 +126,13 @@ pub struct WebHost {
 }
 
 impl WebHost {
-    pub fn spawn(source: &WebSource, allow_network: bool, span: bool) -> Result<Self> {
+    /// A host showing `source` on the monitors `outputs` (output ids).
+    pub fn spawn(
+        source: &WebSource,
+        allow_network: bool,
+        span: bool,
+        outputs: &[String],
+    ) -> Result<Self> {
         let exe = webhost_exe();
         let mut cmd = Command::new(&exe);
         cmd.arg(&source.dir)
@@ -139,6 +145,9 @@ impl WebHost {
         }
         if span {
             cmd.arg("--span");
+        }
+        if !outputs.is_empty() {
+            cmd.arg("--outputs").arg(outputs.join(","));
         }
         let mut child = cmd
             .spawn()
