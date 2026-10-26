@@ -574,7 +574,10 @@
 
 	// Cursor events (cursorEnter/Leave/Move/Down/Up/Click) for the scripts
 	// of objects under the cursor; the host hit-tests layer rectangles.
-	let hovered = new Map(), pressed = new Set(), wasDown = false, lastCursor = '';
+	// `pressed`: layers that got cursorDown, with their last local position;
+	// they keep receiving cursorMove and get cursorUp until the button is
+	// released, even when the cursor has left them (drags).
+	let hovered = new Map(), pressed = new Map(), wasDown = false, lastCursor = '';
 	function dispatch(node, handler, world, local) {
 		for (const s of scripts) {
 			if (s.node !== node || s.disabled || !s.ns || typeof s.ns[handler] !== 'function') continue;
@@ -611,15 +614,21 @@
 			if (!hovered.has(n)) dispatch(n, 'cursorEnter', world, local);
 			else if (moved) dispatch(n, 'cursorMove', world, local);
 		}
+		// Captured layers the cursor has left still follow it.
+		for (const [n, local] of pressed) {
+			if (hits.has(n)) pressed.set(n, hits.get(n));
+			else if (moved) dispatch(n, 'cursorMove', world, local);
+		}
 		if (down && !wasDown) {
-			pressed = new Set(hits.keys());
+			pressed = new Map(hits);
 			for (const [n, local] of hits) dispatch(n, 'cursorDown', world, local);
 		} else if (!down && wasDown) {
 			for (const [n, local] of hits) {
 				dispatch(n, 'cursorUp', world, local);
 				if (pressed.has(n)) dispatch(n, 'cursorClick', world, local);
 			}
-			pressed = new Set();
+			for (const [n, local] of pressed) if (!hits.has(n)) dispatch(n, 'cursorUp', world, local);
+			pressed = new Map();
 		}
 		for (const [handler, event] of state.events || []) broadcast(handler, event);
 		hovered = hits;

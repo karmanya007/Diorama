@@ -459,6 +459,11 @@ impl ImageBlit {
     /// Fits the image as if it were `size` pixels (a scene rendered at
     /// another size than its own, see [`render_size`]).
     #[must_use]
+    /// The size the image is fitted by (see [`Self::with_fit_size`]).
+    pub fn fit_size(&self) -> (u32, u32) {
+        self.image_size
+    }
+
     pub fn with_fit_size(mut self, size: (u32, u32)) -> Self {
         self.image_size = size;
         self

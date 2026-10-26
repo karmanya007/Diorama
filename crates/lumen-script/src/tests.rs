@@ -299,6 +299,38 @@ fn clicks_reach_the_layer_under_the_cursor() {
 }
 
 #[test]
+fn drags_keep_the_layer_after_the_cursor_leaves_it() {
+    // Pixel Desktop's window script (3155776049): fast drags outrun the
+    // 10 × 10 layer between frames.
+    let drag = script(
+        "let dragging = false; let n = 0;
+export function cursorDown(e) { dragging = true; }
+export function cursorUp(e) { dragging = false; thisScene.getLayer('clock').text = 'up ' + n; }
+export function cursorMove(e) { if (dragging) { n++; thisScene.getLayer('clock').text = 'at ' + e.worldPosition.x; } }",
+        1,
+        ScriptTarget::Other("drag".into()),
+        "{}",
+    );
+    let mut host = ScriptHost::new(&scene(vec![drag]), [100, 100], CLOCK)
+        .unwrap()
+        .unwrap();
+    let at = |down: bool, x: f32| Inputs {
+        cursor: [x, 2.0],
+        pointer_active: true,
+        left_down: down,
+        ..inputs(0.0)
+    };
+    host.update(&at(false, 2.0));
+    host.update(&at(true, 2.0));
+    // Far outside the layer: still dragged.
+    let changes = host.update(&at(true, 40.0));
+    assert_eq!(changes[&0].text.as_deref(), Some("at 40"));
+    // Released elsewhere: a last move, then the up.
+    let changes = host.update(&at(false, 60.0));
+    assert_eq!(changes[&0].text.as_deref(), Some("up 2"));
+}
+
+#[test]
 fn events_reach_every_script_with_a_handler() {
     let player = script(
         "export function mediaThumbnailChanged(e) { thisScene.getLayer('clock').text = e.hasThumbnail + ' ' + (e.primaryColor instanceof Vec3) + ' ' + e.primaryColor.y; }",

@@ -52,7 +52,13 @@ use crate::{
     Coverage, DesktopEvent, DesktopPointer, Error, OutputInfo, Result, SurfaceHandles, classify,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
-use windows::Win32::UI::WindowsAndMessaging::WindowFromPoint;
+use windows::Win32::UI::Input::{
+    GetRawInputData, HRAWINPUT, RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER, RID_INPUT,
+    RIDEV_INPUTSINK, RIM_TYPEMOUSE, RegisterRawInputDevices,
+};
+use windows::Win32::UI::WindowsAndMessaging::{
+    RI_MOUSE_LEFT_BUTTON_DOWN, RI_MOUSE_LEFT_BUTTON_UP, WM_INPUT, WindowFromPoint,
+};
 
 const CONTROL_CLASS: PCWSTR = w!("LumenControl");
 const WALLPAPER_CLASS: PCWSTR = w!("LumenWallpaper");
@@ -62,6 +68,10 @@ const CLOSING: isize = 1;
 thread_local! {
     /// Events raised by window procedures, drained by `Platform::poll_events`.
     static EVENTS: RefCell<Vec<DesktopEvent>> = const { RefCell::new(Vec::new()) };
+    /// Left-button presses (`true`) and releases on the desktop from raw
+    /// input, in order, not yet seen by `Platform::desktop_pointer`.
+    static BUTTON_EDGES: RefCell<std::collections::VecDeque<bool>> =
+        const { RefCell::new(std::collections::VecDeque::new()) };
     /// Message id of the `TaskbarCreated` broadcast (Explorer started/restarted).
     static TASKBAR_CREATED: Cell<u32> = const { Cell::new(0) };
 }
@@ -124,6 +134,17 @@ impl Platform {
             if let Err(e) = WTSRegisterSessionNotification(control, NOTIFY_FOR_THIS_SESSION) {
                 tracing::warn!("session notifications unavailable: {}", e.message());
             }
+            // Mouse buttons from raw input, also while another app has focus:
+            // a click between two frames is not lost (scene scripts).
+            let mouse = RAWINPUTDEVICE {
+                usUsagePage: 1,
+                usUsage: 2,
+                dwFlags: RIDEV_INPUTSINK,
+                hwndTarget: control,
+            };
+            if let Err(e) = RegisterRawInputDevices(&[mouse], size_of::<RAWINPUTDEVICE>() as u32) {
+                tracing::warn!("raw mouse input unavailable: {}", e.message());
+            }
 
             Ok(Self { hinstance, control })
         }
@@ -165,6 +186,14 @@ impl Platform {
                 return DesktopPointer::default();
             }
             let over = desktop::is_desktop_window(WindowFromPoint(pt));
+            // A press or release since the last call counts for one call each,
+            // so even a click shorter than a frame is seen down, then up.
+            if let Some(down) = BUTTON_EDGES.with(|e| e.borrow_mut().pop_front()) {
+                return DesktopPointer {
+                    over_desktop: true,
+                    left_down: down,
+                };
+            }
             let down = GetAsyncKeyState(i32::from(VK_LBUTTON.0)) as u16 & 0x8000 != 0;
             DesktopPointer {
                 over_desktop: over,
@@ -469,6 +498,10 @@ unsafe extern "system" fn control_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
     if msg == WM_DISPLAYCHANGE {
         push_event(DesktopEvent::OutputsChanged);
     }
+    if msg == WM_INPUT {
+        // SAFETY: lp is the HRAWINPUT of this WM_INPUT message.
+        unsafe { raw_mouse_button(HRAWINPUT(lp.0 as *mut _)) };
+    }
     if msg == WM_WTSSESSION_CHANGE {
         match wp.0 as u32 {
             WTS_SESSION_LOCK => push_event(DesktopEvent::SessionLocked),
@@ -478,6 +511,49 @@ unsafe extern "system" fn control_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
     }
     // SAFETY: default handling for our own window.
     unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
+}
+
+/// Queues left-button presses over the desktop and the releases that follow.
+///
+/// # Safety
+/// `input` must be the handle of the WM_INPUT message being handled.
+unsafe fn raw_mouse_button(input: HRAWINPUT) {
+    let mut raw = RAWINPUT::default();
+    let mut size = size_of::<RAWINPUT>() as u32;
+    // SAFETY: `raw` is large enough for a mouse packet; the size is checked.
+    let read = unsafe {
+        GetRawInputData(
+            input,
+            RID_INPUT,
+            Some((&raw mut raw).cast()),
+            &mut size,
+            size_of::<RAWINPUTHEADER>() as u32,
+        )
+    };
+    if read == u32::MAX || read == 0 || raw.header.dwType != RIM_TYPEMOUSE.0 {
+        return;
+    }
+    // SAFETY: a mouse packet (dwType checked).
+    let flags = u32::from(unsafe { raw.data.mouse.Anonymous.Anonymous.usButtonFlags });
+    BUTTON_EDGES.with(|edges| {
+        let mut edges = edges.borrow_mut();
+        let pressed = edges.back().copied().unwrap_or(false);
+        if flags & RI_MOUSE_LEFT_BUTTON_DOWN != 0 {
+            let mut pt = POINT::default();
+            // SAFETY: plain queries with a valid out-param.
+            let over = unsafe {
+                GetCursorPos(&mut pt).is_ok() && desktop::is_desktop_window(WindowFromPoint(pt))
+            };
+            if over && edges.len() < 32 {
+                edges.push_back(true);
+            }
+        }
+        // Releases only end presses that were queued (or are being delivered).
+        if flags & RI_MOUSE_LEFT_BUTTON_UP != 0 && (pressed || edges.is_empty()) && edges.len() < 32
+        {
+            edges.push_back(false);
+        }
+    });
 }
 
 unsafe extern "system" fn wallpaper_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {

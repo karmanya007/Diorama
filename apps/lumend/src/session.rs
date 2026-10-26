@@ -8,7 +8,9 @@ use lumen_ipc::{Fit, Layout, MediaKind};
 use lumen_media::{Nv12Frame, VideoPlayer};
 use lumen_platform::{Coverage, OutputInfo, Platform, WallpaperWindow};
 use lumen_render::scene::{FrameInputs, SceneRenderer};
-use lumen_render::{FitMode, ImageBlit, Nv12Planes, Rect, VideoBlit, display_size, render_size};
+use lumen_render::{
+    FitMode, ImageBlit, Nv12Planes, Rect, VideoBlit, display_size, render_size, uv_transform,
+};
 
 /// How the picture is placed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -281,6 +283,19 @@ pub struct Session {
     canvas: Rect,
     renderer: Renderer,
     look: Look,
+    /// Size the content is fitted by (scenes: the scene size).
+    fit_size: (u32, u32),
+    /// Size of the area the cursor was last mapped over (see [`Self::pointer`]).
+    pointer_area: std::cell::Cell<(u32, u32)>,
+}
+
+/// Fraction `p` of `area` → fraction of content of `size` fitted to it with `mode`.
+fn content_point(mode: FitMode, size: (u32, u32), area: Rect, p: [f32; 2]) -> [f32; 2] {
+    if size.0 == 0 || size.1 == 0 {
+        return p;
+    }
+    let (s, o) = uv_transform(mode, size, area, area);
+    [p[0] * s[0] + o[0], p[1] * s[1] + o[1]]
 }
 
 pub fn rect_of(o: &OutputInfo) -> Rect {
@@ -333,6 +348,8 @@ impl Session {
                 canvas,
                 renderer: Renderer::Web(Box::new(host)),
                 look,
+                fit_size: (0, 0),
+                pointer_area: std::cell::Cell::new((1, 1)),
             });
         }
 
@@ -441,11 +458,17 @@ impl Session {
             }
         };
 
+        let fit_size = match &renderer {
+            Renderer::Scene { blit, .. } | Renderer::Image(blit) => blit.fit_size(),
+            _ => (0, 0),
+        };
         let mut session = Self {
             outputs,
             canvas,
             renderer,
             look,
+            fit_size,
+            pointer_area: std::cell::Cell::new((1, 1)),
         };
         if matches!(session.renderer, Renderer::Image(_)) {
             session.present_all(gpu)?;
@@ -488,10 +511,25 @@ impl Session {
                     && i64::from(cursor.1) < i64::from(r.y) + i64::from(r.height)
             })?,
         };
+        self.pointer_area.set(area.size());
         Some([
             (cursor.0 - area.x) as f32 / area.width.max(1) as f32,
             (cursor.1 - area.y) as f32 / area.height.max(1) as f32,
         ])
+    }
+
+    /// A [`Self::pointer`] fraction as a fraction of the content itself,
+    /// through the fit (cropping, zoom, pan): where the cursor is in the
+    /// scene for scripts.
+    fn content_point(&self, p: [f32; 2]) -> [f32; 2] {
+        let (w, h) = self.pointer_area.get();
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: w,
+            height: h,
+        };
+        content_point(self.look.fit_mode(), self.fit_size, area, p)
     }
 
     /// Renders the scene at `time` and presents it (no-op for other content).
@@ -511,6 +549,8 @@ impl Session {
         pointer: [f32; 2],
         buttons: Option<lumen_platform::DesktopPointer>,
     ) -> Result<()> {
+        // Parallax follows the cursor over the output; scripts get scene points.
+        let scene_pointer = self.content_point(pointer);
         if let Renderer::Scene {
             scene,
             scripts,
@@ -528,7 +568,7 @@ impl Session {
                 let frame = crate::scripts::ScriptFrame {
                     time,
                     clock_ms: crate::scripts::now_ms(),
-                    pointer,
+                    pointer: scene_pointer,
                     buttons,
                     audio: spectrum,
                 };
@@ -606,5 +646,38 @@ impl Session {
             gpu.queue.present(frame);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cursor_maps_through_the_fit() {
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 1080,
+            height: 1920,
+        };
+        // A 16:9 scene filling a portrait monitor is cropped at the sides:
+        // the monitor's centre is the scene's centre, its edges are inside.
+        let fill = |p| content_point(FitMode::Fill, (1920, 1080), area, p);
+        let [cx, cy] = fill([0.5, 0.5]);
+        assert!((cx - 0.5).abs() < 1e-4 && (cy - 0.5).abs() < 1e-4);
+        let [left, _] = fill([0.0, 0.5]);
+        assert!(
+            (left - (0.5 - 0.5 * (1080.0 / 1920.0) / (1920.0 / 1080.0))).abs() < 1e-3,
+            "{left}"
+        );
+        // Stretch maps 1:1.
+        let [sx, sy] = content_point(FitMode::Stretch, (1920, 1080), area, [0.25, 0.75]);
+        assert!((sx - 0.25).abs() < 1e-4 && (sy - 0.75).abs() < 1e-4);
+        // Nothing to fit: unchanged.
+        assert_eq!(
+            content_point(FitMode::Fill, (0, 0), area, [0.3, 0.4]),
+            [0.3, 0.4]
+        );
     }
 }
