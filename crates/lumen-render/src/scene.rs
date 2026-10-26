@@ -1272,9 +1272,17 @@ impl SceneRenderer {
             });
         }
 
+        // Fullscreen layers (post-processing, bloom) work at the frame's real
+        // resolution, not in scene units: a 343×193 pixel-art scene still
+        // fills a 4K monitor, and its god rays must not squash the frame.
+        let target_size = if layer.kind == LayerKind::Fullscreen {
+            self.targets[frame.target].size
+        } else {
+            layer.size
+        };
         let ping = [
-            self.alloc_target(device, &format!("{} a", layer.name), layer.size, &mut owned),
-            self.alloc_target(device, &format!("{} b", layer.name), layer.size, &mut owned),
+            self.alloc_target(device, &format!("{} a", layer.name), target_size, &mut owned),
+            self.alloc_target(device, &format!("{} b", layer.name), target_size, &mut owned),
         ];
         let mut current = ping[0];
 
@@ -1365,7 +1373,7 @@ impl SceneRenderer {
             }
             let mut fbos = HashMap::new();
             for fbo in &effect.fbos {
-                let size = layer.size.map(|s| (s / fbo.scale_div).max(1));
+                let size = target_size.map(|s| (s / fbo.scale_div).max(1));
                 let t = self.alloc_target(
                     device,
                     &format!("{} {}", layer.name, fbo.name),
