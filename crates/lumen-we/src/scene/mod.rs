@@ -492,38 +492,10 @@ impl Importer<'_> {
             .read(path)
             .ok_or_else(|| unsupported("missing model", path))?;
         let mesh = crate::mdl::MdlMesh::parse(&bytes)?;
-        let material = self.read_material(&mesh.material)?;
-        let raster = &material["passes"][0];
-        let mut object_constants = serde_json::Map::new();
-        if let Some(v) = object.get("brightness") {
-            object_constants.insert("brightness".to_owned(), unwrap_value(v).clone());
-        }
-        // An instanced model's object carries its material instance
-        // (textures, combos, constants), e.g. 3415190399's dock icons.
-        let instance = object.get("instance").filter(|i| i.is_object());
-        let mut spec = self.pass_spec(&material, instance)?;
-        spec.constants.push(&object_constants);
-        let blend = spec.blend;
-        let albedo = self.pass(&spec, None)?;
-        let model = lumen_scene::Model {
-            vertices: mesh
-                .vertices
-                .iter()
-                .map(|v| lumen_scene::ModelVertex {
-                    position: v.position,
-                    normal: v.normal,
-                    tangent: v.tangent,
-                    uv: v.uv,
-                })
-                .collect(),
-            indices: mesh.indices,
-            cull: match raster["cullmode"].as_str() {
-                Some("nocull") => lumen_scene::Cull::None,
-                _ => lumen_scene::Cull::Back,
-            },
-            depth_test: raster["depthtest"].as_str() != Some("disabled"),
-            depth_write: raster["depthwrite"].as_str() != Some("disabled"),
-        };
+        // Older objects pick one of several materials per submesh.
+        let skin = integer(object.get("skin"))
+            .and_then(|s| usize::try_from(s).ok())
+            .unwrap_or(0);
         let (transform, visible) = graph.world(object);
         let [r, g, b] = vec_n(object.get("color"), [1.0; 3]);
         let alpha = object
@@ -531,29 +503,68 @@ impl Importer<'_> {
             .and_then(floats)
             .and_then(|a| a.first().copied())
             .unwrap_or(1.0);
-        self.scene.layers.push(ImageLayer {
-            name: name.to_owned(),
-            size: [1, 1],
-            node: Some(node),
-            local: lumen_scene::IDENTITY_AFFINE,
-            text: None,
-            particles: None,
-            puppet: None,
-            model: Some(std::sync::Arc::new(model)),
-            world: None,
-            transform,
-            visible,
-            kind: LayerKind::Image,
-            group: None,
-            parallax_depth: [0.0, 0.0],
-            color: [r, g, b, alpha],
-            blend,
-            albedo,
-            mesh: None,
-            copy_background: false,
-            composite: None,
-            effects: Vec::new(),
-        });
+        let many = mesh.submeshes.len() > 1;
+        for (i, sub) in mesh.submeshes.into_iter().enumerate() {
+            let material = self.read_material(sub.material(skin))?;
+            let raster = &material["passes"][0];
+            let mut object_constants = serde_json::Map::new();
+            if let Some(v) = object.get("brightness") {
+                object_constants.insert("brightness".to_owned(), unwrap_value(v).clone());
+            }
+            // An instanced model's object carries its material instance
+            // (textures, combos, constants), e.g. 3415190399's dock icons.
+            let instance = object.get("instance").filter(|i| i.is_object());
+            let mut spec = self.pass_spec(&material, instance)?;
+            spec.constants.push(&object_constants);
+            let blend = spec.blend;
+            let albedo = self.pass(&spec, None)?;
+            let model = lumen_scene::Model {
+                vertices: sub
+                    .vertices
+                    .iter()
+                    .map(|v| lumen_scene::ModelVertex {
+                        position: v.position,
+                        normal: v.normal,
+                        tangent: v.tangent,
+                        uv: v.uv,
+                    })
+                    .collect(),
+                indices: sub.indices,
+                cull: match raster["cullmode"].as_str() {
+                    Some("nocull") => lumen_scene::Cull::None,
+                    _ => lumen_scene::Cull::Back,
+                },
+                depth_test: raster["depthtest"].as_str() != Some("disabled"),
+                depth_write: raster["depthwrite"].as_str() != Some("disabled"),
+            };
+            self.scene.layers.push(ImageLayer {
+                name: if many {
+                    format!("{name}/{i}")
+                } else {
+                    name.to_owned()
+                },
+                size: [1, 1],
+                node: Some(node),
+                local: lumen_scene::IDENTITY_AFFINE,
+                text: None,
+                particles: None,
+                puppet: None,
+                model: Some(std::sync::Arc::new(model)),
+                world: None,
+                transform,
+                visible,
+                kind: LayerKind::Image,
+                group: None,
+                parallax_depth: [0.0, 0.0],
+                color: [r, g, b, alpha],
+                blend,
+                albedo,
+                mesh: None,
+                copy_background: false,
+                composite: None,
+                effects: Vec::new(),
+            });
+        }
         Ok(())
     }
 
