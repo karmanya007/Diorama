@@ -319,6 +319,11 @@ pub enum Request {
     },
     /// What showing each wallpaper has cost, as measured so far.
     Costs,
+    /// Convert a video for hardware decoding (H.264 at the size the
+    /// monitors need); it then plays the copy (P4). See `Status::conversions`.
+    Convert {
+        path: PathBuf,
+    },
     /// Pause all outputs regardless of policy until `Resume`.
     Pause,
     Resume,
@@ -382,6 +387,9 @@ pub struct Status {
     #[serde(default)]
     pub folders: Vec<PathBuf>,
     pub outputs: Vec<OutputStatus>,
+    /// Videos being converted for hardware decoding, and failed conversions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conversions: Vec<Conversion>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -390,6 +398,23 @@ pub struct ContentStatus {
     pub path: PathBuf,
     pub fit: Fit,
     pub layout: Layout,
+    /// Videos: the CPU decodes it (the GPU has no decoder for its codec or size).
+    #[serde(default)]
+    pub software_decode: bool,
+    /// Videos: a copy converted for hardware decoding plays.
+    #[serde(default)]
+    pub converted: bool,
+}
+
+/// A video being converted for hardware decoding (`Request::Convert`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Conversion {
+    pub path: PathBuf,
+    /// Fraction done, 0–1.
+    pub progress: f32,
+    /// Why it failed, if it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

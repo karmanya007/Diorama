@@ -79,4 +79,6 @@ export function next(outputs) {
 export const setPolicy = (policy) => call({ cmd: 'set-policy', policy });
 export const setFolders = (folders) => call({ cmd: 'set-folders', folders });
 export const setVolume = (percent) => call({ cmd: 'volume', percent });
+/** Convert a video for hardware decoding (progress in status.conversions). */
+export const convert = (path) => call({ cmd: 'convert', path });
 export const pause = (on) => call({ cmd: on ? 'pause' : 'resume' });

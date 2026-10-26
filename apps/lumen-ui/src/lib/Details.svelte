@@ -1,11 +1,22 @@
 <script>
-  import { app, attempt, refreshStatus, toast, monitorName, costOf, weight } from './state.svelte.js';
+  import { app, attempt, refreshStatus, toast, monitorName, costOf, weight, itemFor } from './state.svelte.js';
   import * as api from './api.js';
   import Preview from './Preview.svelte';
   import Properties from './Properties.svelte';
 
   const item = $derived(app.selected);
   const cost = $derived(item ? costOf(item) : null);
+  const mine = (path) => item && itemFor(path)?.path === item.path;
+  // How the item plays where it shows, and its conversion (P4).
+  const playing = $derived(outputs.map((o) => o.content).find((c) => c && mine(c.path)) ?? null);
+  const conversion = $derived((app.status?.conversions ?? []).find((c) => mine(c.path)) ?? null);
+
+  async function convert() {
+    await attempt(async () => {
+      await api.convert(item.path);
+      await refreshStatus();
+    });
+  }
   const outputs = $derived(app.status?.outputs ?? []);
   let fit = $state('');
   let layout = $state('per-output');
@@ -80,6 +91,24 @@
     {/if}
     {#if item.description}
       <p class="desc">{plain(item.description)}</p>
+    {/if}
+    {#if conversion && !conversion.error}
+      <div class="notice">
+        <span>Converting for hardware decoding… {Math.round(conversion.progress * 100)}%</span>
+        <progress max="1" value={conversion.progress}></progress>
+      </div>
+    {:else if conversion?.error}
+      <div class="notice">
+        <span>Converting failed: {conversion.error}</span>
+        <button onclick={convert}>Try again</button>
+      </div>
+    {:else if playing?.converted}
+      <p class="muted small">Plays a copy converted for hardware decoding.</p>
+    {:else if playing?.software_decode}
+      <div class="notice">
+        <span>Your graphics card cannot decode this video, so the processor does (costly). Convert it to a copy the graphics card decodes, sized for your monitors?</span>
+        <button onclick={convert}>Convert</button>
+      </div>
     {/if}
     {#if cost}
       <p class="cost">
@@ -253,5 +282,26 @@
 
   .dot.heavy {
     background: var(--danger);
+  }
+
+  .notice {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: flex-start;
+    padding: 10px 12px;
+    border-radius: var(--radius);
+    border: 1px solid var(--warn);
+    font-size: 13px;
+  }
+
+  .notice progress {
+    width: 100%;
+    accent-color: var(--accent);
+  }
+
+  .small {
+    margin: 0;
+    font-size: 12px;
   }
 </style>

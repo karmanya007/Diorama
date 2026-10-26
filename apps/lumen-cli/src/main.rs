@@ -101,6 +101,13 @@ enum Command {
     /// What showing each wallpaper has cost (measured while it played
     /// alone), heaviest first.
     Costs,
+    /// Convert a video the GPU cannot decode into a copy it can (H.264 at
+    /// the size your monitors need); the copy then plays instead. Progress
+    /// shows in `lumen status`.
+    Convert {
+        /// The video (file or Workshop folder).
+        path: PathBuf,
+    },
     /// Pause every monitor until `lumen resume`.
     Pause,
     /// Undo `lumen pause` (automatic pause rules still apply).
@@ -387,6 +394,9 @@ fn run(cli: Cli) -> Result<()> {
             outputs: (!outputs.is_empty()).then_some(outputs),
         },
         Command::Costs => Request::Costs,
+        Command::Convert { path } => Request::Convert {
+            path: std::path::absolute(&path)?,
+        },
         Command::Next { outputs } => Request::Next {
             outputs: (!outputs.is_empty()).then_some(outputs),
         },
@@ -502,6 +512,21 @@ fn run(cli: Cli) -> Result<()> {
                     c.layout
                 ),
                 None => println!("playing  nothing (use `lumen set <file>`)"),
+            }
+            if let Some(c) = &status.content {
+                if c.converted {
+                    println!("         (its copy converted for hardware decoding)");
+                } else if c.software_decode {
+                    println!(
+                        "         decoded by the CPU: `lumen convert` makes a copy the GPU decodes"
+                    );
+                }
+            }
+            for c in &status.conversions {
+                match &c.error {
+                    Some(e) => println!("convert  {} failed: {e}", c.path.display()),
+                    None => println!("convert  {} {:.0}%", c.path.display(), c.progress * 100.0),
+                }
             }
             println!("volume   {}%", status.volume);
             if status.user_paused {

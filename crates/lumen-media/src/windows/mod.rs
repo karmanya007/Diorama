@@ -7,6 +7,7 @@
 
 pub(crate) mod audio;
 pub(crate) mod capture;
+pub(crate) mod convert;
 
 use std::time::Duration;
 
@@ -80,25 +81,32 @@ struct HwDecode {
     _device: ID3D11Device,
 }
 
+/// A D3D11 device on the default adapter with video (DXVA) support.
+fn video_device() -> Result<ID3D11Device> {
+    let mut device = None;
+    // SAFETY: out-param is a valid local.
+    unsafe {
+        D3D11CreateDevice(
+            None::<&IDXGIAdapter>,
+            D3D_DRIVER_TYPE_HARDWARE,
+            HMODULE::default(),
+            D3D11_CREATE_DEVICE_VIDEO_SUPPORT | D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+            None,
+            D3D11_SDK_VERSION,
+            Some(&mut device),
+            None,
+            None,
+        )
+    }
+    .map_err(os("D3D11CreateDevice"))?;
+    device.ok_or_else(|| Error::BadFrame("D3D11CreateDevice returned no device".into()))
+}
+
 impl HwDecode {
     fn create() -> Result<Self> {
-        // SAFETY: standard D3D11/MF setup; out-params are valid locals.
+        let device = video_device()?;
+        // SAFETY: standard MF setup; out-params are valid locals.
         unsafe {
-            let mut device = None;
-            D3D11CreateDevice(
-                None::<&IDXGIAdapter>,
-                D3D_DRIVER_TYPE_HARDWARE,
-                HMODULE::default(),
-                D3D11_CREATE_DEVICE_VIDEO_SUPPORT | D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-                None,
-                D3D11_SDK_VERSION,
-                Some(&mut device),
-                None,
-                None,
-            )
-            .map_err(os("D3D11CreateDevice"))?;
-            let device: ID3D11Device = device
-                .ok_or_else(|| Error::BadFrame("D3D11CreateDevice returned no device".into()))?;
             // The decoder and the reader touch the device from different threads.
             if let Ok(mt) = device.cast::<ID3D11Multithread>() {
                 let _ = mt.SetMultithreadProtected(true);

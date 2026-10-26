@@ -42,6 +42,8 @@ pub enum Error {
     NoAudioDevice,
     #[error("audio: {0}")]
     Audio(String),
+    #[error("cancelled")]
+    Cancelled,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -205,6 +207,64 @@ impl PlaybackMode {
             }
         }
     }
+}
+
+/// How a video file decodes on this machine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VideoProbe {
+    /// Codec name (`H.264`, `AV1`, …) or the stream's FOURCC.
+    pub codec: String,
+    pub width: u32,
+    pub height: u32,
+    /// The GPU decodes it (DXVA); else the CPU does.
+    pub hardware: bool,
+}
+
+/// Whether `path`'s video decodes on the GPU here (P4).
+pub fn probe(path: &Path) -> Result<VideoProbe> {
+    #[cfg(windows)]
+    {
+        windows::convert::probe(path)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        Err(Error::Unsupported)
+    }
+}
+
+/// Converts `src` to H.264 + AAC in an MP4 (`dst`, ending in `.mp4`) at
+/// `size`, which decodes on any GPU (P4). `progress` gets the fraction done
+/// and returns `false` to stop ([`Error::Cancelled`]).
+pub fn convert(
+    src: &Path,
+    dst: &Path,
+    size: (u32, u32),
+    progress: &mut dyn FnMut(f32) -> bool,
+) -> Result<()> {
+    #[cfg(windows)]
+    {
+        windows::convert::convert(src, dst, size, progress)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (src, dst, size, progress);
+        Err(Error::Unsupported)
+    }
+}
+
+/// Size to convert a `video`-sized video to: just large enough to fill each
+/// of `outputs` (the largest need wins), never larger than it is; even sides
+/// (H.264 needs them).
+pub fn converted_size(video: (u32, u32), outputs: &[(u32, u32)]) -> (u32, u32) {
+    let (w, h) = (video.0.max(1) as f32, video.1.max(1) as f32);
+    let scale = outputs
+        .iter()
+        .map(|&(ow, oh)| (ow as f32 / w).max(oh as f32 / h))
+        .fold(0.0f32, f32::max);
+    let scale = if scale > 0.0 { scale.min(1.0) } else { 1.0 };
+    let even = |x: f32| ((x * scale / 2.0).round() as u32 * 2).max(2);
+    (even(w), even(h))
 }
 
 /// Opens `path` with the platform decoder.
@@ -455,5 +515,24 @@ mod unsupported_audio {
         pub fn needs_reopen(&self) -> bool {
             match *self {}
         }
+    }
+}
+
+#[cfg(test)]
+mod convert_tests {
+    use super::converted_size;
+
+    #[test]
+    fn converted_size_fills_the_neediest_monitor_without_upscaling() {
+        // 4K on 1080p landscape + 1080×1920 portrait: the portrait one needs
+        // 1920 rows (fill), so 3413×1920 → even 3414×1920.
+        assert_eq!(
+            converted_size((3840, 2160), &[(1920, 1080), (1080, 1920)]),
+            (3414, 1920)
+        );
+        assert_eq!(converted_size((3840, 2160), &[(1920, 1080)]), (1920, 1080));
+        // Never larger than the source; odd sides become even.
+        assert_eq!(converted_size((1279, 719), &[(3840, 2160)]), (1280, 720));
+        assert_eq!(converted_size((1920, 1080), &[]), (1920, 1080));
     }
 }

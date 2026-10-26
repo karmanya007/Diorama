@@ -70,6 +70,16 @@ pub struct Wallpaper {
     pub kind: MediaKind,
     pub look: Look,
     pub content: Content,
+    /// Videos: what decodes and plays.
+    pub decode: Decode,
+}
+
+/// How a video plays: whether the CPU decodes it, and whether a copy
+/// converted for hardware decoding plays (P4).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Decode {
+    pub software: bool,
+    pub converted: bool,
 }
 
 /// The path a wallpaper is known by (and its overrides kept under): the
@@ -133,17 +143,32 @@ impl Wallpaper {
                 kind,
                 look,
                 content: Content::Web(source),
+                decode: Decode::default(),
             });
         }
+        let mut decode = Decode::default();
         let content = match kind {
             MediaKind::Image => Content::Image(
                 image::open(path)
                     .with_context(|| format!("loading {}", path.display()))?
                     .into_rgba8(),
             ),
-            MediaKind::Video => Content::Video(
-                VideoPlayer::spawn(path).with_context(|| format!("opening {}", path.display()))?,
-            ),
+            MediaKind::Video => {
+                // A copy converted for hardware decoding plays instead, if made.
+                let copy = crate::convert::existing_copy(path);
+                let play = copy.as_deref().unwrap_or(path);
+                decode = Decode {
+                    software: lumen_media::probe(play).is_ok_and(|p| !p.hardware),
+                    converted: copy.is_some(),
+                };
+                if decode.software {
+                    tracing::info!(video = %play.display(), "no hardware decoder; the CPU decodes it");
+                }
+                Content::Video(
+                    VideoPlayer::spawn(play)
+                        .with_context(|| format!("opening {}", play.display()))?,
+                )
+            }
             // Import now so a broken scene is reported by `lumen set`.
             MediaKind::Web => unreachable!("handled above"),
             MediaKind::Scene => {
@@ -162,6 +187,7 @@ impl Wallpaper {
             kind,
             look,
             content,
+            decode,
         })
     }
 }

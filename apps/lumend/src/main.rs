@@ -8,6 +8,7 @@
 //! or the GPU is lost (P11). Video never opens an audio device (P10).
 
 mod clock;
+mod convert;
 mod costs;
 mod headless;
 mod media;
@@ -371,6 +372,7 @@ fn main() -> Result<()> {
         lost_adapter: None,
         quit: false,
         costs: costs::Costs::load(lumen_platform::cache_dir().as_deref()),
+        conversions: convert::Conversions::default(),
     };
 
     let start_path = args
@@ -670,6 +672,8 @@ impl Slot {
             path: self.wallpaper.path.clone(),
             fit: self.wallpaper.look.fit,
             layout: self.wallpaper.look.layout,
+            software_decode: self.wallpaper.decode.software,
+            converted: self.wallpaper.decode.converted,
         }
     }
 
@@ -888,6 +892,8 @@ struct Daemon<'p> {
     quit: bool,
     /// What each wallpaper costs to show, measured as it plays.
     costs: costs::Costs,
+    /// Videos being converted for hardware decoding.
+    conversions: convert::Conversions,
     config_dir: Option<PathBuf>,
     os_fallback: bool,
     /// Soundtrack volume 0–100; 0 means no audio player at all.
@@ -1048,6 +1054,11 @@ impl Daemon<'_> {
 
         self.advance_playlists(None);
 
+        // Converted videos replace their originals where they show.
+        for video in self.conversions.finished() {
+            self.reload_video(&video);
+        }
+
         if Instant::now() >= self.next_audio_check {
             self.next_audio_check = Instant::now() + AUDIO_CHECK_INTERVAL;
             for slot in &mut self.slots {
@@ -1102,6 +1113,54 @@ impl Daemon<'_> {
     }
 
     /// Shows item `index` of `list` (or the next one that loads) on slot `i`.
+    /// Starts converting a video for hardware decoding, at the size the
+    /// monitors need.
+    fn convert(&mut self, path: &Path) -> Result<()> {
+        let video = session::wallpaper_path(path, Some(MediaKind::Video))
+            .with_context(|| format!("no video in {}", path.display()))?;
+        let probe = lumen_media::probe(&video)?;
+        let outputs: Vec<(u32, u32)> = self
+            .platform
+            .outputs()?
+            .iter()
+            .map(|o| (o.width, o.height))
+            .collect();
+        let size = lumen_media::converted_size((probe.width, probe.height), &outputs);
+        let waker = self.platform.waker();
+        self.conversions.start(&video, size, move || waker.wake())
+    }
+
+    /// Loads `video` again in the slots showing it (to play its converted copy).
+    fn reload_video(&mut self, video: &Path) {
+        for i in 0..self.slots.len() {
+            if !same_path(&self.slots[i].wallpaper.path, video) {
+                continue;
+            }
+            let look = self.slots[i].wallpaper.look;
+            match self.load(video, Some(MediaKind::Video), look) {
+                Ok(w) => self.replace(i, w),
+                Err(e) => tracing::warn!("reloading {}: {e:#}", video.display()),
+            }
+        }
+    }
+
+    /// Shows `wallpaper` in slot `i` instead of what it shows; the old one
+    /// stays up until the new one has drawn.
+    fn replace(&mut self, i: usize, wallpaper: Wallpaper) {
+        let fps = self.fps;
+        let slot = &mut self.slots[i];
+        slot.wallpaper = wallpaper;
+        if let Some(old) = slot.session.take() {
+            retire(&mut self.retiring, old);
+        }
+        slot.shown_on.clear();
+        slot.clock = VideoClock::default();
+        slot.scene_clock = SceneClock::new(fps);
+        self.rebuild(false);
+        let volume = self.volume;
+        self.slots[i].start_audio(volume);
+    }
+
     fn switch(&mut self, i: usize, list: &Playlist, index: usize) {
         let layout = self.slots[i].wallpaper.look.layout;
         let n = list.items.len();
@@ -1115,22 +1174,11 @@ impl Daemon<'_> {
             match self.load(path, None, look) {
                 Ok(w) => {
                     tracing::info!(playlist = %list.name, path = %path.display(), "next wallpaper");
-                    let fps = self.fps;
-                    let slot = &mut self.slots[i];
-                    slot.wallpaper = w;
-                    if let Some(old) = slot.session.take() {
-                        retire(&mut self.retiring, old);
-                    }
-                    slot.shown_on.clear();
-                    slot.clock = VideoClock::default();
-                    slot.scene_clock = SceneClock::new(fps);
-                    if let Some(run) = slot.run.as_mut() {
+                    if let Some(run) = self.slots[i].run.as_mut() {
                         run.index = at;
                         run.next = Instant::now() + Run::wait(list);
                     }
-                    self.rebuild(false);
-                    let volume = self.volume;
-                    self.slots[i].start_audio(volume);
+                    self.replace(i, w);
                     self.persist();
                     return;
                 }
@@ -1655,6 +1703,7 @@ impl Daemon<'_> {
             Request::Costs => Response::Costs {
                 costs: self.costs.list(),
             },
+            Request::Convert { path } => ok_or_error(self.convert(&path)),
             Request::Play { name, outputs } => match self.claim(outputs) {
                 Ok(claim) => ok_or_error(self.play(&name, claim)),
                 Err(message) => Response::Error { message },
@@ -1729,6 +1778,7 @@ impl Daemon<'_> {
             policy: self.policy,
             folders: self.folders.clone(),
             outputs,
+            conversions: self.conversions.status(),
         }
     }
 }
