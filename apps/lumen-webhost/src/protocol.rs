@@ -1,4 +1,5 @@
-//! Serves the wallpaper's folder to its page (`lumen://<host>/<path>`).
+//! Serves the wallpaper's folder to its page (`lumen://<host>/<path>`), and
+//! the files the user picked in its properties (`local::PREFIX`).
 //! Workshop content is untrusted: paths stay inside the folder.
 
 use std::borrow::Cow;
@@ -7,13 +8,26 @@ use std::path::{Component, Path, PathBuf};
 
 use wry::http::{Request, Response, StatusCode, header};
 
+use crate::local::{LocalFiles, PREFIX};
+
 /// Largest single response body (a byte range of a bigger file).
 const MAX_BODY: u64 = 64 << 20;
 
-/// Answers `request` from `root` (canonical).
-pub fn serve(root: &Path, request: &Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
+/// Answers `request` from `root` (canonical) or the user's `local` files.
+pub fn serve(
+    root: &Path,
+    local: &LocalFiles,
+    request: &Request<Vec<u8>>,
+) -> Response<Cow<'static, [u8]>> {
     let path = percent_decode(request.uri().path());
-    let Some(file) = resolve(root, &path) else {
+    let file = match path.strip_prefix(PREFIX) {
+        Some(rest) => local.resolve(rest).or_else(|| {
+            tracing::debug!("web wallpaper asked for {rest}, which no property picked");
+            None
+        }),
+        None => resolve(root, &path),
+    };
+    let Some(file) = file else {
         return status(StatusCode::NOT_FOUND);
     };
     let Ok(mut f) = std::fs::File::open(&file) else {

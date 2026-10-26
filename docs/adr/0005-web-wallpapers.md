@@ -57,6 +57,13 @@ service on `127.0.0.1`).
   network, so no port is opened and it works with the network off. Any page
   can read these load figures; they reveal no files or identities. The
   sampler runs only while a page asks (stops after 30 s idle).
+- **Picked files through the wallpaper's origin.** Pages show files from
+  `file` and `directory` properties as `'file:///' + value`, which Chromium
+  refuses from an https page. The page script rewrites such addresses to
+  `/__lumen_file__/<path>` on the page's own origin; the host serves only
+  files the user picked in properties the project declares (directory
+  properties: the folder's files of the declared `fileType`), so a page
+  cannot read anything else on disk.
 - **Problems reach the log.** The page script reports scripts and stylesheets
   that fail to load (with the `lumen set … --allow-network` hint when the
   network is off) and uncaught errors (debug level); a watchdog asks each

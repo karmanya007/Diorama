@@ -71,6 +71,15 @@ impl Reports {
                         text("tag"),
                         self.inner.folder.display()
                     );
+                } else if text("tag") == "link" && !self.inner.allow_network {
+                    // Also fired when the stylesheet loaded but an `@import`
+                    // in it (often web fonts) did not.
+                    tracing::warn!(
+                        "web wallpaper stylesheet {url} or a file it imports could not load; \
+                         the network is off for this wallpaper (allow it: lumen set \"{}\" \
+                         --allow-network)",
+                        self.inner.folder.display()
+                    );
                 } else {
                     tracing::warn!("web wallpaper could not load {} {url}", text("tag"));
                 }

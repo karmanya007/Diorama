@@ -1,5 +1,6 @@
 //! The web wallpaper host proper (needs a WebView: WebView2 on Windows).
 
+use crate::local::LocalFiles;
 use crate::performance::Performance;
 use crate::watch::{Reports, Watchdog};
 use crate::{properties, protocol};
@@ -7,7 +8,7 @@ use crate::{properties, protocol};
 use std::collections::HashMap;
 use std::io::{BufRead, IsTerminal};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::{Arc, RwLock, mpsc};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -138,6 +139,10 @@ struct Host {
     context: WebContext,
     /// The init script: the shim plus the current properties.
     properties: Value,
+    /// Directory properties for the page script (`{name: {mode, files}}`).
+    directories: Value,
+    /// Files picked in file and directory properties, served to the pages.
+    local: Arc<RwLock<LocalFiles>>,
     general: Value,
     /// Pause per output id; outputs not listed use `paused_all`.
     paused: HashMap<String, bool>,
@@ -158,11 +163,24 @@ impl Host {
 
     fn init_script(&self, output: &OutputInfo) -> String {
         format!(
-            "{SHIM}\n__lumen.properties({});\n__lumen.general({});\n__lumen.paused({});",
+            "{SHIM}\n__lumen.properties({});\n__lumen.directories({});\n__lumen.general({});\n\
+             __lumen.paused({});",
             self.properties,
+            self.directories,
             self.general,
             self.is_paused(output)
         )
+    }
+
+    /// The user's `choices` over the project's defaults, and the files they pick.
+    fn set_properties(&mut self, choices: &Map<String, Value>) {
+        let project = properties::read_project(&self.root);
+        self.properties = properties::user_properties(&project, choices);
+        let (local, directories) = LocalFiles::new(&project, &self.properties);
+        if let Ok(mut l) = self.local.write() {
+            *l = local;
+        }
+        self.directories = directories;
     }
 
     fn screen(&mut self, platform: &Platform, output: &OutputInfo) -> Result<Screen> {
@@ -176,6 +194,7 @@ impl Host {
         let (w, h) = window.size();
         let parent = Parent(window.handles().window);
         let root = self.root.clone();
+        let local = Arc::clone(&self.local);
         let origin = self.url.split('/').take(3).collect::<Vec<_>>().join("/");
         let allowed = [origin.clone(), wry_origin(&origin)];
         let init = self.init_script(output);
@@ -188,8 +207,9 @@ impl Host {
                 size: PhysicalSize::new(w, h).into(),
             })
             .with_initialization_script(init)
-            .with_custom_protocol("lumen".into(), move |_, request| {
-                protocol::serve(&root, &request)
+            .with_custom_protocol("lumen".into(), move |_, request| match local.read() {
+                Ok(local) => protocol::serve(&root, &local, &request),
+                Err(_) => protocol::serve(&root, &LocalFiles::default(), &request),
             })
             // Pages stay on the wallpaper; links and popups go nowhere.
             .with_navigation_handler(move |url| {
@@ -341,13 +361,16 @@ fn run(args: Args) -> Result<()> {
         allow_network: args.allow_network,
         devtools: args.devtools,
         context: WebContext::new(Some(data_dir)),
-        properties: properties::user_properties(&project, &choices),
+        properties: Value::Null,
+        directories: Value::Null,
+        local: Arc::default(),
         general: serde_json::json!({ "fps": 30 }),
         paused: HashMap::new(),
         paused_all: false,
         reports: Reports::new(root.clone(), args.allow_network),
         performance: Performance::default(),
     };
+    host.set_properties(&choices);
     tracing::info!(url = %host.url, network = host.allow_network, "web wallpaper");
 
     if let Some(out) = &args.snapshot {
@@ -653,9 +676,11 @@ fn build(host: &mut Host, platform: &Platform, span: bool) -> Result<Vec<Screen>
 fn apply(host: &mut Host, screens: &[Screen], platform: &Platform, command: Command) {
     let js = match command {
         Command::Properties(choices) => {
-            let project = properties::read_project(&host.root);
-            host.properties = properties::user_properties(&project, &choices);
-            format!("__lumen.properties({})", host.properties)
+            host.set_properties(&choices);
+            format!(
+                "__lumen.properties({});__lumen.directories({})",
+                host.properties, host.directories
+            )
         }
         Command::General(g) => {
             host.general = g;

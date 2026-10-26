@@ -3,6 +3,7 @@
 // to it only through `window.__lumen`.
 //
 //   __lumen.properties(object)   user properties (`{name: {type, value}}`)
+//   __lumen.directories(object)  directory properties (`{name: {mode, files}}`)
 //   __lumen.general(object)      general properties (`{fps}`)
 //   __lumen.paused(bool)         pause / resume the page
 //   __lumen.audio(array)         128 levels: 64 left then 64 right, linear (WE: mostly < 0.1)
@@ -17,6 +18,7 @@
 	const state = {
 		loaded: false,
 		properties: null,
+		directories: {},
 		general: null,
 		paused: false,
 		audio: [],
@@ -28,10 +30,10 @@
 		const l = window.wallpaperPropertyListener;
 		return l && typeof l === 'object' ? l : null;
 	}
-	function call(name, arg) {
+	function call(name, ...args) {
 		const l = listener();
 		if (l && typeof l[name] === 'function') {
-			try { l[name](arg); } catch (e) { console.error(e); }
+			try { l[name](...args); } catch (e) { console.error(e); }
 			return true;
 		}
 		return false;
@@ -57,14 +59,107 @@
 		if (!state.loaded) { return; }
 		if (state.properties) { call('applyUserProperties', state.properties); }
 		if (state.general) { call('applyGeneralProperties', state.general); }
+		directoryChanges({}, state.directories);
 	}
 	window.addEventListener('load', () => {
 		state.loaded = true;
 		deliver();
 		if (state.paused) { pause(true); }
 	});
-	L.properties = (p) => { state.properties = p; if (state.loaded) { call('applyUserProperties', p); } };
+	L.properties = (p) => {
+		state.properties = p;
+		watchLocalFiles();
+		if (state.loaded) { call('applyUserProperties', p); }
+	};
 	L.general = (g) => { state.general = g; if (state.loaded) { call('applyGeneralProperties', g); } };
+
+	// Directory properties: `fetchall` ones tell the page which files came
+	// and went; `ondemand` ones answer wallpaperRequestRandomFileForProperty.
+	function directoryChanges(before, now) {
+		for (const name of new Set([...Object.keys(before), ...Object.keys(now)])) {
+			const was = (before[name] && before[name].files) || [];
+			const is = (now[name] && now[name].files) || [];
+			const removed = was.filter((f) => !is.includes(f));
+			const added = is.filter((f) => !was.includes(f));
+			if ((now[name] || before[name]).mode !== 'fetchall') { continue; }
+			if (removed.length) { call('userDirectoryFilesRemoved', name, removed); }
+			if (added.length) { call('userDirectoryFilesAddedOrChanged', name, added); }
+		}
+	}
+	L.directories = (d) => {
+		const before = state.directories;
+		state.directories = d || {};
+		watchLocalFiles();
+		if (state.loaded) { directoryChanges(before, state.directories); }
+	};
+	window.wallpaperRequestRandomFileForProperty = function (name, cb) {
+		if (typeof cb !== 'function') { return; }
+		const files = (state.directories[name] && state.directories[name].files) || [];
+		const file = files.length ? files[Math.floor(Math.random() * files.length)] : null;
+		setTimeout(() => cb(name, file), 0);
+	};
+
+	// Pages show picked files as 'file:///' + value, which the browser
+	// refuses from this origin; the host serves them under LOCAL instead.
+	const LOCAL = '/__lumen_file__/';
+	function localUrl(v) {
+		if (typeof v !== 'string' || v.slice(0, 8).toLowerCase() !== 'file:///') { return v; }
+		return LOCAL + encodeURIComponent(v.slice(8));
+	}
+	function localCss(v) {
+		if (typeof v !== 'string' || !/file:\/\/\//i.test(v)) { return v; }
+		return v.replace(/(url\(\s*)(['"]?)file:\/\/\/(.*?)\2(\s*\))/gi,
+			(m, open, q, path, close) => open + q + LOCAL + encodeURIComponent(path) + q + close);
+	}
+	function wrapSetter(proto, name, fix) {
+		const d = proto && Object.getOwnPropertyDescriptor(proto, name);
+		if (!d || !d.set || !d.configurable) { return; }
+		Object.defineProperty(proto, name, Object.assign({}, d, { set(v) { d.set.call(this, fix(v)); } }));
+	}
+	wrapSetter(HTMLImageElement.prototype, 'src', localUrl);
+	wrapSetter(HTMLMediaElement.prototype, 'src', localUrl);
+	wrapSetter(HTMLSourceElement.prototype, 'src', localUrl);
+	wrapSetter(HTMLVideoElement.prototype, 'poster', localUrl);
+	const nativeSetAttribute = Element.prototype.setAttribute;
+	Element.prototype.setAttribute = function (name, value) {
+		const n = String(name).toLowerCase();
+		if (n === 'src' || n === 'poster' || n === 'href') { value = localUrl(value); }
+		else if (n === 'style') { value = localCss(value); }
+		return nativeSetAttribute.call(this, name, value);
+	};
+	const nativeSetProperty = CSSStyleDeclaration.prototype.setProperty;
+	CSSStyleDeclaration.prototype.setProperty = function (name, value, priority) {
+		return nativeSetProperty.call(this, name, localCss(value), priority);
+	};
+	// `el.style.backgroundImage = …` and inserted HTML have no setter to
+	// wrap: once the user has picked a file, fix what lands in the document.
+	const fileAttrs = '[style*="file:"],[src^="file:"],[poster^="file:"]';
+	function fixElement(el) {
+		for (const a of ['src', 'poster']) {
+			const v = el.getAttribute(a);
+			if (v && localUrl(v) !== v) { nativeSetAttribute.call(el, a, localUrl(v)); }
+		}
+		const css = el.getAttribute('style');
+		if (css && localCss(css) !== css) { nativeSetAttribute.call(el, 'style', localCss(css)); }
+	}
+	let observer = null;
+	function watchLocalFiles() {
+		const picked = Object.values(state.properties || {}).some((p) => p && p.type === 'file' && p.value)
+			|| Object.values(state.directories).some((d) => d.files && d.files.length);
+		if (!picked || observer) { return; }
+		observer = new MutationObserver((records) => {
+			for (const r of records) {
+				if (r.type === 'attributes') { fixElement(r.target); continue; }
+				for (const n of r.addedNodes) {
+					if (n.nodeType !== 1) { continue; }
+					fixElement(n);
+					n.querySelectorAll(fileAttrs).forEach(fixElement);
+				}
+			}
+		});
+		observer.observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['style', 'src', 'poster'] });
+		if (document.documentElement) { document.querySelectorAll(fileAttrs).forEach(fixElement); }
+	}
 
 	// Pausing: animation frames wait, CSS animations, media and audio
 	// contexts stop; the page hears setPaused.
@@ -161,11 +256,6 @@
 		for (const fn of state.media[kind] || []) {
 			try { fn(event); } catch (e) { console.error(e); }
 		}
-	};
-
-	// Files picked for directory properties are not supported yet.
-	window.wallpaperRequestRandomFileForProperty = function (name, cb) {
-		if (typeof cb === 'function') { setTimeout(() => cb(name, null), 0); }
 	};
 
 	// The wallpaper sits behind the desktop icons and receives no mouse
