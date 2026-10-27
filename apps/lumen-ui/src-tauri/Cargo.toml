@@ -27,7 +27,12 @@ serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-dialog = "2"
+tauri-plugin-process = "2"
 tauri-plugin-single-instance = "2"
+# Windows updates are the signed NSIS installer itself, so no archive
+# support (`zip`: v1-style zipped updates; tar for Linux/macOS, Phases 7/8).
+# TLS from the OS (SChannel and its certificate store).
+tauri-plugin-updater = { version = "2", default-features = false, features = ["native-tls", "system-proxy"] }
 
 [lints]
 workspace = true

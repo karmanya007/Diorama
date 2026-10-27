@@ -163,6 +163,9 @@ fn main() {
             Ok(())
         })
         .plugin(tauri_plugin_dialog::init())
+        // Settings → "Check for updates": signed installers from GitHub Releases.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![
             ipc,
             library,

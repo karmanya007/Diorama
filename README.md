@@ -62,6 +62,8 @@ CAPTURES=scratch/captures tools/refcap/golden.sh      # score local RenderDoc ca
 
 `shader-check --backend hlsl` needs DXC from the [DirectXShaderCompiler releases](https://github.com/microsoft/DirectXShaderCompiler/releases); see [ADR-003](docs/adr/0003-shader-toolchain.md).
 
+Installer (Windows): `scripts/bundle.ps1` builds `target/release/bundle/nsis/Lumen_<version>_x64-setup.exe` (lumen-ui, lumend, lumen-webhost, `lumen` and DXC; needs Node). With `TAURI_SIGNING_PRIVATE_KEY`/`_PASSWORD` set it also signs the update file. Releases: bump the workspace version, push a tag `v<version>`, and the release workflow publishes the installer and `latest.json` for the in-app updater; see [ADR-007](docs/adr/0007-packaging-updates.md).
+
 Tests: `cargo test --workspace`. Corpus tests read your local Workshop folder (`LUMEN_WE_CORPUS`) and WE install (`LUMEN_WE_INSTALL`), defaulting to the Steam paths, and skip when missing.
 
 Fuzzing (Linux, nightly): `cargo +nightly fuzz run pkg` / `cargo +nightly fuzz run tex` from the repo root.

@@ -19,6 +19,11 @@
   let auto = $state(null);
   let newFolder = $state('');
   let volume = $state(0);
+  let version = $state('');
+  let update = $state(null);
+  let checking = $state(false);
+  let checked = $state('');
+  let installing = $state(null);
 
   const policy = $derived(app.status?.policy);
   const current = $derived(
@@ -29,7 +34,23 @@
   $effect(() => {
     attempt(async () => (presets = await api.presets()));
     attempt(async () => (auto = await api.autostart()));
+    attempt(async () => (version = await api.version()));
   });
+
+  async function checkUpdates() {
+    checking = true;
+    await attempt(async () => {
+      update = await api.checkUpdate();
+      checked = update ? '' : `Lumen ${version} is the latest version.`;
+    });
+    checking = false;
+  }
+
+  async function installUpdate() {
+    installing = 0;
+    await attempt(() => api.installUpdate(update, (p) => (installing = p)));
+    installing = null;
+  }
   $effect(() => {
     if (app.status) volume = app.status.volume;
   });
@@ -148,8 +169,26 @@
     </label>
   </div>
 
+  <div class="card block">
+    <h2>Updates</h2>
+    {#if update}
+      <p>Lumen {update.version} is available (you have {version}).</p>
+      {#if update.body}<p class="muted notes">{update.body}</p>{/if}
+      <div class="row">
+        <button onclick={installUpdate} disabled={installing !== null}>
+          {installing === null ? 'Install and restart' : `Installing… ${Math.round(installing * 100)}%`}
+        </button>
+      </div>
+    {:else}
+      <div class="row">
+        <button onclick={checkUpdates} disabled={checking}>{checking ? 'Checking…' : 'Check for updates'}</button>
+        <span class="muted">{checked || (version ? `Version ${version}` : '')}</span>
+      </div>
+    {/if}
+  </div>
+
   <p class="muted about">
-    Lumen {app.status ? `· daemon v${app.status.daemon_version} (pid ${app.status.pid})` : ''} · plays Wallpaper Engine content you already have; nothing is downloaded.
+    Lumen {app.status ? `· daemon v${app.status.daemon_version} (pid ${app.status.pid})` : ''} · plays Wallpaper Engine content you already have; nothing is downloaded unless you check for updates.
   </p>
 </section>
 
@@ -229,5 +268,11 @@
 
   .about {
     font-size: 12px;
+  }
+
+  .notes {
+    margin: 0;
+    font-size: 12px;
+    white-space: pre-line;
   }
 </style>

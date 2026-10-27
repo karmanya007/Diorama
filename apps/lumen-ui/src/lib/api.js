@@ -1,6 +1,9 @@
 // Calls into the Rust side: lumend requests (`ipc`, the same JSON the CLI
 // sends) and the library scan.
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
+import { getVersion } from '@tauri-apps/api/app';
+import { check } from '@tauri-apps/plugin-updater';
+import { relaunch } from '@tauri-apps/plugin-process';
 import { open } from '@tauri-apps/plugin-dialog';
 
 /** One lumend request, e.g. `{ cmd: 'status' }`. Throws on daemon errors. */
@@ -90,3 +93,22 @@ export const setVolume = (percent) => call({ cmd: 'volume', percent });
 /** Convert a video for hardware decoding (progress in status.conversions). */
 export const convert = (path) => call({ cmd: 'convert', path });
 export const pause = (on) => call({ cmd: on ? 'pause' : 'resume' });
+
+/** This program's version. */
+export const version = () => getVersion();
+
+/** A newer signed release on GitHub, or null. Only asked when the user does. */
+export const checkUpdate = () => check();
+
+/** Downloads and installs `update` (the installer stops lumend and this
+ * window), reporting progress 0–1, then starts the new version. */
+export async function installUpdate(update, progress) {
+  let total = 0;
+  let done = 0;
+  await update.downloadAndInstall((e) => {
+    if (e.event === 'Started') total = e.data.contentLength ?? 0;
+    if (e.event === 'Progress') done += e.data.chunkLength;
+    if (total) progress(Math.min(done / total, 1));
+  });
+  await relaunch();
+}

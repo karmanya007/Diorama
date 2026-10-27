@@ -16,3 +16,6 @@
 *.gpr
 *.rep/
 /.tools/
+
+# Programs staged for the installer by scripts/bundle.ps1
+/apps/lumen-ui/src-tauri/binaries/

@@ -1,0 +1,70 @@
+name: Release
+
+# Pushing a `v*` tag (matching the workspace version, e.g. v0.1.0) builds the
+# Windows installer and publishes a GitHub Release with it, the signed update
+# file and `latest.json`, which the in-app updater reads. Unsigned for now
+# (no code-signing certificate): Windows SmartScreen warns on first run.
+#
+# Secrets: TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+# (the updater key; its public half is in apps/lumen-ui/src-tauri/tauri.conf.json).
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/lumen-ui/package-lock.json
+
+      - name: Check the tag matches the version
+        shell: pwsh
+        run: |
+          $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages |
+            Where-Object name -eq 'lumen-ui' | Select-Object -ExpandProperty version
+          if ("v$version" -ne $env:GITHUB_REF_NAME) {
+            throw "tag $env:GITHUB_REF_NAME does not match version $version (Cargo.toml)"
+          }
+
+      - name: Build the installer
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if (-not $env:TAURI_SIGNING_PRIVATE_KEY) { throw 'TAURI_SIGNING_PRIVATE_KEY secret is not set' }
+          ./scripts/bundle.ps1
+
+      - name: Write latest.json
+        shell: pwsh
+        run: |
+          $dir = 'target/release/bundle/nsis'
+          $setup = Get-ChildItem $dir -Filter '*-setup.exe' | Select-Object -First 1
+          $signature = Get-Content -Raw "$($setup.FullName).sig"
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          $url = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:GITHUB_REF_NAME/$($setup.Name)"
+          @{
+            version = $version
+            notes = "See https://github.com/$env:GITHUB_REPOSITORY/releases/tag/$env:GITHUB_REF_NAME"
+            pub_date = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+            platforms = @{ 'windows-x86_64' = @{ signature = $signature.Trim(); url = $url } }
+          } | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8NoBOM "$dir/latest.json"
+
+      - name: Publish the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $dir = 'target/release/bundle/nsis'
+          $files = @(Get-ChildItem $dir -Filter '*-setup.exe*') + (Get-Item "$dir/latest.json")
+          gh release create $env:GITHUB_REF_NAME --title "Lumen $env:GITHUB_REF_NAME" --generate-notes @($files.FullName)
