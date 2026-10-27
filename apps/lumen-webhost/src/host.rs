@@ -408,6 +408,7 @@ fn run(args: Args) -> Result<()> {
     // Shown (raised) once a page has painted, or after a while regardless.
     let built = Instant::now();
     let mut shown = !host.below;
+    let mut stuck = false;
     for c in early {
         apply(&mut host, &screens, &platform, c);
     }
@@ -436,6 +437,16 @@ fn run(args: Args) -> Result<()> {
                 let _ = webview.evaluate_script_with_callback("0", move |_| answered());
             });
         }
+        // lumend shows these in the UI (a page that needs the network).
+        for url in host.reports.take_blocked() {
+            println!("blocked {url}");
+        }
+        let now_stuck = screens.iter().any(|s| s.watchdog.stuck());
+        if now_stuck != stuck {
+            stuck = now_stuck;
+            println!("{}", if stuck { "stuck" } else { "responding" });
+        }
+        let _ = std::io::stdout().flush();
         while let Ok(c) = rx.try_recv() {
             match c {
                 Some(c) => apply(&mut host, &screens, &platform, c),

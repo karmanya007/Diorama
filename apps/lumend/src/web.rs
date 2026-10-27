@@ -5,8 +5,8 @@
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -22,6 +22,36 @@ const AUDIO_INTERVAL: Duration = Duration::from_millis(33);
 const SNAPSHOT_AFTER: Duration = Duration::from_secs(5);
 /// Give up on a snapshot the host never wrote.
 const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Blocked network files remembered per page (shown in the UI).
+const MAX_BLOCKED: usize = 8;
+
+/// What the host said about its page, besides `ready`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PageReport {
+    /// Network files it could not load with the network off.
+    pub blocked: Vec<String>,
+    /// The page stopped responding.
+    pub stuck: bool,
+}
+
+impl PageReport {
+    /// Takes in one line of the host's stdout.
+    fn read(&mut self, line: &str) {
+        match line.trim() {
+            "stuck" => self.stuck = true,
+            "responding" => self.stuck = false,
+            l => {
+                if let Some(url) = l.strip_prefix("blocked ")
+                    && self.blocked.len() < MAX_BLOCKED
+                    && !self.blocked.iter().any(|b| b == url)
+                {
+                    self.blocked.push(url.to_owned());
+                }
+            }
+        }
+    }
+}
 
 /// Progress of [`WebHost::snapshot`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,6 +152,7 @@ pub struct WebHost {
     stdin: Option<ChildStdin>,
     /// The page has painted (the host printed `ready`).
     ready: Arc<AtomicBool>,
+    report: Arc<Mutex<PageReport>>,
     media: MediaTracker,
     audio: Option<SceneAudio>,
     started: Instant,
@@ -176,9 +207,12 @@ impl WebHost {
             .with_context(|| format!("starting {}", exe.display()))?;
         let stdin = child.stdin.take();
         let ready = Arc::new(AtomicBool::new(!below));
+        let report = Arc::new(Mutex::new(PageReport::default()));
         if let Some(stdout) = child.stdout.take() {
-            // The host prints `ready` once its page has painted; the rest is ignored.
+            // The host prints `ready` once its page has painted, and what
+            // went wrong with it (see `PageReport`).
             let flag = Arc::clone(&ready);
+            let report = Arc::clone(&report);
             std::thread::Builder::new()
                 .name("webhost-out".into())
                 .spawn(move || {
@@ -187,6 +221,8 @@ impl WebHost {
                         if line.trim() == "ready" {
                             flag.store(true, Ordering::SeqCst);
                             waker.wake();
+                        } else if let Ok(mut report) = report.lock() {
+                            report.read(&line);
                         }
                     }
                 })
@@ -196,6 +232,7 @@ impl WebHost {
             child: Some(child),
             stdin,
             ready,
+            report,
             media: MediaTracker::start(),
             audio: SceneAudio::start(),
             started: Instant::now(),
@@ -232,6 +269,11 @@ impl WebHost {
             tracing::warn!("web wallpaper host gone: {e}");
             self.stdin = None;
         }
+    }
+
+    /// What the host reported about its page so far.
+    pub fn report(&self) -> PageReport {
+        self.report.lock().map(|r| r.clone()).unwrap_or_default()
     }
 
     pub fn pid(&self) -> Option<u32> {
@@ -440,6 +482,23 @@ fn base64(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn page_reports_follow_host_lines() {
+        let mut r = PageReport::default();
+        for line in [
+            "blocked https://cdn/p5.js",
+            "blocked https://cdn/p5.js",
+            "stuck",
+        ] {
+            r.read(line);
+        }
+        assert_eq!(r.blocked, ["https://cdn/p5.js"]);
+        assert!(r.stuck);
+        r.read("responding");
+        r.read("something else");
+        assert!(!r.stuck && r.blocked.len() == 1);
+    }
 
     #[test]
     fn base64_matches_rfc4648() {

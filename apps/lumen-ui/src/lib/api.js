@@ -50,6 +50,14 @@ export function setWallpaper(path, outputs, fit, layout) {
   return call(request);
 }
 
+/** Let the web wallpaper `path` use the network (or not) and show it again
+ * on `outputs` as it is (`content`: its status). */
+export function setNetwork(path, allow, outputs, content) {
+  const request = { cmd: 'set', path, network: allow, fit: content.fit, layout: content.layout };
+  if (outputs?.length) request.outputs = outputs;
+  return call(request);
+}
+
 export async function properties(path) {
   return (await call({ cmd: 'properties', path })).values;
 }

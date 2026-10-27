@@ -1,7 +1,8 @@
 //! Telling the user why a web wallpaper misbehaves: files the page could not
 //! load (a library from a CDN with the network off leaves pages blank or
 //! stuck) and a page that stopped answering (a script in an endless loop).
-//! Both go to the log, which lumend shows.
+//! Both go to the log, which lumend shows, and to lumend itself (the
+//! host's stdout) so the UI can offer to allow the network.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -29,6 +30,8 @@ struct Inner {
     seen: Mutex<HashSet<String>>,
     /// Network files that failed while the network is off.
     blocked: AtomicUsize,
+    /// Those not yet reported to lumend.
+    unreported: Mutex<Vec<String>>,
     /// A page reported it has painted (not yet taken).
     ready: AtomicBool,
     errors: AtomicUsize,
@@ -47,6 +50,7 @@ impl Reports {
                 allow_network,
                 seen: Mutex::new(HashSet::new()),
                 blocked: AtomicUsize::new(0),
+                unreported: Mutex::new(Vec::new()),
                 ready: AtomicBool::new(false),
                 errors: AtomicUsize::new(0),
             }),
@@ -68,6 +72,9 @@ impl Reports {
                 }
                 if self.blocked_by_us(&url) {
                     self.inner.blocked.fetch_add(1, Ordering::Relaxed);
+                    if let Ok(mut list) = self.inner.unreported.lock() {
+                        list.push(url.clone());
+                    }
                     tracing::warn!(
                         "web wallpaper could not load {} {url}: the network is off for this \
                          wallpaper, and pages that need such files can stay blank or freeze \
@@ -111,6 +118,15 @@ impl Reports {
         self.inner.ready.swap(false, Ordering::SeqCst)
     }
 
+    /// Network files blocked since the last call.
+    pub fn take_blocked(&self) -> Vec<String> {
+        self.inner
+            .unreported
+            .lock()
+            .map(|mut list| std::mem::take(&mut *list))
+            .unwrap_or_default()
+    }
+
     /// Why a page might be stuck, for the watchdog's warning.
     pub fn hint(&self) -> String {
         match self.inner.blocked.load(Ordering::Relaxed) {
@@ -145,6 +161,11 @@ pub struct Watchdog {
 }
 
 impl Watchdog {
+    /// The page has not answered for a while.
+    pub fn stuck(&self) -> bool {
+        self.stuck
+    }
+
     /// `ask` sends a script whose completion calls the given callback.
     pub fn tick(&mut self, reports: &Reports, ask: impl FnOnce(Box<dyn Fn() + Send>)) {
         let now = Instant::now();
@@ -187,9 +208,12 @@ mod tests {
         off.handle(r#"{"kind":"load-failed","tag":"script","url":"https://cdn.example/p5.js"}"#);
         off.handle(r#"{"kind":"load-failed","tag":"script","url":"https://lumen.w1/missing.js"}"#);
         assert!(off.hint().contains("1 file(s)"), "{}", off.hint());
+        assert_eq!(off.take_blocked(), ["https://cdn.example/p5.js"]);
+        assert!(off.take_blocked().is_empty(), "reported once");
         let on = Reports::new(PathBuf::from("C:/w"), true);
         on.handle(r#"{"kind":"load-failed","tag":"script","url":"https://cdn.example/p5.js"}"#);
         assert_eq!(on.hint(), "");
+        assert!(on.take_blocked().is_empty());
         on.handle("not json");
     }
 

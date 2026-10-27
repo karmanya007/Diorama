@@ -631,6 +631,14 @@ impl Session {
         }
     }
 
+    /// What the web wallpaper host reported about its page.
+    pub fn web_report(&self) -> Option<crate::web::PageReport> {
+        match &self.renderer {
+            Renderer::Web(host) => Some(host.report()),
+            _ => None,
+        }
+    }
+
     /// The web wallpaper host, if this session shows one.
     pub fn web(&mut self) -> Option<&mut crate::web::WebHost> {
         match &mut self.renderer {

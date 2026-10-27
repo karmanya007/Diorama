@@ -404,6 +404,16 @@ pub struct ContentStatus {
     /// Videos: a copy converted for hardware decoding plays.
     #[serde(default)]
     pub converted: bool,
+    /// Web wallpapers: the page may use the network.
+    #[serde(default)]
+    pub network: bool,
+    /// Web wallpapers: network files the page could not load because the
+    /// network is off for it (a library from a CDN, say).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked: Vec<String>,
+    /// Web wallpapers: the page stopped responding (a script stuck in a loop).
+    #[serde(default)]
+    pub stuck: bool,
 }
 
 /// A video being converted for hardware decoding (`Request::Convert`).

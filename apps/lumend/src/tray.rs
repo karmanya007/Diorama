@@ -1,6 +1,9 @@
-//! The notification-area icon's picture and its "Open Lumen" choice.
+//! The notification-area icon's picture and its "Open Lumen" and "Quit"
+//! choices for the UI.
 
-use std::process::Stdio;
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
@@ -14,19 +17,53 @@ pub fn icon(size: u32) -> Result<Vec<u8>> {
         .into_raw())
 }
 
-/// Starts `lumen-ui`, which sits next to lumend.
-pub fn open_ui() {
-    let exe = std::env::current_exe()
+/// How long closing the UI may hold up quitting.
+const CLOSE_UI_WAIT: Duration = Duration::from_secs(3);
+
+/// `lumen-ui`, which sits next to lumend.
+fn ui_exe() -> PathBuf {
+    std::env::current_exe()
         .unwrap_or_default()
-        .with_file_name(format!("lumen-ui{}", std::env::consts::EXE_SUFFIX));
-    let started = std::process::Command::new(&exe)
-        .stdin(Stdio::null())
+        .with_file_name(format!("lumen-ui{}", std::env::consts::EXE_SUFFIX))
+}
+
+fn ui_command(exe: &PathBuf) -> Command {
+    let mut cmd = Command::new(exe);
+    cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
-    if let Err(e) = started {
+        .stderr(Stdio::null());
+    cmd
+}
+
+/// Starts the UI (a running one shows its window instead).
+pub fn open_ui() {
+    let exe = ui_exe();
+    if let Err(e) = ui_command(&exe).spawn() {
         tracing::warn!("cannot start {}: {e}", exe.display());
     }
+}
+
+/// Closes a running UI: `lumen-ui --quit` passes that on to it and ends.
+/// Waits for that, so the UI is told before lumend goes (it would otherwise
+/// start lumend again).
+pub fn close_ui() {
+    let exe = ui_exe();
+    if !exe.exists() {
+        return;
+    }
+    let mut child = match ui_command(&exe).arg("--quit").spawn() {
+        Ok(child) => child,
+        Err(e) => return tracing::warn!("cannot start {}: {e}", exe.display()),
+    };
+    let until = Instant::now() + CLOSE_UI_WAIT;
+    while Instant::now() < until {
+        if !matches!(child.try_wait(), Ok(None)) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    tracing::warn!("closing the UI took too long");
+    let _ = child.kill();
 }
 
 #[cfg(test)]

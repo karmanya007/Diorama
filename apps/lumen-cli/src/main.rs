@@ -521,6 +521,16 @@ fn run(cli: Cli) -> Result<()> {
                         "         decoded by the CPU: `lumen convert` makes a copy the GPU decodes"
                     );
                 }
+                if c.stuck {
+                    println!("         the page stopped responding");
+                }
+                if !c.network && !c.blocked.is_empty() {
+                    println!(
+                        "         could not load {} (network off: `lumen set \"{}\" --allow-network`)",
+                        c.blocked.join(", "),
+                        c.path.display()
+                    );
+                }
             }
             for c in &status.conversions {
                 match &c.error {

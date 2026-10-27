@@ -699,7 +699,13 @@ impl Slot {
         }
     }
 
-    fn content_status(&self) -> ContentStatus {
+    /// `network`: a web wallpaper may use the network.
+    fn content_status(&self, network: bool) -> ContentStatus {
+        let report = self
+            .session
+            .as_ref()
+            .and_then(Session::web_report)
+            .unwrap_or_default();
         ContentStatus {
             kind: self.wallpaper.kind,
             path: self.wallpaper.path.clone(),
@@ -707,6 +713,9 @@ impl Slot {
             layout: self.wallpaper.look.layout,
             software_decode: self.wallpaper.decode.software,
             converted: self.wallpaper.decode.converted,
+            network: self.wallpaper.kind == MediaKind::Web && network,
+            blocked: report.blocked,
+            stuck: report.stuck,
         }
     }
 
@@ -1388,6 +1397,10 @@ impl Daemon<'_> {
         Ok(values)
     }
 
+    fn web_may_use_network(&self, slot: &Slot) -> bool {
+        self.web_network || self.network_allowed(&slot.wallpaper.path)
+    }
+
     fn network_allowed(&self, path: &Path) -> bool {
         self.web_allowed.iter().any(|p| same_path(p, path))
     }
@@ -1452,7 +1465,7 @@ impl Daemon<'_> {
         let networks: Vec<bool> = self
             .slots
             .iter()
-            .map(|s| self.web_network || self.network_allowed(&s.wallpaper.path))
+            .map(|s| self.web_may_use_network(s))
             .collect();
         let primary = infos.iter().find(|o| o.primary).map(|o| o.id.0.clone());
         for ((slot, group), network) in self.slots.iter_mut().zip(groups).zip(networks) {
@@ -1634,7 +1647,11 @@ impl Daemon<'_> {
             TrayCommand::Next => Request::Next { outputs: None },
             TrayCommand::Pause => Request::Pause,
             TrayCommand::Resume => Request::Resume,
-            TrayCommand::Quit => Request::Quit,
+            TrayCommand::Quit => {
+                // Quitting from the tray ends all of Lumen, the UI included.
+                tray::close_ui();
+                Request::Quit
+            }
         };
         if let Response::Error { message } = self.handle(request) {
             tracing::warn!("tray: {message}");
@@ -1799,7 +1816,7 @@ impl Daemon<'_> {
                     o.info.clone(),
                     o.paused,
                     o.coverage,
-                    Some(slot.content_status()),
+                    Some(slot.content_status(self.web_may_use_network(slot))),
                 );
                 status.playlist = slot.run.as_ref().map(|r| r.name.clone());
                 outputs.push(status);
@@ -1814,7 +1831,9 @@ impl Daemon<'_> {
         Status {
             pid: std::process::id(),
             daemon_version: env!("CARGO_PKG_VERSION").to_owned(),
-            content: self.main_slot().map(Slot::content_status),
+            content: self
+                .main_slot()
+                .map(|s| s.content_status(self.web_may_use_network(s))),
             user_paused: self.conditions.user_paused,
             volume: self.volume,
             policy: self.policy,

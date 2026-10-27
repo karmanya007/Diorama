@@ -11,6 +11,17 @@
   const playing = $derived(outputs.map((o) => o.content).find((c) => c && mine(c.path)) ?? null);
   const conversion = $derived((app.status?.conversions ?? []).find((c) => mine(c.path)) ?? null);
 
+  // Web pages that need a library from the internet (network off by default).
+  const hosts = $derived([...new Set((playing?.blocked ?? []).map((u) => u.split('/')[2] ?? u))].join(', '));
+  async function setNetwork(allow) {
+    const where = outputs.filter((o) => o.content && mine(o.content.path)).map((o) => o.id);
+    await attempt(async () => {
+      await api.setNetwork(item.path, allow, where, playing);
+      toast(allow ? 'Internet access allowed' : 'Internet access off');
+      await refreshStatus();
+    });
+  }
+
   async function convert() {
     await attempt(async () => {
       await api.convert(item.path);
@@ -109,6 +120,21 @@
         <span>Your graphics card cannot decode this video, so the processor does (costly). Convert it to a copy the graphics card decodes, sized for your monitors?</span>
         <button onclick={convert}>Convert</button>
       </div>
+    {/if}
+    {#if playing?.kind === 'web'}
+      {#if !playing.network && playing.blocked?.length}
+        <div class="notice">
+          <span>
+            This wallpaper needs files from the internet ({hosts}) and {playing.stuck ? 'has frozen' : 'can stay blank or freeze'}
+            without them. Lumen keeps wallpapers offline unless you allow it.
+          </span>
+          <button onclick={() => setNetwork(true)}>Allow internet access</button>
+        </div>
+      {/if}
+      <label class="row small">
+        <input type="checkbox" checked={playing.network} onchange={(e) => setNetwork(e.currentTarget.checked)} />
+        Allow internet access (weather, fonts, libraries the page loads)
+      </label>
     {/if}
     {#if cost}
       <p class="cost">

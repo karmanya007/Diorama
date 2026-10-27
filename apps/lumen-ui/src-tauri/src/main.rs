@@ -131,16 +131,37 @@ async fn blocking<T: Send + 'static>(
         .map_err(|e| e.to_string())?
 }
 
+fn quit_asked(args: &[String]) -> bool {
+    args.iter().skip(1).any(|a| a == "--quit")
+}
+
 fn main() {
+    let quit = quit_asked(&std::env::args().collect::<Vec<_>>());
+    let mut context = tauri::generate_context!();
+    if quit {
+        // Only to hand `--quit` to a running UI: no window of its own.
+        context.config_mut().app.windows.clear();
+    }
     let result = tauri::Builder::default()
-        // A second start (e.g. lumend's tray "Open Lumen") shows this window.
-        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+        // A second start (e.g. lumend's tray "Open Lumen") shows this window;
+        // with `--quit` (the tray's "Quit") it closes it.
+        .plugin(tauri_plugin_single_instance::init(|app, args, _| {
+            if quit_asked(&args) {
+                return app.exit(0);
+            }
             if let Some(window) = app.webview_windows().values().next() {
                 let _ = window.unminimize();
                 let _ = window.show();
                 let _ = window.set_focus();
             }
         }))
+        .setup(move |_| {
+            // `--quit` with no UI running: nothing to close.
+            if quit {
+                std::process::exit(0);
+            }
+            Ok(())
+        })
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             ipc,
@@ -149,7 +170,7 @@ fn main() {
             autostart,
             set_autostart
         ])
-        .run(tauri::generate_context!());
+        .run(context);
     if let Err(e) = result {
         eprintln!("lumen-ui: {e}");
         std::process::exit(1);
@@ -160,6 +181,14 @@ fn main() {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn quit_is_a_flag_not_the_program_name() {
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(quit_asked(&args(&["lumen-ui", "--quit"])));
+        assert!(!quit_asked(&args(&["lumen-ui"])));
+        assert!(!quit_asked(&args(&["--quit"])));
+    }
 
     #[test]
     fn previews_are_readable_only_from_library_folders() {
