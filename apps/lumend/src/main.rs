@@ -506,16 +506,31 @@ fn scene_fallback(dir: Option<&std::path::Path>, gpu: &Gpu, session: &Session, s
 
 /// Running without a console (`--background`).
 static BACKGROUND: AtomicBool = AtomicBool::new(false);
+/// In the background: where web hosts write their log.
+static WEBHOST_LOG: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 
-/// Where child processes write errors: lumend's own stderr, except in the
-/// background, where it is no valid handle and inheriting it makes starting
-/// the child fail ("The request is not supported", os error 50).
+/// Where web hosts write their log: lumend's own stderr, except in the
+/// background, where that is no valid handle (inheriting it makes starting
+/// the child fail with "The request is not supported", os error 50): then
+/// `<config dir>/lumen-webhost.log`.
 fn child_stderr() -> std::process::Stdio {
-    if BACKGROUND.load(Ordering::Relaxed) {
-        std::process::Stdio::null()
-    } else {
-        std::process::Stdio::inherit()
+    if !BACKGROUND.load(Ordering::Relaxed) {
+        return std::process::Stdio::inherit();
     }
+    WEBHOST_LOG
+        .get()
+        .and_then(|path| {
+            // Started afresh once it passes 1 MB.
+            if std::fs::metadata(path).is_ok_and(|m| m.len() > 1 << 20) {
+                let _ = std::fs::remove_file(path);
+            }
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .ok()
+        })
+        .map_or_else(std::process::Stdio::null, std::process::Stdio::from)
 }
 
 /// Console logging normally; with `--background`, detach from the console and
@@ -534,6 +549,9 @@ fn init_logging(background: bool, config_dir: Option<&std::path::Path>) {
     if background {
         lumen_platform::detach_console();
         BACKGROUND.store(true, Ordering::Relaxed);
+        if let Some(dir) = config_dir {
+            let _ = WEBHOST_LOG.set(dir.join("lumen-webhost.log"));
+        }
     }
     match file {
         Some(f) => tracing_subscriber::fmt()

@@ -22,7 +22,7 @@ pub fn open_ui() {
     let started = std::process::Command::new(&exe)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(crate::child_stderr())
+        .stderr(Stdio::null())
         .spawn();
     if let Err(e) = started {
         tracing::warn!("cannot start {}: {e}", exe.display());
