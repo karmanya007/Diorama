@@ -140,6 +140,7 @@ fn initializer(i: &Value) -> Option<Initializer> {
             scale: num(i, "scale", 1.0),
             offset: num(i, "offset", 0.0),
             timescale: num(i, "timescale", 1.0),
+            forward: vec3(i, "forward", [0.0, 1.0, 0.0]),
         },
         _ => return None,
     })
@@ -226,7 +227,10 @@ fn renderer(r: Option<&Value>) -> ParticleRenderer {
             length: num(r, "length", 0.05),
             max_length: num(r, "maxlength", 10.0),
         },
-        "ropetrail" | "rope" => ParticleRenderer::RopeTrail {
+        "rope" => ParticleRenderer::Rope {
+            subdivision: integer(r.get("subdivision")).unwrap_or(0).clamp(0, 16) as u32,
+        },
+        "ropetrail" => ParticleRenderer::RopeTrail {
             length: num(r, "length", 0.1),
             // Captured trails without `segments` hold 4 points (914, 285).
             segments: integer(r.get("segments")).unwrap_or(4).clamp(2, 64) as u32,
@@ -337,8 +341,16 @@ impl Importer<'_> {
             .get(&0)
             .cloned()
             .and_then(|t| self.sprite_sheet(&t, &json));
-        let trail = !matches!(renderer, ParticleRenderer::Sprite);
-        let rope = matches!(renderer, ParticleRenderer::RopeTrail { .. });
+        // A rope through the particles is no trail: its texture runs along
+        // the particles (capture 287 of 2553418404: UVs 1 − index / (n − 1)).
+        let trail = matches!(
+            renderer,
+            ParticleRenderer::SpriteTrail { .. } | ParticleRenderer::RopeTrail { .. }
+        );
+        let rope = matches!(
+            renderer,
+            ParticleRenderer::RopeTrail { .. } | ParticleRenderer::Rope { .. }
+        );
         let mut combos = BTreeMap::new();
         if sprite_sheet.is_some() {
             combos.insert("SPRITESHEET".to_owned(), 1);
@@ -354,6 +366,10 @@ impl Importer<'_> {
                 spec.shader = "genericropeparticle".into();
             }
         } else if trail || sprite_sheet.is_some() {
+            combos.insert("THICKFORMAT".to_owned(), 1);
+        }
+        // A rope's ends differ in size and colour (WE's capture carries both).
+        if matches!(renderer, ParticleRenderer::Rope { .. }) {
             combos.insert("THICKFORMAT".to_owned(), 1);
         }
         spec.combos.extend(combos);

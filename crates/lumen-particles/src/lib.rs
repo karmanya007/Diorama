@@ -519,16 +519,37 @@ impl Simulation {
                 // timescale; with both 0 that is a lattice point where the
                 // noise is 0, so particles get no velocity (capture 287 of
                 // 1537391845: all 11 torch particles at the emitter, a round
-                // glow). Otherwise a random direction stands in for the field.
+                // glow). Otherwise particles leave along `forward` (+y by
+                // default), turned by the field. Capture 287 of 2553418404:
+                // torch particles stay within ~3° of forward, and a vapour
+                // rope through consecutive particles bends smoothly (±~5°),
+                // so neighbours get nearly the same turn. Stand-in for the
+                // field (not its formula): smooth noise over emission time,
+                // `timescale` setting its pace.
                 Initializer::TurbulentVelocity {
                     scale: 0.0,
                     timescale: 0.0,
                     ..
                 } => {}
-                Initializer::TurbulentVelocity { speed, .. } => {
-                    let a = self.random() * std::f32::consts::TAU;
+                Initializer::TurbulentVelocity {
+                    speed,
+                    offset,
+                    timescale,
+                    forward,
+                    ..
+                } => {
+                    let len = (forward[0] * forward[0] + forward[1] * forward[1]).sqrt();
+                    let [fx, fy] = if len > 1e-6 {
+                        [forward[0] / len, forward[1] / len]
+                    } else {
+                        [0.0, 1.0]
+                    };
+                    let x = self.time * timescale.abs().max(0.05) * 2.0 + offset;
+                    let turn = TURBULENT_TURN * smooth_noise(x, i as u32);
+                    let (sin, cos) = turn.sin_cos();
                     let s = lerp(speed[0], speed[1], self.random());
-                    p.velocity = add(p.velocity, [a.cos() * s, a.sin() * s, 0.0]);
+                    let dir = [fx * cos - fy * sin, fx * sin + fy * cos];
+                    p.velocity = add(p.velocity, [dir[0] * s, dir[1] * s, 0.0]);
                 }
             }
         }
@@ -713,6 +734,28 @@ impl Simulation {
 }
 
 /// `start_value` before `start_time`, `end_value` after `end_time`, linear between.
+/// Largest turn (radians) of turbulent velocity away from `forward`.
+const TURBULENT_TURN: f32 = 0.1;
+
+/// Smooth value noise in −1..1 (two octaves), different per `seed`.
+fn smooth_noise(x: f32, seed: u32) -> f32 {
+    let lattice = |k: i32| {
+        let mut h = (k as u32).wrapping_mul(0x9E37_79B9) ^ seed.wrapping_mul(0x85EB_CA6B);
+        h ^= h >> 15;
+        h = h.wrapping_mul(0x2C1B_3C6D);
+        h ^= h >> 12;
+        (h & 0xFFFF) as f32 / 32_767.5 - 1.0
+    };
+    let octave = |x: f32| {
+        let i = x.floor();
+        let f = x - i;
+        let f = f * f * (3.0 - 2.0 * f);
+        let k = i as i32;
+        lerp(lattice(k), lattice(k + 1), f)
+    };
+    0.7 * octave(x) + 0.3 * octave(x * 2.13 + 17.0)
+}
+
 fn ramp(life: f32, start_time: f32, end_time: f32, start_value: f32, end_value: f32) -> f32 {
     if end_time <= start_time {
         return if life < start_time {

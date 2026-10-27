@@ -56,7 +56,7 @@ pub(crate) fn render_vars(system: &ParticleSystem) -> ([f32; 4], [f32; 4]) {
         ParticleRenderer::RopeTrail { segments, .. } => {
             [segments as f32, 0.0, 0.0, segments as f32]
         }
-        ParticleRenderer::Sprite => [0.0; 4],
+        ParticleRenderer::Sprite | ParticleRenderer::Rope { .. } => [0.0; 4],
     };
     let var1 = system.sprite_sheet.map_or([1.0, 1.0, 1.0, 1.0], |s| {
         [s.frame_size[0], s.frame_size[1], s.frames as f32, s.aspect]
@@ -174,6 +174,7 @@ pub(crate) fn fill(
 pub(crate) fn vertices_per_particle(system: &ParticleSystem) -> u32 {
     match system.renderer {
         ParticleRenderer::RopeTrail { segments, .. } => 6 * segments.max(1),
+        ParticleRenderer::Rope { subdivision } => 6 * (subdivision + 1),
         _ => CORNERS.len() as u32,
     }
 }
@@ -226,6 +227,111 @@ pub(crate) fn fill_rope(
                         _ => [0.0; 4],
                     };
                     out.extend_from_slice(&values[..n]);
+                }
+                written += 1;
+            }
+        }
+    }
+    written
+}
+
+/// Vertices for WE's `genericropeparticle` (thick format) without a
+/// geometry shader, `rope` renderer: a ribbon through the particles, oldest
+/// first (WE keeps new particles at the end of the array). Each span is cut
+/// into `pieces` along a Catmull-Rom spline, one quad (six vertices) each;
+/// the control points carry the spline's tangents so the ribbon's sides
+/// stay continuous.
+///
+/// WE's geometry shader spreads a rope ± its size around the line, at the
+/// editor's size (capture 287 of 2553418404: 57–75 for `sizerandom` 90–120
+/// × 2.5 × 0.2), twice the sprite size the simulation keeps. The shader
+/// path without one spreads to one side only (`right · u · 2 − 1`), so the
+/// ends move back by that `right` (2D: forward is +z, `right` =
+/// normalize(−ty, tx) · size) to centre it. Returns the vertex count.
+pub(crate) fn fill_rope_chain(
+    attributes: &[Attribute],
+    particles: &[Particle],
+    pieces: u32,
+    max_vertices: u32,
+    out: &mut Vec<f32>,
+) -> u32 {
+    out.clear();
+    let mut order: Vec<&Particle> = particles.iter().collect();
+    order.sort_by(|a, b| b.age.total_cmp(&a.age));
+    let points: Vec<[f32; 3]> = order.iter().map(|p| p.draw_position()).collect();
+    let n = points.len();
+    if n < 2 {
+        return 0;
+    }
+    let pieces = pieces.max(1);
+    // The shader spreads the texture over `length - 1` steps of one quad.
+    let length = ((n - 1) as u32 * pieces + 1) as f32;
+    let at = |i: isize| points[i.clamp(0, n as isize - 1) as usize];
+    // Position and tangent (per unit of t) on span k at t ∈ [0, 1].
+    let spline = |k: usize, t: f32| -> ([f32; 3], [f32; 3]) {
+        let k = k as isize;
+        let (p0, p1, p2, p3) = (at(k - 1), at(k), at(k + 1), at(k + 2));
+        let (t2, t3) = (t * t, t * t * t);
+        let mut pos = [0.0; 3];
+        let mut tan = [0.0; 3];
+        for c in 0..3 {
+            pos[c] = 0.5
+                * (2.0 * p1[c]
+                    + (p2[c] - p0[c]) * t
+                    + (2.0 * p0[c] - 5.0 * p1[c] + 4.0 * p2[c] - p3[c]) * t2
+                    + (-p0[c] + 3.0 * p1[c] - 3.0 * p2[c] + p3[c]) * t3);
+            tan[c] = 0.5
+                * ((p2[c] - p0[c])
+                    + 2.0 * (2.0 * p0[c] - 5.0 * p1[c] + 4.0 * p2[c] - p3[c]) * t
+                    + 3.0 * (-p0[c] + 3.0 * p1[c] - 3.0 * p2[c] + p3[c]) * t2);
+        }
+        (pos, tan)
+    };
+    let mix = |a: f32, b: f32, t: f32| a + (b - a) * t;
+    let mut written = 0u32;
+    for k in 0..n - 1 {
+        let (a, b) = (order[k], order[k + 1]);
+        for j in 0..pieces {
+            if written + CORNERS.len() as u32 > max_vertices {
+                return written;
+            }
+            let (t0, t1) = (j as f32 / pieces as f32, (j + 1) as f32 / pieces as f32);
+            let ((start, tan0), (end, tan1)) = (spline(k, t0), spline(k, t1));
+            let step = 1.0 / pieces as f32;
+            let size = |t: f32| 2.0 * mix(a.size, b.size, t);
+            let back = |p: [f32; 3], tan: [f32; 3], s: f32| {
+                let len = (tan[0] * tan[0] + tan[1] * tan[1]).sqrt().max(1e-6);
+                [p[0] + tan[1] / len * s, p[1] - tan[0] / len * s, p[2]]
+            };
+            let (start, end) = (back(start, tan0, size(t0)), back(end, tan1, size(t1)));
+            let delta = [0, 1, 2].map(|c| end[c] - start[c]);
+            // trailRightStart = cross(eye, delta + start - cp0) along the
+            // tangent; trailRightEnd = cross(eye, delta - (end - cp1)).
+            let cp0 = [0, 1, 2].map(|c| start[c] - (tan0[c] * step - delta[c]));
+            let cp1 = [0, 1, 2].map(|c| end[c] - (delta[c] - tan1[c] * step));
+            let colour = |t: f32| {
+                [
+                    mix(a.color[0], b.color[0], t),
+                    mix(a.color[1], b.color[1], t),
+                    mix(a.color[2], b.color[2], t),
+                    mix(a.alpha, b.alpha, t),
+                ]
+            };
+            let position = (k as u32 * pieces + j) as f32;
+            for (u, v) in CORNERS {
+                for attr in attributes {
+                    let m = attr.components.clamp(1, 4) as usize;
+                    let values = match attr.name.as_str() {
+                        "a_PositionVec4" => [start[0], start[1], start[2], size(t0)],
+                        "a_TexCoordVec4" => [end[0], end[1], end[2], length],
+                        "a_TexCoordVec4C1" => [cp0[0], cp0[1], cp0[2], position],
+                        "a_TexCoordVec4C2" => [cp1[0], cp1[1], cp1[2], size(t1)],
+                        "a_TexCoordVec4C3" => colour(t1),
+                        "a_TexCoordC4" => [u, v, 0.0, 0.0],
+                        "a_Color" => colour(t0),
+                        _ => [0.0; 4],
+                    };
+                    out.extend_from_slice(&values[..m]);
                 }
                 written += 1;
             }

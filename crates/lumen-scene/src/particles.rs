@@ -61,12 +61,14 @@ pub enum Initializer {
     /// Per-axis random rotation (radians).
     Rotation(Range<[f32; 3]>),
     AngularVelocity(Range<[f32; 3]>),
-    /// Velocity along a random direction, `speed` pixels per second.
+    /// Velocity of `speed` pixels per second along `forward`, turned a
+    /// little by WE's noise field (see `lumen-particles`).
     TurbulentVelocity {
         speed: [f32; 2],
         scale: f32,
         offset: f32,
         timescale: f32,
+        forward: [f32; 3],
     },
 }
 
@@ -165,6 +167,12 @@ pub enum ParticleRenderer {
     RopeTrail {
         length: f32,
         segments: u32,
+    },
+    /// One ribbon through all of the system's particles, oldest first
+    /// (WE `rope`; 2553418404's vapour trails), each span split into
+    /// `subdivision` + 1 pieces along a spline.
+    Rope {
+        subdivision: u32,
     },
 }
 

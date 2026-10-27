@@ -2221,6 +2221,17 @@ impl SceneRenderer {
                 }
                 let rope = crate::particles::rope_vars(system, pg.sim.trail_phase(draw.system));
                 let n = match rope {
+                    _ if let lumen_scene::particles::ParticleRenderer::Rope { subdivision } =
+                        system.renderer =>
+                    {
+                        crate::particles::fill_rope_chain(
+                            &program.attributes,
+                            pg.sim.particles(draw.system),
+                            subdivision + 1,
+                            draw.capacity,
+                            &mut pg.scratch,
+                        )
+                    }
                     Some(var0) => {
                         for (layout, buf) in [
                             (&program.vs_uniforms, &mut pass.vs_data),
