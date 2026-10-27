@@ -29,7 +29,9 @@ pub fn user_properties(project: &Value, choices: &Map<String, Value>) -> Value {
     Value::Object(out)
 }
 
-/// The project's `project.json`, if readable.
+/// The project's `project.json`, if readable. Used by the desktop host,
+/// which Linux does not have yet.
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 pub fn read_project(dir: &Path) -> Value {
     std::fs::read(dir.join("project.json"))
         .ok()
@@ -37,6 +39,7 @@ pub fn read_project(dir: &Path) -> Value {
         .unwrap_or(Value::Null)
 }
 
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 fn strip_bom(b: &[u8]) -> &[u8] {
     b.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(b)
 }

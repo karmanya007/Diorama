@@ -95,6 +95,8 @@ fn log_bands() {
 /// `LUMEN_PCM_OUT.idx` (`rate,channels` header, then `unix_ms,frames_so_far`
 /// per callback), to replay against captured WE frames offline. Stays on
 /// this machine (`scratch/`); delete it after use.
+// cpal (WASAPI loopback) is a Windows-only dependency for now.
+#[cfg(windows)]
 #[test]
 #[ignore = "records what is playing on this machine"]
 fn record_pcm() {
