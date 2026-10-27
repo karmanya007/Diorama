@@ -4,11 +4,15 @@
 ; removed. Only processes started from this install are touched.
 
 !macro LUMEN_STOP_DAEMON
-  ; Ask the daemon to quit (it ends its web hosts), then make sure.
+  ; Close the UI first (it would start lumend again), then ask the daemon to
+  ; quit (it ends its web hosts), then make sure.
+  IfFileExists "$INSTDIR\lumen-ui.exe" 0 +3
+    nsExec::Exec '"$INSTDIR\lumen-ui.exe" --quit'
+    Pop $0
   IfFileExists "$INSTDIR\lumen.exe" 0 +3
     nsExec::Exec '"$INSTDIR\lumen.exe" quit'
     Pop $0
-  nsExec::Exec `powershell -NoProfile -NonInteractive -Command "Start-Sleep -Milliseconds 800; Get-Process lumend, lumen-webhost -ErrorAction SilentlyContinue | Where-Object { $$_.Path -like '$INSTDIR\*' } | Stop-Process -Force"`
+  nsExec::Exec `powershell -NoProfile -NonInteractive -Command "Start-Sleep -Milliseconds 800; Get-Process lumen-ui, lumend, lumen-webhost -ErrorAction SilentlyContinue | Where-Object { $$_.Path -like '$INSTDIR\*' } | Stop-Process -Force"`
   Pop $0
 !macroend
 

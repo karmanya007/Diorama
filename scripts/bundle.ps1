@@ -44,6 +44,9 @@ try {
         Set-Content -Encoding ascii $NoUpdates '{"bundle":{"createUpdaterArtifacts":false}}'
         $Config += @('--config', $NoUpdates)
     }
+    # Old installers left here get scanned by antivirus on rebuild, which
+    # can lock them while the bundler writes (os error 32).
+    Remove-Item -Recurse -Force (Join-Path $Root 'target\release\bundle\nsis') -ErrorAction SilentlyContinue
     Invoke-Native 'tauri build' { npx tauri build @Config }
 } finally {
     Pop-Location
