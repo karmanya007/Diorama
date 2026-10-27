@@ -2,7 +2,7 @@
 
 All notable changes to Lumen are listed here. Versions follow [Semantic Versioning](https://semver.org); before 1.0, minor versions may change behaviour.
 
-## Unreleased
+## 0.1.0 (unreleased)
 
 First public preview (Windows).
 

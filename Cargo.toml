@@ -23,7 +23,7 @@ members = [
 exclude = ["fuzz"]
 
 [workspace.package]
-version = "0.0.1"
+version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/karmanya007/Lumen"
@@ -31,18 +31,18 @@ publish = false
 
 [workspace.dependencies]
 # internal
-lumen-core = { path = "crates/lumen-core", version = "0.0.1" }
-lumen-we = { path = "crates/lumen-we", version = "0.0.1" }
-lumen-library = { path = "crates/lumen-library", version = "0.0.1" }
-lumen-gpu = { path = "crates/lumen-gpu", version = "0.0.1" }
-lumen-ipc = { path = "crates/lumen-ipc", version = "0.0.1" }
-lumen-media = { path = "crates/lumen-media", version = "0.0.1" }
-lumen-particles = { path = "crates/lumen-particles", version = "0.0.1" }
-lumen-platform = { path = "crates/lumen-platform", version = "0.0.1" }
-lumen-render = { path = "crates/lumen-render", version = "0.0.1" }
-lumen-scene = { path = "crates/lumen-scene", version = "0.0.1" }
-lumen-script = { path = "crates/lumen-script", version = "0.0.1" }
-lumen-text = { path = "crates/lumen-text", version = "0.0.1" }
+lumen-core = { path = "crates/lumen-core", version = "0.1.0" }
+lumen-we = { path = "crates/lumen-we", version = "0.1.0" }
+lumen-library = { path = "crates/lumen-library", version = "0.1.0" }
+lumen-gpu = { path = "crates/lumen-gpu", version = "0.1.0" }
+lumen-ipc = { path = "crates/lumen-ipc", version = "0.1.0" }
+lumen-media = { path = "crates/lumen-media", version = "0.1.0" }
+lumen-particles = { path = "crates/lumen-particles", version = "0.1.0" }
+lumen-platform = { path = "crates/lumen-platform", version = "0.1.0" }
+lumen-render = { path = "crates/lumen-render", version = "0.1.0" }
+lumen-scene = { path = "crates/lumen-scene", version = "0.1.0" }
+lumen-script = { path = "crates/lumen-script", version = "0.1.0" }
+lumen-text = { path = "crates/lumen-text", version = "0.1.0" }
 
 # external
 anyhow = "1"
