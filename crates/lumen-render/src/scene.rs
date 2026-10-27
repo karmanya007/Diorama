@@ -289,6 +289,9 @@ const SAMPLERS: [(wgpu::AddressMode, wgpu::FilterMode); 4] = [
     (wgpu::AddressMode::Repeat, wgpu::FilterMode::Nearest),
 ];
 const CLAMP_LINEAR: usize = 0;
+/// `AssetTexture::sampler` numbering: nearest, clamped or repeating.
+const CLAMP_NEAREST: usize = 2;
+const REPEAT_NEAREST: usize = 3;
 
 /// Row-major 4×4 (as WE and RenderDoc list it, translation in row 3) →
 /// upload order. `mul(v, M)` reads naga column j as HLSL column j
@@ -1068,6 +1071,7 @@ impl SceneRenderer {
                 puppet: None,
                 model: None,
                 atlas: None,
+                point: false,
             };
             let Some(mut pass) = self.build_pass(ctx, &plan) else {
                 continue;
@@ -1210,6 +1214,14 @@ impl SceneRenderer {
         composite_layout: &wgpu::BindGroupLayout,
     ) -> Option<GpuLayer> {
         let layer = &self.effective_layer(ctx.gpu, ctx.scene, index);
+        // Pixel art: its first texture is not interpolated.
+        let pixel_art = match layer.albedo.textures.get(&0) {
+            Some(TextureBinding::Asset(id)) => ctx
+                .assets
+                .get(id.0)
+                .is_some_and(|a| a.sampler == CLAMP_NEAREST || a.sampler == REPEAT_NEAREST),
+            _ => false,
+        };
         // Fullscreen layers cover the scene's own rectangle, also in
         // perspective scenes.
         let camera = if layer.kind == LayerKind::Fullscreen && frame.target == SCENE {
@@ -1261,6 +1273,7 @@ impl SceneRenderer {
                 puppet: layer.puppet.as_deref(),
                 model: layer.model.as_deref(),
                 atlas,
+                point: pixel_art,
             };
             let mut pass = self.build_pass(ctx, &plan)?;
             pass.load |= into_group;
@@ -1340,6 +1353,7 @@ impl SceneRenderer {
             puppet: layer.puppet.as_deref(),
             model: layer.model.as_deref(),
             atlas,
+            point: pixel_art,
         };
         let mut albedo = self.build_pass(ctx, &albedo)?;
         albedo.load = layer.copy_background;
@@ -1389,6 +1403,32 @@ impl SceneRenderer {
         }
         let children_at = passes.len();
 
+        // Pixel art: like WE, the last effect pass draws straight into the
+        // scene with the layer's placement and blend (no copy afterwards), so
+        // a pass that tiles or scrolls its small target keeps full detail
+        // (Dino Run's grass repeats a 32×32 target 14 times across the
+        // screen). Other layers keep the composite copy (doing this for all
+        // layers broke Bunk 2134765860). Effect visibility changes rebuild
+        // the layer, so this stays the last pass.
+        let last_direct = if pixel_art && layer.composite.is_none() {
+            layer
+                .effects
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| e.visible)
+                .flat_map(|(e, effect)| {
+                    effect
+                        .passes
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, p)| p.target.is_none())
+                        .map(move |(i, _)| (e, i))
+                })
+                .last()
+        } else {
+            None
+        };
+
         for (e, effect) in layer.effects.iter().enumerate() {
             if !effect.visible {
                 continue;
@@ -1421,6 +1461,51 @@ impl SceneRenderer {
                         }
                     }
                 };
+                if last_direct == Some((e, pass_index)) {
+                    let plan = PassPlan {
+                        pass,
+                        blend: layer.blend,
+                        previous: Some(current),
+                        fbos: &fbos,
+                        target: frame.target,
+                        geometry: Geometry::Direct {
+                            size: layer.size,
+                            model: placement(layer),
+                            camera,
+                        },
+                        // Colour and alpha were applied by the albedo pass.
+                        color: [1.0; 4],
+                        mesh: None,
+                        puppet: None,
+                        model: None,
+                        atlas: None,
+                        point: pixel_art,
+                    };
+                    if let Some(mut p) = self.build_pass(ctx, &plan) {
+                        p.source = Some((e, pass_index));
+                        p.load |= into_group;
+                        passes.push(p);
+                        return Some(GpuLayer {
+                            index,
+                            frame,
+                            visible: layer.visible,
+                            owned,
+                            passes,
+                            background,
+                            particles: None,
+                            composite: None,
+                            children,
+                            children_at,
+                            blend: layer.blend,
+                            needs_framebuffer,
+                            size: layer.size,
+                            transform: placement(layer),
+                            parallax_depth: layer.parallax_depth,
+                            offset: [0.0, 0.0],
+                        });
+                    }
+                    continue;
+                }
                 let plan = PassPlan {
                     pass,
                     blend: pass.blend,
@@ -1433,6 +1518,7 @@ impl SceneRenderer {
                     puppet: None,
                     model: None,
                     atlas: None,
+                    point: pixel_art,
                 };
                 if let Some(mut p) = self.build_pass(ctx, &plan) {
                     p.source = Some((e, pass_index));
@@ -1462,6 +1548,7 @@ impl SceneRenderer {
                 puppet: None,
                 model: None,
                 atlas: None,
+                point: pixel_art,
             };
             if let Some(mut p) = self.build_pass(ctx, &plan) {
                 p.load |= into_group;
@@ -1497,7 +1584,13 @@ impl SceneRenderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&ctx.samplers[CLAMP_LINEAR]),
+                    resource: wgpu::BindingResource::Sampler(
+                        &ctx.samplers[if pixel_art {
+                            CLAMP_NEAREST
+                        } else {
+                            CLAMP_LINEAR
+                        }],
+                    ),
                 },
             ],
         });
@@ -1583,7 +1676,12 @@ impl SceneRenderer {
                 Source::Target(t) => {
                     let t = &self.targets[*t];
                     let [w, h] = t.size.map(|v| v as f32);
-                    (&t.view, &ctx.samplers[CLAMP_LINEAR], [w, h, w, h])
+                    let sampler = if plan.point {
+                        CLAMP_NEAREST
+                    } else {
+                        CLAMP_LINEAR
+                    };
+                    (&t.view, &ctx.samplers[sampler], [w, h, w, h])
                 }
                 Source::Atlas => match plan.atlas {
                     Some((view, resolution)) => (view, &ctx.samplers[CLAMP_LINEAR], resolution),
@@ -2603,6 +2701,10 @@ struct PassPlan<'a> {
     model: Option<&'a ir::Model>,
     /// The layer's glyph atlas and its resolution (text layers).
     atlas: Option<(&'a wgpu::TextureView, [f32; 4])>,
+    /// Sample the layer's own targets with point filtering: pixel art
+    /// (WE keeps a `nointerpolation` layer's effect passes and composite on
+    /// point samplers; Dino Run capture).
+    point: bool,
 }
 
 #[derive(Debug, Clone, Copy)]

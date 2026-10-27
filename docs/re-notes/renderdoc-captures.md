@@ -55,3 +55,11 @@ Lumen's renderer reproduces frame 289 (scene 1132505365: image layer + waterripp
 - albedo → target A (no blending), ripple A→B, shake B→A, godrays: downsample A→½ FBO1, cast →FBO2, blur x →FBO1, blur y →FBO2, combine (FBO2 + A) → B, composite B with the material's `translucent` blending;
 - effect quads: clip-space positions, MVP `diag(1, 1, 0.0005)` + row 3 `(0, 0, 0.5, 1)`;
 - `g_TextureNResolution` = `(allocated w, h, image w, h)` for textures, `(w, h, w, h)` for render targets.
+
+## Depth, sampling and sprite sizes (Phase 6 captures, 2026-10-27)
+From captures of the default projects Neon Sunset, Audiophile and Dino Run (D3D11 pipeline state read per draw with RenderDoc):
+- **Depth writes follow the blend, not the material.** Perspective scenes use reversed Z (`GREATER`, cleared to 0). Opaque model draws test and write depth; every blended draw (`translucent`, `additive`) tests but does not write, even when its material says `"depthwrite": "enabled"`. Neon Sunset's translucent sun quad would otherwise hide the mountains behind its transparent corners.
+- **`nointerpolation` layers stay on point samplers to the end.** Dino Run's image layers render into scene-unit targets (272×160, 544×160, 32×32) and every draw touching them — albedo, effect passes and the draw onto the 3000×1920 back buffer — uses point filtering; only the scene's post-processing after them is linear.
+- **The last effect pass draws straight into the scene.** Each Dino Run layer with one effect is two draws: albedo into its target, then the effect pass (e.g. `scroll` with `repeat 14 1`) with the layer's placement and blend onto the back buffer — there is no separate composite copy, so a pass that tiles a 32×32 target keeps full detail. Lumen does this for pixel-art layers; other layers keep the composite copy (same image when the effect does not tile).
+- **Sprite-sheet layers are one frame big.** A layer sized by its texture (`autosize` models such as Dino Run's coin, 16×16 frames on a 256×64 sheet) takes the first `TEXS` frame's size, not the sheet's.
+- Neon Sunset's terrain is an fbm of `frac(sin(x)·43758.5)` hashes in the vertex shader; FXC's and DXC's `sin` differ in the last bits, so the peaks land elsewhere (same mean height). Not reproducible short of emulating the driver's `sin`.

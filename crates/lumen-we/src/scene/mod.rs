@@ -579,7 +579,11 @@ impl Importer<'_> {
                     _ => lumen_scene::Cull::Back,
                 },
                 depth_test: raster["depthtest"].as_str() != Some("disabled"),
-                depth_write: raster["depthwrite"].as_str() != Some("disabled"),
+                // Blended passes never write depth, whatever the material
+                // says (captures of Neon Sunset and Audiophile: only opaque
+                // draws write; the translucent sun would hide the mountains).
+                depth_write: raster["depthwrite"].as_str() != Some("disabled")
+                    && blend == lumen_scene::Blend::Opaque,
             };
             self.scene.layers.push(ImageLayer {
                 name: if many {
@@ -1201,7 +1205,20 @@ impl Importer<'_> {
             _ => match albedo.textures.get(&0) {
                 Some(TextureBinding::Asset(id)) => {
                     let t = &self.scene.textures[id.0];
-                    [t.image_width, t.image_height]
+                    // A sprite sheet's layer is one frame big (Dino Run's
+                    // coin: 16×16 frames on a 256×64 sheet).
+                    match t.frames.first() {
+                        Some(f) => {
+                            let len = |a: [f32; 2], w: u32, h: u32| {
+                                (a[0] * w as f32).hypot(a[1] * h as f32).round().max(1.0) as u32
+                            };
+                            [
+                                len(f.x_axis, t.width, t.height),
+                                len(f.y_axis, t.width, t.height),
+                            ]
+                        }
+                        None => [t.image_width, t.image_height],
+                    }
                 }
                 _ => return Err(unsupported("layer without size", name)),
             },
