@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Enforces the architecture rules from docs/PLAN.md and ADR-002:
+# Enforces the architecture rules of ADR-002 (docs/adr):
 #   1. Lower layers never depend on higher ones; renderer/runtime never see WE formats.
 #   2. OS-specific code (cfg(windows) etc.) lives only in lumen-platform and lumen-media.
 # Crates that do not exist yet are skipped, so the rules can be written ahead of time.

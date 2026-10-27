@@ -10,7 +10,7 @@
 //!   top-level window that hosts `SHELLDLL_DefView`.
 //!
 //! Wallpaper Engine itself parents its window into this `WorkerW` (see
-//! `docs/re-notes/` and PROGRESS.md). Pain point P9.
+//! `docs/re-notes/`). Pain point P9.
 
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{

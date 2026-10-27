@@ -1,77 +1,185 @@
-# Lumen (working name)
+# Lumen
 
-Open, cross-platform live wallpaper engine that can play Wallpaper Engine Workshop content you own. Windows first, then Linux, then macOS.
+**An open-source live wallpaper engine for Windows that plays the Wallpaper Engine content you already have, plus your own images, videos and web pages.**
 
-Status: Phase 1 (Windows: image/video wallpapers behind the icons, pause policies, CLI). See [PROGRESS.md](PROGRESS.md).
+Lumen draws animated wallpapers behind your desktop icons: Wallpaper Engine scenes, videos and web wallpapers from your local Steam Workshop folder, Wallpaper Engine's own projects, or files from any folder you add. It is written in Rust on [wgpu](https://wgpu.rs), uses a small [Tauri](https://tauri.app) app for its window, and never needs Steam to be running.
 
-## Layout
+> **Status: early preview (Windows only).** Videos, web wallpapers and images are solid; most scenes look right, some still differ from Wallpaper Engine (see [Compatibility](#compatibility)). Linux and macOS ports are planned.
+
+Lumen is an independent project. It is not affiliated with or endorsed by Wallpaper Engine, its developers, or Valve.
+
+## Features
+
+- **Plays Wallpaper Engine content you own**: scenes (layers, effects, particles, 3D models, text, SceneScript, audio-reactive and cursor-reactive layers), videos and web wallpapers, read straight from your local Workshop folder.
+- **Your own wallpapers**: images, videos and web pages from any folder.
+- **Per-monitor or spanning**: a different wallpaper per monitor, or one stretched across all of them, with fill / fit / stretch.
+- **Wallpaper settings**: each wallpaper's own options (colours, sliders, text, files…), starting from the choices you made in Wallpaper Engine.
+- **Playlists**: rotate wallpapers on a timer or by time of day, per monitor.
+- **Library**: search by title, tag or Workshop id; filter by type, source and tag; questionable and mature items are hidden until you ask for them; sort by how heavy a wallpaper is.
+- **Cost report**: Lumen measures the CPU, GPU and memory each wallpaper really uses and shows it in the library.
+- **Light on your PC**:
+  - static wallpapers stop drawing entirely;
+  - each monitor pauses on its own behind fullscreen apps or maximized windows, while locked or on battery;
+  - presets: Balanced, Quality, Gaming, Battery.
+- **Robust desktop integration**: works on Windows 11 24H2 with desktop icons hidden, recovers when Explorer restarts or the graphics driver resets, keeps playing when the audio device changes, and follows monitors as they are plugged in or rearranged.
+- **Video help**: detects videos your graphics card cannot decode (which would load the CPU) and offers to convert them once.
+- **Private by default**: no telemetry, no accounts. Web wallpapers are offline unless you allow a wallpaper to use the internet; updates are checked only when you click "Check for updates".
+- **Notification-area icon**: open Lumen, next wallpaper, pause / resume, quit.
+- **Command line**: everything the app does is also available from `lumen`.
+
+## Install
+
+1. Download `Lumen_<version>_x64-setup.exe` from the [latest release](https://github.com/karmanya007/Lumen/releases/latest).
+2. Run it. It installs for your user only (no administrator rights) into `%LOCALAPPDATA%\Lumen`.
+   - The installer is not code-signed yet, so Windows SmartScreen may warn: choose **More info → Run anyway**.
+3. Open **Lumen** from the Start menu.
+
+**Requirements**
+
+- Windows 10 or 11, 64-bit; tested mostly on Windows 11 24H2.
+- A graphics card with Direct3D 12 or Vulkan.
+- WebView2: built into Windows 11; the installer fetches it on Windows 10 if it is missing.
+- For Wallpaper Engine **scenes**: an installed copy of Wallpaper Engine. Scenes use its built-in shaders and effects, which Lumen reads from your installation and never ships. Videos, web wallpapers and images play without it.
+
+**Updates**: Settings → Updates → **Check for updates**. Updates are signed and installed in place; your settings are kept.
+
+**Uninstall**: Windows Settings → Apps → Lumen. Tick "Delete the application data" to also remove Lumen's settings and caches.
+
+## Using Lumen
+
+- **Library**: lists your Workshop items, Wallpaper Engine's projects and any folders you add (Settings → Library folders). Select a wallpaper to see its details, preview and settings, then choose the monitors and press **Show**.
+- **Monitors**: what each monitor shows, and whether it is paused and why.
+- **Playlists**: build a list, pick the order and when it changes (every N minutes, or at set times of day), and the monitors it runs on.
+- **Settings**: pause rules and presets, volume, library folders, start Lumen when you sign in, updates.
+
+Closing the window leaves your wallpapers running in the background (`lumend`). Quit from the notification-area icon to stop everything.
+
+### Command line
+
+The installer puts `lumen.exe` next to the app (`%LOCALAPPDATA%\Lumen`):
+
+```sh
+lumen set <image | video | scene or web folder> [--fit fill|fit|stretch] [--layout per-output|span]
+lumen set <web folder> --allow-network     # let a web wallpaper use the internet
+lumen status                               # what plays on each monitor, and why something paused
+lumen volume 0-100                         # video soundtrack (0 = muted, the default)
+lumen pause | resume | quit
+lumen autostart enable | disable | status  # start at sign-in
+lumen --help
+```
+
+## Compatibility
+
+Measured against the author's own 80 Workshop items and Wallpaper Engine's default projects:
+
+| Content | Status |
+|---|---|
+| Videos | 21 / 21 play (hardware decoding; unsupported codecs can be converted) |
+| Web wallpapers | 4 / 4 work (audio, media and property APIs, PerformanceMonitor widgets) |
+| Scenes | 55 / 55 import; compared frame by frame with Wallpaper Engine, 48 / 55 match closely (SSIM ≥ 0.90) and 35 / 55 very closely (≥ 0.95) |
+
+Known gaps:
+
+- planar reflections;
+- some camera fades;
+- a few shader effects that rely on Direct3D 11 behaviour;
+- Wallpaper Engine's application wallpapers and plugins, which are not planned.
+
+If a wallpaper looks wrong, please [open an issue](https://github.com/karmanya007/Lumen/issues) with its Workshop id. A side-by-side screenshot helps a lot.
+
+## How it works
+
+| Process | Role |
+|---|---|
+| `lumend` | The wallpaper daemon. One GPU device for all monitors; draws scenes, videos and images into windows placed behind the desktop icons; applies pause rules; runs playlists. |
+| `lumen-webhost` | One process per web wallpaper (WebView2), kept separate so a misbehaving page cannot take the rest down. |
+| `lumen-ui` | The Lumen window (Tauri). Talks to `lumend` over a per-user local socket, exactly like the `lumen` CLI. |
+
+Wallpaper Engine content is imported into Lumen's own engine-neutral scene format, so the renderer knows nothing about Wallpaper Engine's files. Workshop content is treated as untrusted input:
+
+- parsers are bounds-checked and fuzzed;
+- scripts run in a sandboxed QuickJS with memory and time limits;
+- shaders are validated before use;
+- web pages are offline by default.
+
+Design decisions are recorded in [docs/adr](docs/adr); file formats in [docs/formats](docs/formats); notes on how Wallpaper Engine content behaves in [docs/re-notes](docs/re-notes).
+
+## Building from source
+
+You need:
+
+- **Rust**: the version is pinned in `rust-toolchain.toml`, and rustup installs it automatically.
+- **Visual Studio Build Tools**: the C++ workload.
+- **Node.js 22+**: only for the Lumen window and the installer.
+
+```powershell
+git clone https://github.com/karmanya007/Lumen
+cd Lumen
+./scripts/fetch-dxc.ps1                  # pinned DirectX Shader Compiler into .tools/dxc (needed for scenes)
+cargo build --release                    # lumend, lumen, lumen-webhost, lumen-ui, tools
+cd apps/lumen-ui; npm install; npm run build; cd ../..
+cargo build --release -p lumen-ui        # the window, with the built front end
+target/release/lumen-ui                  # starts lumend on demand
+```
+
+During development the daemon also runs on its own:
+
+- `target/release/lumend --help` lists its options: pause rules, fps, `--scene/--video/--image`, and `--frame-out` to render one frame off-screen.
+- Set `LUMEN_DXC` to `.tools\dxc\dxc.exe` if `lumend` is not next to a `dxc` folder.
+- Settings and logs: `%APPDATA%\Lumen`. Caches: `%LOCALAPPDATA%\Lumen\cache`.
+
+To build the installer, run `./scripts/bundle.ps1`. The result is `target/release/bundle/nsis/`. See [ADR-007](docs/adr/0007-packaging-updates.md) for packaging and releases.
+
+### Repository layout
 
 | Path | Purpose |
 |---|---|
 | `crates/lumen-core` | Clock, limits, shared foundation types |
-| `crates/lumen-we` | Wallpaper Engine importer (pkg, tex, json, shaders) |
-| `crates/lumen-platform` | OS integration: monitors, wallpaper windows behind the icons, coverage, power |
-| `crates/lumen-gpu` | wgpu device and per-monitor surfaces |
-| `crates/lumen-render` | Image/video drawing, fit and span placement |
-| `crates/lumen-media` | Video decoding (Media Foundation + DXVA on Windows) |
-| `crates/lumen-ipc` | Daemon ↔ client protocol over a per-user local socket |
+| `crates/lumen-scene` | Engine-neutral scene format (layers, materials, effects, particles) |
+| `crates/lumen-we` | Wallpaper Engine importer: pkg, tex, mdl, scene/effect/material JSON, shader translation |
+| `crates/lumen-gpu` | wgpu device, surfaces, shader compilation and cache |
+| `crates/lumen-render` | Scene, video and image rendering |
+| `crates/lumen-particles` | Particle simulation |
+| `crates/lumen-script` | SceneScript runtime (QuickJS) |
+| `crates/lumen-text` | Text layers |
+| `crates/lumen-media` | Video decoding (Media Foundation + DXVA) and conversion |
+| `crates/lumen-platform` | OS integration: wallpaper windows, monitors, input, power, tray, audio capture |
+| `crates/lumen-library` | Finding wallpapers: Workshop, Wallpaper Engine projects, folders |
+| `crates/lumen-ipc` | Protocol between `lumend` and its clients |
 | `apps/lumend` | Wallpaper daemon |
-| `apps/lumen-cli` | `lumen` control command |
-| `tools/wpdump` | Inspect / unpack WE content |
-| `docs/formats` | File format specs |
-| `docs/adr` | Architecture decisions |
-| `docs/re-notes` | Reverse-engineering notes (RenderDoc, Ghidra) |
+| `apps/lumen-cli` | `lumen` command |
+| `apps/lumen-webhost` | Web wallpaper host |
+| `apps/lumen-ui` | The Lumen window (Tauri + Svelte) |
+| `tools/wpdump` | Inspect and unpack Wallpaper Engine files |
+| `tools/imgdiff`, `tools/refcap` | Compare Lumen's frames with reference captures |
+| `tests/scenarios` | Manual and scripted checks for desktop behaviour |
+| `fuzz` | Fuzz targets for the file parsers |
 
-Planned crates (added when their phase starts): `lumen-scene`, `lumen-assets`, `lumen-runtime`, and apps `lumen-ui`, `lumen-webhost`.
+Tests:
 
-## Usage
+- `cargo test --workspace`.
+- Tests that need Wallpaper Engine content read your local installation and skip themselves when it is missing:
+  - `LUMEN_WE_CORPUS` points at the Workshop folder;
+  - `LUMEN_WE_INSTALL` points at the Wallpaper Engine folder.
 
-Run the daemon, then control it (Windows):
+See [CONTRIBUTING.md](CONTRIBUTING.md) before sending changes.
 
-Wallpaper Engine scenes need the DirectX Shader Compiler: run `scripts/fetch-dxc.ps1` once (pinned, hash-checked, into `.tools/dxc`) and set `LUMEN_DXC` to its `dxc.exe` (or put `dxc.exe` + `dxcompiler.dll` beside `lumend.exe`). Compiled shaders are cached in `%LOCALAPPDATA%\Lumen\cache\shaders`.
+## Roadmap
 
-```sh
-cargo build --release
-$env:LUMEN_DXC = "$PWD\.tools\dxc\dxc.exe"           # PowerShell; needed for scenes
-target/release/lumend                                   # starts empty; or --image/--video/--scene <path>
-target/release/lumen set <image|video|scene folder> [--fit fill|fit|stretch] [--layout per-output|span]
-target/release/lumen status                             # what is playing, per-monitor state
-target/release/lumen volume 0-100                       # video soundtrack (0 = muted, default)
-target/release/lumen pause | resume | quit
-target/release/lumen autostart enable | disable | status   # start at sign-in (per user)
-```
-
-Scenes play at `--fps` (default 30), follow the cursor for parallax, and default to the fit chosen for that wallpaper in Wallpaper Engine (if any). `--we-assets` points at Wallpaper Engine's `assets` folder (built-in shaders and effects); the default is the Steam install path. `lumend --list-outputs` shows monitors.
-
-`lumend --help` lists pause rules (`--on-fullscreen`, `--on-maximized`, `--on-battery`, `--on-lock`). The last wallpaper is remembered in `%APPDATA%\Lumen\state.json`. `--background` detaches from the console and logs to `%APPDATA%\Lumen\lumend.log`. `--os-fallback` also sets each wallpaper (a snapshot for videos) as the Windows background, so the desktop isn't blank when Lumen isn't running — this changes your Windows wallpaper setting.
-
-Developer tools:
-
-```sh
-cargo run -p wpdump -- list   "<workshop item>/scene.pkg"
-cargo run -p wpdump -- cat    "<workshop item>/scene.pkg" scene.json
-cargo run -p wpdump -- unpack "<workshop item>/scene.pkg" extracted/<id>
-cargo run -p wpdump -- tex-info "<file>.tex"                       # or: <scene.pkg> --entry materials/x.tex
-cargo run -p wpdump -- tex2png  "<file>.tex" out.png --crop
-cargo run -p wpdump -- survey --out docs/re-notes/corpus-survey.md   # aggregate feature usage
-cargo run -p wpdump -- shader-check --backend hlsl --dxc <path>/dxc.exe   # shader translation pass rate
-target/release/lumend --scene <dir> --frame-out out.png --time 10 [--pointer 0.5,0.5] [--dump-targets]   # one offscreen frame
-target/release/imgdiff reference.png candidate.png --cover --side-by-side sbs.png   # SSIM/PSNR
-CAPTURES=scratch/captures tools/refcap/golden.sh      # score local RenderDoc captures of WE (see tools/refcap)
-```
-
-`shader-check --backend hlsl` needs DXC from the [DirectXShaderCompiler releases](https://github.com/microsoft/DirectXShaderCompiler/releases); see [ADR-003](docs/adr/0003-shader-toolchain.md).
-
-Installer (Windows): `scripts/bundle.ps1` builds `target/release/bundle/nsis/Lumen_<version>_x64-setup.exe` (lumen-ui, lumend, lumen-webhost, `lumen` and DXC; needs Node). With `TAURI_SIGNING_PRIVATE_KEY`/`_PASSWORD` set it also signs the update file. Releases: bump the workspace version, push a tag `v<version>`, and the release workflow publishes the installer and `latest.json` for the in-app updater; see [ADR-007](docs/adr/0007-packaging-updates.md).
-
-Tests: `cargo test --workspace`. Corpus tests read your local Workshop folder (`LUMEN_WE_CORPUS`) and WE install (`LUMEN_WE_INSTALL`), defaulting to the Steam paths, and skip when missing.
-
-Fuzzing (Linux, nightly): `cargo +nightly fuzz run pkg` / `cargo +nightly fuzz run tex` from the repo root.
-
-## License
-
-Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
+- **Windows 1.0**: signed installer, winget, remaining scene differences.
+- **Linux**:
+  - Wayland (wlr-layer-shell compositors, KDE, GNOME) and X11;
+  - VA-API video, PipeWire audio;
+  - Flatpak and distribution packages.
+- **macOS.**
+- **An editor** for Lumen's own wallpaper format.
 
 ## Content and legal
 
-This project does not ship Wallpaper Engine binaries, assets, shaders, or Workshop content. It reads them from your own installation at runtime. Never commit extracted content.
+Lumen does not include or redistribute Wallpaper Engine's program, assets, shaders, or any Workshop content. It reads them from your own installation and subscriptions at run time, for interoperability with files you already have. Please do not commit or attach extracted Wallpaper Engine or Workshop content to issues or pull requests.
+
+"Wallpaper Engine" and "Steam" are trademarks of their respective owners and are used here only to describe compatibility.
+
+## License
+
+Lumen is dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option. The installer also ships the DirectX Shader Compiler (`dxc.exe`, `dxcompiler.dll`) under its own LLVM and MIT licences, included beside it.
