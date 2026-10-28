@@ -5,7 +5,7 @@
   const DESCRIBE = {
     balanced: 'Pauses behind fullscreen apps and maximized windows, and while locked. 30 fps.',
     quality: 'Keeps playing beside maximized windows; smoother scenes at 60 fps.',
-    gaming: 'Leaves the GPU to games, also pauses on battery. 24 fps.',
+    gaming: 'Leaves the GPU to games: unloads behind fullscreen apps, pauses on battery. 24 fps.',
     battery: 'Pauses whenever it can and runs scenes slowly. 15 fps.',
   };
   const RULES = [
@@ -111,6 +111,7 @@
             <select value={policy[key]} onchange={(e) => apply({ ...policy, [key]: e.currentTarget.value })}>
               <option value="pause">Pause</option>
               <option value="keep">Keep playing</option>
+              <option value="stop">Stop and free memory</option>
             </select>
           </label>
         {/each}

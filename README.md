@@ -26,6 +26,8 @@ Diorama is an independent project. It is not affiliated with or endorsed by Wall
 - **Light on your PC**:
   - static wallpapers stop drawing entirely;
   - each monitor pauses on its own behind fullscreen apps or maximized windows, while locked or on battery;
+  - or stops: the wallpaper is unloaded and its video memory freed while a game runs, and comes back when you leave it;
+  - scenes and web wallpapers run at a frame rate cap (30 fps by default), not at your monitor's refresh rate;
   - presets: Balanced, Quality, Gaming, Battery.
 - **Robust desktop integration**: works on Windows 11 24H2 with desktop icons hidden, recovers when Explorer restarts or the graphics driver resets, keeps playing when the audio device changes, and follows monitors as they are plugged in or rearranged.
 - **Video help**: detects videos your graphics card cannot decode (which would load the CPU) and offers to convert them once.

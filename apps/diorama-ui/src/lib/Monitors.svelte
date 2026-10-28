@@ -64,7 +64,7 @@
           <div class="row">
             <h2>{monitorName(o)}</h2>
             {#if o.primary}<span class="chip">primary</span>{/if}
-            <span class="chip">{o.paused ? `paused (${o.coverage})` : 'playing'}</span>
+            <span class="chip">{o.stopped ? `stopped (${o.coverage})` : o.paused ? `paused (${o.coverage})` : 'playing'}</span>
             <div class="spacer"></div>
             {#if o.playlist}
               <span class="chip">playlist: {o.playlist}</span>

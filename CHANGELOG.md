@@ -4,6 +4,7 @@ All notable changes to Diorama are listed here. Versions follow [Semantic Versio
 
 ## Unreleased
 
+- New pause rule action **Stop and free memory** (like Wallpaper Engine's "Stop (free memory)"): when it applies to every monitor a wallpaper shows on, the wallpaper is unloaded (video memory, web page, sound) and comes back when one of those monitors would play again. The Gaming preset now stops behind fullscreen apps instead of pausing. `diorama policy --on-fullscreen stop` sets it from the command line; `diorama status` shows stopped monitors.
 - Web wallpapers now follow the frame rate cap (Settings → When to pause), like scenes. They used to draw at the monitor's refresh rate: a 180 Hz display ran pages six times as often as the default 30 fps.
 
 ## 0.1.1 (2026-10-29)

@@ -139,6 +139,9 @@ fn project_type(path: &std::path::Path) -> Option<String> {
 pub enum Action {
     Keep,
     Pause,
+    /// Pause and free the wallpaper's video memory (and web page) until one
+    /// of its monitors would play again. Wins over `pause` when both apply.
+    Stop,
 }
 
 /// When wallpapers pause, and how fast scenes run (P5, P17).
@@ -184,10 +187,11 @@ impl Policy {
                 ..Self::BALANCED
             },
         ),
-        // Leaves the GPU to games, also on battery.
+        // Leaves the GPU to games: stops behind fullscreen apps, pauses on battery.
         (
             "gaming",
             Self {
+                fullscreen: Action::Stop,
                 battery: Action::Pause,
                 fps: 24,
                 ..Self::BALANCED
@@ -362,6 +366,9 @@ pub struct OutputStatus {
     pub refresh_hz: f64,
     pub primary: bool,
     pub paused: bool,
+    /// Paused with its wallpaper unloaded ([`Action::Stop`]).
+    #[serde(default)]
+    pub stopped: bool,
     /// `visible`, `maximized` or `fullscreen`.
     pub coverage: String,
     /// What this monitor shows.

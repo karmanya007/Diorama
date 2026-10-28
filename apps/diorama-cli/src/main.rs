@@ -159,6 +159,8 @@ enum PlaylistAction {
 enum ActionArg {
     Keep,
     Pause,
+    /// Pause and free the wallpaper's video memory until it shows again.
+    Stop,
 }
 
 impl From<ActionArg> for Action {
@@ -166,6 +168,7 @@ impl From<ActionArg> for Action {
         match a {
             ActionArg::Keep => Action::Keep,
             ActionArg::Pause => Action::Pause,
+            ActionArg::Stop => Action::Stop,
         }
     }
 }
@@ -244,7 +247,11 @@ fn minutes(time: &str) -> Result<u32> {
 }
 
 fn print_policy(p: &Policy) {
-    let word = |a: Action| if a == Action::Pause { "pause" } else { "keep" };
+    let word = |a: Action| match a {
+        Action::Keep => "keep",
+        Action::Pause => "pause",
+        Action::Stop => "stop (free memory)",
+    };
     println!("policy   {}", p.preset_name().unwrap_or("custom"));
     println!("  fullscreen app  {}", word(p.fullscreen));
     println!("  maximized       {}", word(p.maximized));
@@ -553,7 +560,13 @@ fn run(cli: Cli) -> Result<()> {
                     o.x,
                     o.y,
                     o.refresh_hz,
-                    if o.paused { "paused" } else { "playing" },
+                    if o.stopped {
+                        "stopped"
+                    } else if o.paused {
+                        "paused"
+                    } else {
+                        "playing"
+                    },
                     o.coverage,
                     o.name
                 );

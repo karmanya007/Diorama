@@ -39,7 +39,7 @@ use diorama_media::AudioPlayer;
 use diorama_platform::{Coverage, DesktopEvent, Platform, TrayCommand, TrayState};
 
 use crate::clock::{SceneClock, VideoClock};
-use crate::policy::{Conditions, update_pauses};
+use crate::policy::{Conditions, decide, update_pauses};
 use crate::session::{Content, Look, Session, Wallpaper};
 use diorama_ipc::{Action, Playlist, Policy, Schedule};
 
@@ -138,6 +138,8 @@ struct Args {
 enum ActionArg {
     Keep,
     Pause,
+    /// Pause and free the wallpaper's video memory until it shows again.
+    Stop,
 }
 
 impl From<ActionArg> for Action {
@@ -145,6 +147,7 @@ impl From<ActionArg> for Action {
         match a {
             ActionArg::Keep => Action::Keep,
             ActionArg::Pause => Action::Pause,
+            ActionArg::Stop => Action::Stop,
         }
     }
 }
@@ -620,6 +623,9 @@ struct Slot {
     /// Its session has drawn and its windows are on top (until then a
     /// replaced wallpaper stays visible above it).
     shown: bool,
+    /// Unloaded by a stop rule (`Action::Stop`) on every monitor it showed
+    /// on, with what covered them; rebuilt when one of them would play.
+    stopped: Option<Vec<(diorama_platform::OutputInfo, Coverage)>>,
 }
 
 /// How long a replaced wallpaper may stay up while the new one gets ready.
@@ -681,6 +687,8 @@ enum Flow {
     Rebuild,
     /// A frame failed: recreate the GPU device.
     ResetGpu,
+    /// Every monitor it shows on stops: unload it.
+    Stop,
 }
 
 impl Slot {
@@ -701,6 +709,7 @@ impl Slot {
             failures: 0,
             error: None,
             shown: false,
+            stopped: None,
         }
     }
 
@@ -769,6 +778,29 @@ impl Slot {
         }
     }
 
+    /// Unloads it (a stop rule covers all its monitors): its windows, GPU
+    /// resources, web page and soundtrack go until `Daemon::wake_stopped`.
+    fn stop(&mut self) {
+        let Some(session) = self.session.take() else {
+            return;
+        };
+        tracing::info!(
+            path = %self.wallpaper.path.display(),
+            "stopped; its memory is free until it shows again"
+        );
+        self.stopped = Some(
+            session
+                .outputs
+                .iter()
+                .map(|o| (o.info.clone(), o.coverage))
+                .collect(),
+        );
+        self.shown_on.clear();
+        self.shown = false;
+        self.audio = None;
+        self.audio_loop = None;
+    }
+
     /// Scene sounds play only on the primary monitor's wallpaper.
     fn set_sound_volume(&mut self, volume: u8) {
         let master = if self.primary {
@@ -796,7 +828,11 @@ impl Slot {
         };
         let span = self.wallpaper.look.layout == Layout::Span;
         if coverage {
-            let resumed = update_pauses(platform, session, policy, conditions);
+            let update = update_pauses(platform, session, policy, conditions);
+            if update.stop {
+                return Ok(Flow::Stop);
+            }
+            let resumed = update.resumed;
             let all_paused = session.outputs.iter().all(|o| o.paused);
             match &self.wallpaper.content {
                 Content::Video(_) => {
@@ -1066,6 +1102,9 @@ impl Daemon<'_> {
             return Ok(());
         }
 
+        if Instant::now() >= self.next_coverage {
+            self.wake_stopped();
+        }
         let Some(gpu) = self.gpu.as_ref() else {
             return Ok(());
         };
@@ -1094,6 +1133,7 @@ impl Daemon<'_> {
                     self.reset_gpu = true;
                     return Ok(());
                 }
+                Flow::Stop => slot.stop(),
             }
         }
 
@@ -1461,6 +1501,37 @@ impl Daemon<'_> {
 
     /// Recreates windows and surfaces: for every wallpaper (`all`), or only
     /// those whose monitors changed. Failures are retried next tick.
+    /// Stopped wallpapers come back once one of their monitors would play.
+    fn wake_stopped(&mut self) {
+        if self.slots.iter().all(|s| s.stopped.is_none()) {
+            return;
+        }
+        let Ok(infos) = self.platform.outputs() else {
+            return;
+        };
+        let claims: Vec<Vec<String>> = self.slots.iter().map(|s| s.claim.clone()).collect();
+        let groups = slots::assign(&claims, &infos);
+        let (platform, policy, conditions) = (self.platform, self.policy, self.conditions);
+        for (slot, group) in self.slots.iter_mut().zip(groups) {
+            if slot.stopped.is_none() {
+                continue;
+            }
+            let coverage = platform.coverage(&group);
+            let stays = !group.is_empty()
+                && coverage
+                    .iter()
+                    .all(|&c| decide(policy, c, conditions) == policy::State::Stop);
+            if stays {
+                slot.stopped = Some(group.into_iter().zip(coverage).collect());
+                continue;
+            }
+            tracing::info!(path = %slot.wallpaper.path.display(), "showing again after a stop");
+            slot.stopped = None;
+            slot.start_audio(self.volume);
+            self.needs_rebuild = true;
+        }
+    }
+
     fn rebuild(&mut self, all: bool) {
         self.needs_rebuild = false;
         if all {
@@ -1490,6 +1561,10 @@ impl Daemon<'_> {
         for ((slot, group), network) in self.slots.iter_mut().zip(groups).zip(networks) {
             if all {
                 slot.failures = 0;
+            }
+            // Stopped wallpapers wait for `wake_stopped`.
+            if slot.stopped.is_some() {
+                continue;
             }
             let ids: Vec<String> = group.iter().map(|o| o.id.0.clone()).collect();
             let was_primary = slot.primary;
@@ -1840,6 +1915,13 @@ impl Daemon<'_> {
         let mut outputs: Vec<OutputStatus> = Vec::new();
         for slot in &self.slots {
             let Some(session) = &slot.session else {
+                for (info, coverage) in slot.stopped.iter().flatten() {
+                    let content = slot.content_status(self.web_may_use_network(slot));
+                    let mut status = output_status(info.clone(), true, *coverage, Some(content));
+                    status.stopped = true;
+                    status.playlist = slot.run.as_ref().map(|r| r.name.clone());
+                    outputs.push(status);
+                }
                 continue;
             };
             for o in &session.outputs {
@@ -1892,6 +1974,7 @@ fn output_status(
         refresh_hz: f64::from(info.refresh_mhz) / 1000.0,
         primary: info.primary,
         paused,
+        stopped: false,
         coverage: format!("{coverage:?}").to_lowercase(),
         content,
         playlist: None,
