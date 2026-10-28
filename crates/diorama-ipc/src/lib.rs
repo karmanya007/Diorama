@@ -152,7 +152,7 @@ pub struct Policy {
     pub battery: Action,
     /// The session is locked.
     pub locked: Action,
-    /// Frame rate cap for scenes.
+    /// Frame rate cap for scenes and web pages.
     pub fps: u32,
 }
 
@@ -332,7 +332,7 @@ pub enum Request {
 
 /// What showing a wallpaper costs (P12): Diorama's load (daemon, web hosts and
 /// their browser processes) averaged while it played alone, on `pixels`
-/// pixels of monitors at a scene frame rate cap of `fps`.
+/// pixels of monitors at a frame rate cap of `fps` (scenes and web pages; 0 otherwise).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Cost {
     pub path: PathBuf,

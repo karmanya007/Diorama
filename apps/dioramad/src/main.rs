@@ -64,7 +64,7 @@ struct Args {
     /// Render one frame of `--scene` offscreen to this PNG and exit.
     #[arg(long, requires = "scene")]
     frame_out: Option<PathBuf>,
-    /// Frame rate cap for scenes (default: the saved policy's, else 30).
+    /// Frame rate cap for scenes and web pages (default: the saved policy's, else 30).
     #[arg(long, value_parser = clap::value_parser!(u32).range(1..=240))]
     fps: Option<u32>,
     /// Scene time in seconds for `--frame-out`.
@@ -1513,7 +1513,16 @@ impl Daemon<'_> {
                 continue;
             }
             let below = !self.retiring.is_empty();
-            match Session::build(self.platform, gpu, &slot.wallpaper, group, network, below) {
+            let built = Session::build(
+                self.platform,
+                gpu,
+                &slot.wallpaper,
+                group,
+                network,
+                self.fps,
+                below,
+            );
+            match built {
                 Ok(mut session) => {
                     // Images are drawn while building; the rest after their first frame.
                     slot.shown = !below || slot.wallpaper.kind == MediaKind::Image;
@@ -1637,8 +1646,8 @@ impl Daemon<'_> {
                     showing = Some(costs::Showing {
                         path: slot.wallpaper.path.clone(),
                         pixels,
-                        // Only scenes run at the policy's frame rate.
-                        fps: if slot.wallpaper.kind == MediaKind::Scene {
+                        // Scenes and web pages run at the policy's frame rate.
+                        fps: if matches!(slot.wallpaper.kind, MediaKind::Scene | MediaKind::Web) {
                             self.fps
                         } else {
                             0
@@ -1806,6 +1815,9 @@ impl Daemon<'_> {
                 self.fps = self.policy.fps;
                 for slot in &mut self.slots {
                     slot.scene_clock.set_fps(self.fps);
+                    if let Some(web) = slot.session.as_mut().and_then(Session::web) {
+                        web.set_fps(self.fps);
+                    }
                 }
                 self.next_coverage = Instant::now();
                 self.persist();

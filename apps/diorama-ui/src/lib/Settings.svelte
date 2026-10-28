@@ -115,7 +115,7 @@
           </label>
         {/each}
         <label class="row">
-          <span class="grow">Scene frame rate cap</span>
+          <span class="grow">Frame rate cap (scenes and web pages)</span>
           <input type="range" min="10" max="144" step="1" value={policy.fps} onchange={(e) => apply({ ...policy, fps: Number(e.currentTarget.value) })} />
           <span class="value">{policy.fps} fps</span>
         </label>

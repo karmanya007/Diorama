@@ -4,7 +4,7 @@
 //
 //   __diorama.properties(object)   user properties (`{name: {type, value}}`)
 //   __diorama.directories(object)  directory properties (`{name: {mode, files}}`)
-//   __diorama.general(object)      general properties (`{fps}`)
+//   __diorama.general(object)      general properties (`{fps}`; also caps animation frames)
 //   __diorama.paused(bool)         pause / resume the page
 //   __diorama.audio(array)         128 levels: 64 left then 64 right, linear (WE: mostly < 0.1)
 //   __diorama.media(kind, object)  status | properties | thumbnail | playback | timeline
@@ -204,22 +204,44 @@
 		if (document.documentElement) { document.querySelectorAll(fileAttrs).forEach(fixElement); }
 	}
 
+	// Animation frames run at most `fps` times a second (Diorama's frame rate
+	// cap, from the general properties; the display may refresh far faster).
 	// Pausing: animation frames wait, CSS animations, media and audio
 	// contexts stop; the page hears setPaused.
 	const nativeRaf = window.requestAnimationFrame.bind(window);
-	const nativeCancel = window.cancelAnimationFrame.bind(window);
 	let queued = new Map();
-	let nextId = 1e9;
+	let nextId = 1;
+	let pumping = false;
+	let lastFrame = -Infinity;
+	function pump(now) {
+		pumping = false;
+		if (state.paused || queued.size === 0) { return; }
+		const fps = state.general && Number(state.general.fps);
+		if (fps > 0) {
+			const interval = 1000 / fps;
+			const since = now - lastFrame;
+			// 1 ms early still counts: vsync timestamps jitter.
+			if (since < interval - 1) { schedule(); return; }
+			// Frames are due every interval; one that comes late shortens the
+			// next wait (more than a frame behind: start again from now).
+			lastFrame = since < 2 * interval ? lastFrame + interval : now;
+		}
+		const due = queued;
+		queued = new Map();
+		for (const cb of due.values()) {
+			try { cb(now); } catch (e) { reportError(e); }
+		}
+	}
+	function schedule() {
+		if (!pumping && !state.paused && queued.size) { pumping = true; nativeRaf(pump); }
+	}
 	window.requestAnimationFrame = function (cb) {
-		if (!state.paused) { return nativeRaf(cb); }
 		const id = nextId++;
 		queued.set(id, cb);
+		schedule();
 		return id;
 	};
-	window.cancelAnimationFrame = function (id) {
-		if (queued.delete(id)) { return; }
-		nativeCancel(id);
-	};
+	window.cancelAnimationFrame = function (id) { queued.delete(id); };
 	const contexts = [];
 	for (const name of ['AudioContext', 'webkitAudioContext']) {
 		const Native = window[name];
@@ -245,16 +267,14 @@
 			pausedMedia.forEach((m) => { m.play().catch(() => {}); });
 			pausedMedia = [];
 			contexts.forEach((c) => { if (c.state === 'suspended') { c.resume(); } });
-			const waiting = queued;
-			queued = new Map();
-			for (const cb of waiting.values()) { nativeRaf(cb); }
+			schedule();
 		}
 	}
 	L.paused = (p) => {
 		p = !!p;
 		if (p === state.paused) { return; }
 		state.paused = p;
-		if (state.loaded) { pause(p); }
+		if (state.loaded) { pause(p); } else if (!p) { schedule(); }
 		call('setPaused', p);
 	};
 

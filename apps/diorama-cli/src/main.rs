@@ -94,7 +94,7 @@ enum Command {
         on_battery: Option<ActionArg>,
         #[arg(long, value_enum)]
         on_lock: Option<ActionArg>,
-        /// Frame rate cap for scenes.
+        /// Frame rate cap for scenes and web pages.
         #[arg(long, value_parser = clap::value_parser!(u32).range(1..=240))]
         fps: Option<u32>,
     },
@@ -250,7 +250,7 @@ fn print_policy(p: &Policy) {
     println!("  maximized       {}", word(p.maximized));
     println!("  on battery      {}", word(p.battery));
     println!("  locked          {}", word(p.locked));
-    println!("  scene fps       {}", p.fps);
+    println!("  frame rate cap  {} fps", p.fps);
 }
 
 fn library(folders: Vec<PathBuf>, json: bool) -> Result<()> {

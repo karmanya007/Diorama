@@ -336,13 +336,14 @@ pub fn rect_of(o: &OutputInfo) -> Rect {
 impl Session {
     /// Shows `wallpaper` on the monitors `infos`. `below`: its windows go
     /// under a wallpaper being replaced until [`Self::raise`] (web: until the
-    /// page has painted).
+    /// page has painted). `fps` caps web pages' animation frames.
     pub fn build(
         platform: &Platform,
         gpu: &Gpu,
         wallpaper: &Wallpaper,
         infos: Vec<OutputInfo>,
         web_network: bool,
+        fps: u32,
         below: bool,
     ) -> Result<Self> {
         let look = wallpaper.look;
@@ -355,6 +356,7 @@ impl Session {
                 web_network,
                 look.layout == Layout::Span,
                 &ids,
+                fps,
                 below,
                 platform.waker(),
             )?;

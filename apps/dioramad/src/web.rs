@@ -170,14 +170,15 @@ pub struct WebHost {
 }
 
 impl WebHost {
-    /// A host showing `source` on the monitors `outputs` (output ids).
-    /// `below`: its windows stay under the wallpaper being replaced until the
-    /// page has painted; `waker` is woken then.
+    /// A host showing `source` on the monitors `outputs` (output ids), its
+    /// animation frames capped at `fps`. `below`: its windows stay under the
+    /// wallpaper being replaced until the page has painted; `waker` is woken then.
     pub fn spawn(
         source: &WebSource,
         allow_network: bool,
         span: bool,
         outputs: &[String],
+        fps: u32,
         below: bool,
         waker: diorama_platform::Waker,
     ) -> Result<Self> {
@@ -245,9 +246,11 @@ impl WebHost {
         };
         // The first line is the user's choices (read before the page loads).
         host.send(&json!({ "properties": source.choices() }));
+        let mut general = json!({ "fps": fps });
         if let Some(language) = source.language() {
-            host.send(&json!({ "general": { "language": language } }));
+            general["language"] = json!(language);
         }
+        host.send(&json!({ "general": general }));
         tracing::info!(
             page = %source.dir.join(&source.file).display(),
             network = allow_network,
@@ -317,6 +320,11 @@ impl WebHost {
     /// New property values for the page (`applyUserProperties`).
     pub fn set_properties(&mut self, choices: Map<String, Value>) {
         self.send(&json!({ "properties": choices }));
+    }
+
+    /// A new frame rate cap (the page hears it in `applyGeneralProperties`).
+    pub fn set_fps(&mut self, fps: u32) {
+        self.send(&json!({ "general": { "fps": fps } }));
     }
 
     /// `(output id, paused)` for every output: pages on covered monitors
