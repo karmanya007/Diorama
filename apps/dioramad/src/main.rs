@@ -626,7 +626,13 @@ struct Slot {
     /// Unloaded by a stop rule (`Action::Stop`) on every monitor it showed
     /// on, with what covered them; rebuilt when one of them would play.
     stopped: Option<Vec<(diorama_platform::OutputInfo, Coverage)>>,
+    /// Since when a stopped wallpaper's monitors would play (see [`WAKE_AFTER`]).
+    wake_since: Option<Instant>,
 }
+
+/// How long a stopped wallpaper's monitors must want it before it loads
+/// again: switching windows for a moment should not reload a whole scene.
+const WAKE_AFTER: Duration = Duration::from_secs(1);
 
 /// How long a replaced wallpaper may stay up while the new one gets ready.
 const RETIRE_AFTER: Duration = Duration::from_secs(6);
@@ -710,6 +716,7 @@ impl Slot {
             error: None,
             shown: false,
             stopped: None,
+            wake_since: None,
         }
     }
 
@@ -1523,9 +1530,14 @@ impl Daemon<'_> {
                     .all(|&c| decide(policy, c, conditions) == policy::State::Stop);
             if stays {
                 slot.stopped = Some(group.into_iter().zip(coverage).collect());
+                slot.wake_since = None;
+                continue;
+            }
+            if slot.wake_since.get_or_insert_with(Instant::now).elapsed() < WAKE_AFTER {
                 continue;
             }
             tracing::info!(path = %slot.wallpaper.path.display(), "showing again after a stop");
+            slot.wake_since = None;
             slot.stopped = None;
             slot.start_audio(self.volume);
             self.needs_rebuild = true;
