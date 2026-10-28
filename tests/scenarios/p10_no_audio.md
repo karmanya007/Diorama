@@ -6,7 +6,7 @@
 
 ## Steps
 1. Disable all playback devices.
-2. `lumend --video <mp4> --volume 50`.
+2. `dioramad --video <mp4> --volume 50`.
 
 ## Pass when
 Video plays; log says audio unavailable.

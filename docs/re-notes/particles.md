@@ -13,7 +13,7 @@ WE's `genericparticle` / `common_particles.h` shaders, and RenderDoc captures
   sprite-sheet phase.
 - The shaders also have a geometry-shader-free path (CPU writes the quad
   corners: `a_TexCoordVec4 = (u, v, rotation.z, size)`, `a_TexCoordC2 =
-  rotation.xy`, `a_Color`, `a_TexCoordVec4C1 = (velocity, phase)`); Lumen uses
+  rotation.xy`, `a_Color`, `a_TexCoordVec4C1 = (velocity, phase)`); Diorama uses
   it with six vertices per particle (two triangles).
 - Quad = `position ± size · right · (u − ½) ∓ size · up · (v − ½) · ratio`;
   orientation uniforms are the screen axes in a 2D scene.
@@ -34,7 +34,7 @@ WE's `genericparticle` / `common_particles.h` shaders, and RenderDoc captures
 - **`flags & 4` = perspective**: positions keep z and are drawn through a
   perspective projection whose z = 0 plane equals the 2D view; the eye sits
   0.9163 × half the scene height away (P11 = 0.9163 in every captured case).
-  Lumen applies this on the CPU (position and size scale by D / (D − z)).
+  Diorama applies this on the CPU (position and size scale by D / (D − z)).
 - Instance overrides (`instanceoverride` on the scene object): `rate` has
   **no effect** on emission (live counts match the plain emitter rate in
   three captures: ash 10/s × 0.5 → 85 alive over 7–10 s lifetimes, raindrops
@@ -66,7 +66,7 @@ WE's `genericparticle` / `common_particles.h` shaders, and RenderDoc captures
   with it. Their `instantaneous: 1` burst fires once per parent (22 stars →
   22 glows), and each instance holds at most the child's own `maxcount`.
 - All 35 captured shooting-star trails run at exactly 45°: the stars are at
-  terminal velocity `gravity / drag`, which Lumen's per-second drag does not
+  terminal velocity `gravity / drag`, which Diorama's per-second drag does not
   reach within their lifetime — WE's drag is stronger (not calibrated yet).
 
 ## Perspective (3D) scenes
@@ -74,10 +74,10 @@ In scenes with a perspective camera (3509243656) particles are drawn through
 the real camera (`g_ModelViewProjectionMatrix` = system world × view ×
 projection) and billboarded along `g_OrientationRight/Up/Forward` = the
 camera's right, up and backward axes in the system's local space (captured:
-right = (0.883, 0, 0.470) for a system turned 28° about y). Lumen sets these
+right = (0.883, 0, 0.470) for a system turned 28° about y). Diorama sets these
 every frame and skips its 2D perspective emulation there.
 
-## Defaults Lumen assumes where keys are absent
+## Defaults Diorama assumes where keys are absent
 Taken from the editor's defaults where known, otherwise chosen to match the
 captures: lifetime 1, size 20, colour white, alpha 1, alphafade 0.5 / 0.5,
 sizechange 1 → 0, oscillators frequency 0–10, sphere distance 0–256 and
@@ -102,7 +102,7 @@ and `colorn²`, both × `brightness`):
   around `colorn`.
 
 None of scene version, HDR, blending, material, `alpha` override or system
-flags separates the groups. Lumen applies `colorn` once until a rule fits
+flags separates the groups. Diorama applies `colorn` once until a rule fits
 all of them.
 
 ## Not reproduced yet

@@ -1,6 +1,6 @@
 # `.pkg` — Wallpaper Engine scene archive
 
-Status: **verified** against corpus item 1132505365 (38 entries, PKGV0001). Reader: `crates/lumen-we/src/pkg.rs`.
+Status: **verified** against corpus item 1132505365 (38 entries, PKGV0001). Reader: `crates/diorama-we/src/pkg.rs`.
 
 Flat archive, no compression. All integers little-endian `u32`. Strings are `u32` byte length + UTF-8 bytes, not NUL-terminated.
 
@@ -22,7 +22,7 @@ Entry order is not alphabetical and not grouped.
 
 ## Reader hardening
 - Version must be 8 bytes starting `PKGV`.
-- Entry count, string lengths capped by `lumen_core::Limits`.
+- Entry count, string lengths capped by `diorama_core::Limits`.
 - Every entry range checked against data-section length (checked arithmetic).
 - Paths rejected if empty, absolute, containing `\`, `:`, NUL, empty / `.` / `..` components.
 - Duplicate paths rejected.

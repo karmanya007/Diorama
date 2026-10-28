@@ -5,8 +5,8 @@
 - **Automated:** no
 
 ## Steps
-1. `lumend --image <png> --duration 60`
-2. After 10 s, read `\GPU Engine(pid_<lumend>*engtype_3D)\Utilization Percentage` (PowerShell `Get-Counter`).
+1. `dioramad --image <png> --duration 60`
+2. After 10 s, read `\GPU Engine(pid_<dioramad>*engtype_3D)\Utilization Percentage` (PowerShell `Get-Counter`).
 
 ## Pass when
 Image: GPU ≈ 0%. Scene at default 30 fps: low single-digit % on the dev machine.

@@ -1,8 +1,8 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use lumen_core::Limits;
-use lumen_we::{Tex, mip_to_rgba8};
+use diorama_core::Limits;
+use diorama_we::{Tex, mip_to_rgba8};
 
 fuzz_target!(|data: &[u8]| {
     let limits = Limits {

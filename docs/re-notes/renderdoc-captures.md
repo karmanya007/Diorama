@@ -22,7 +22,7 @@ present
 ```
 - **One swapchain spans the whole virtual desktop** (3000×1920 here), not one per monitor.
 - Every layer renders into its **own RT sized to the layer** (`3840×2160`, `287×90` text, `3840×1131` strips…).
-- **All render targets are `R8G8B8A8_UNORM`** — no sRGB, no HDR formats, even with bloom. Blending and effect math happen in gamma space; Lumen must use UNORM (non-sRGB) targets and textures to match.
+- **All render targets are `R8G8B8A8_UNORM`** — no sRGB, no HDR formats, even with bloom. Blending and effect math happen in gamma space; Diorama must use UNORM (non-sRGB) targets and textures to match.
 - Bloom (when enabled): scene goes to a full-size RT (`3000×1920`), then ¼ (`750×480`) and ⅛ (`375×240`) downsample/blur chain, combined back.
 
 ## Matrix and projection conventions
@@ -43,15 +43,15 @@ Uninitialised cbuffer members are common (e.g. `g_ViewProjectionMatrix` in the c
 ## Uniform buffers
 Engine cbuffers are named `g_bufDynamic` (per-draw: matrices, `g_Time`, texture rotation/translation, eye position) and `g_bufStatic` (material constants). Observed engine-fed uniforms: `g_ModelViewProjectionMatrix`, `g_ViewProjectionMatrix`, `g_ModelMatrix`, `g_EyePosition`, `g_Time`, `g_Texture0Rotation`, `g_Texture0Translation`, `g_Color4`, `g_Alpha`, `g_Brightness`, `g_UserAlpha`, `g_Bloom{Strength,Threshold,Tint}`, `g_AudioSpectrum{16,32}{Left,Right}`, `g_ParallaxPosition`.
 
-## Implications for Lumen
+## Implications for Diorama
 1. Renderer targets and textures: `Rgba8Unorm` / `Bgra8Unorm`, never `*Srgb`, for WE content.
 2. Upload matrices so `mul(v, M)` reproduces the values above; golden tests can feed captured matrices directly.
 3. Per-layer RTs sized to the layer + effect ping-pong is the core render graph shape (Phase 2).
-4. Span layout = one camera over the bounding box of all outputs, cover-fit. Lumen renders per output (P6/P7) but can reproduce span by giving each output a viewport into the same projection.
-5. Particles use geometry shaders in WE; Lumen uses the shaders' non-GS path (instanced quads), so particle golden comparisons must allow for that.
+4. Span layout = one camera over the bounding box of all outputs, cover-fit. Diorama renders per output (P6/P7) but can reproduce span by giving each output a viewport into the same projection.
+5. Particles use geometry shaders in WE; Diorama uses the shaders' non-GS path (instanced quads), so particle golden comparisons must allow for that.
 
 ## Verified by reimplementation (Phase 2)
-Lumen's renderer reproduces frame 289 (scene 1132505365: image layer + waterripple + shake + godrays) at SSIM 0.996 / PSNR 40.9 dB using exactly the structure above:
+Diorama's renderer reproduces frame 289 (scene 1132505365: image layer + waterripple + shake + godrays) at SSIM 0.996 / PSNR 40.9 dB using exactly the structure above:
 - albedo → target A (no blending), ripple A→B, shake B→A, godrays: downsample A→½ FBO1, cast →FBO2, blur x →FBO1, blur y →FBO2, combine (FBO2 + A) → B, composite B with the material's `translucent` blending;
 - effect quads: clip-space positions, MVP `diag(1, 1, 0.0005)` + row 3 `(0, 0, 0.5, 1)`;
 - `g_TextureNResolution` = `(allocated w, h, image w, h)` for textures, `(w, h, w, h)` for render targets.
@@ -60,6 +60,6 @@ Lumen's renderer reproduces frame 289 (scene 1132505365: image layer + waterripp
 From captures of the default projects Neon Sunset, Audiophile and Dino Run (D3D11 pipeline state read per draw with RenderDoc):
 - **Depth writes follow the blend, not the material.** Perspective scenes use reversed Z (`GREATER`, cleared to 0). Opaque model draws test and write depth; every blended draw (`translucent`, `additive`) tests but does not write, even when its material says `"depthwrite": "enabled"`. Neon Sunset's translucent sun quad would otherwise hide the mountains behind its transparent corners.
 - **`nointerpolation` layers stay on point samplers to the end.** Dino Run's image layers render into scene-unit targets (272×160, 544×160, 32×32) and every draw touching them — albedo, effect passes and the draw onto the 3000×1920 back buffer — uses point filtering; only the scene's post-processing after them is linear.
-- **The last effect pass draws straight into the scene.** Each Dino Run layer with one effect is two draws: albedo into its target, then the effect pass (e.g. `scroll` with `repeat 14 1`) with the layer's placement and blend onto the back buffer — there is no separate composite copy, so a pass that tiles a 32×32 target keeps full detail. Lumen does this for pixel-art layers; other layers keep the composite copy (same image when the effect does not tile).
+- **The last effect pass draws straight into the scene.** Each Dino Run layer with one effect is two draws: albedo into its target, then the effect pass (e.g. `scroll` with `repeat 14 1`) with the layer's placement and blend onto the back buffer — there is no separate composite copy, so a pass that tiles a 32×32 target keeps full detail. Diorama does this for pixel-art layers; other layers keep the composite copy (same image when the effect does not tile).
 - **Sprite-sheet layers are one frame big.** A layer sized by its texture (`autosize` models such as Dino Run's coin, 16×16 frames on a 256×64 sheet) takes the first `TEXS` frame's size, not the sheet's.
 - Neon Sunset's terrain is an fbm of `frac(sin(x)·43758.5)` hashes in the vertex shader; FXC's and DXC's `sin` differ in the last bits, so the peaks land elsewhere (same mean height). Not reproducible short of emulating the driver's `sin`.

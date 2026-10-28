@@ -1,6 +1,6 @@
 # `.tex` — Wallpaper Engine texture
 
-Status: **verified** — 1033/1033 textures parse (WE `assets/` + every `.tex` inside 55 corpus `scene.pkg`), 1025 decode to RGBA, 8 detected as MP4. Reader: `crates/lumen-we/src/tex.rs`, decoder: `tex_decode.rs`.
+Status: **verified** — 1033/1033 textures parse (WE `assets/` + every `.tex` inside 55 corpus `scene.pkg`), 1025 decode to RGBA, 8 detected as MP4. Reader: `crates/diorama-we/src/tex.rs`, decoder: `tex_decode.rs`.
 
 Integers are little-endian. Tags are ASCII, NUL-terminated (`"TEXV0005\0"` = 9 bytes).
 

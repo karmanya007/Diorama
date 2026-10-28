@@ -1,10 +1,10 @@
 # Downloads the pinned DirectX Shader Compiler release into .tools/dxc
-# (gitignored) and verifies its SHA-256. Lumen finds it through LUMEN_DXC:
-#   $env:LUMEN_DXC = "$PWD\.tools\dxc\dxc.exe"
+# (gitignored) and verifies its SHA-256. Diorama finds it through DIORAMA_DXC:
+#   $env:DIORAMA_DXC = "$PWD\.tools\dxc\dxc.exe"
 # Used by developers, by CI (shader runtime and scene golden tests) and by
 # scripts/bundle.ps1, which ships dxc.exe + dxcompiler.dll (open source, LLVM
 # and MIT licences, kept beside them) in the installer. dxil.dll is not
-# needed: Lumen compiles to SPIR-V.
+# needed: Diorama compiles to SPIR-V.
 $ErrorActionPreference = 'Stop'
 
 $Tag = 'v1.9.2607'
@@ -18,7 +18,7 @@ if ((Test-Path (Join-Path $Dest 'dxc.exe')) -and (Test-Path (Join-Path $Dest 'LI
     exit 0
 }
 
-$Tmp = Join-Path ([IO.Path]::GetTempPath()) "lumen-dxc-$PID"
+$Tmp = Join-Path ([IO.Path]::GetTempPath()) "diorama-dxc-$PID"
 New-Item -ItemType Directory -Force $Tmp | Out-Null
 try {
     $Zip = Join-Path $Tmp $Asset

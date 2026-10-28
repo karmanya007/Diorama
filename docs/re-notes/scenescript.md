@@ -51,13 +51,13 @@ Any bindable value in `scene.json` can be an object instead of a literal:
 - Many scripts are larger than 4 KiB (the old string limit); scripts now have their own 1 MiB cap.
 - Clocks and dates follow the wall clock (`new Date()`); for golden tests the capture time is the `.rdc` file's modification time.
 
-## Lumen implementation
-- `lumen-script`: QuickJS via `rquickjs`; WE's `baseclasses.js` and `WEMath`/`WEVector`/`WEColor` modules loaded from the user's install (never vendored); Lumen's own `prelude.js` provides `thisScene`, layer objects (origin/scale/angles/visible/alpha/color/text/size, parent/children, effects), `engine` (runtime, frametime, timeOfDay, userProperties, canvasSize, timers, silent audio buffers), `input` (cursor), `console`, in-memory `localStorage`, `shared`, and a host-driven `Date`.
+## Diorama implementation
+- `diorama-script`: QuickJS via `rquickjs`; WE's `baseclasses.js` and `WEMath`/`WEVector`/`WEColor` modules loaded from the user's install (never vendored); Diorama's own `prelude.js` provides `thisScene`, layer objects (origin/scale/angles/visible/alpha/color/text/size, parent/children, effects), `engine` (runtime, frametime, timeOfDay, userProperties, canvasSize, timers, silent audio buffers), `input` (cursor), `console`, in-memory `localStorage`, `shared`, and a host-driven `Date`.
 - Each script is an ES module prefixed with `const thisLayer = …` on its first line (line numbers in errors stay right). `init`, then `applyUserProperties(engine.userProperties)`; every frame `update(currentValue)`.
 - Limits: 128 MiB heap; 2 s budget to load, 20 ms per `update()` call. QuickJS interrupts are uncatchable, so the host calls each `update()` separately: a runaway script stops only itself. A script that throws three times is disabled.
-- A frame returns one JSON change set (nodes, layer alpha/colour/text, effect visibility, effect constants); `lumend` turns node changes into layer transforms (`node_world ∘ local`) and calls `SceneRenderer::update_layer`.
+- A frame returns one JSON change set (nodes, layer alpha/colour/text, effect visibility, effect constants); `dioramad` turns node changes into layer transforms (`node_world ∘ local`) and calls `SceneRenderer::update_layer`.
 - Keyframe animations (`{"animation": {"c0": [keys], …, "options": {fps, length, mode, startpaused, name}, "relative"}, "value"}`) run in the same host: keys `{frame, value, front: {x, y}, back: {x, y}}` are cubic bezier segments (handles as offsets in frames and value units), angle keys are radians, `relative` adds the original value; scripts reach them with `thisLayer.getAnimation(name?)`.
-- Media events come from the Windows media session (any player using the system media controls); the thumbnail palette is Lumen's own approximation (WE's algorithm unknown).
+- Media events come from the Windows media session (any player using the system media controls); the thumbnail palette is Diorama's own approximation (WE's algorithm unknown).
 - Not yet: audio spectrum (`cursorClick`, `media*`), audio spectrum data (silent), texture animations (stub), runtime-created layers are not drawn, `localStorage` is not persisted.
 
 ## Implementation notes for Phase 3

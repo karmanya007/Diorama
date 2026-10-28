@@ -1,6 +1,6 @@
-# Builds Lumen's Windows installer (NSIS) into
-# target/release/bundle/nsis/: lumen-ui with lumend, lumen-webhost, the
-# `lumen` CLI and DXC beside it.
+# Builds Diorama's Windows installer (NSIS) into
+# target/release/bundle/nsis/: diorama-ui with dioramad, diorama-webhost, the
+# `diorama` CLI and DXC beside it.
 #
 # With TAURI_SIGNING_PRIVATE_KEY (and _PASSWORD) set, it also writes the
 # signed update files (`.nsis.zip` + `.sig`) the in-app updater installs;
@@ -17,19 +17,19 @@ function Invoke-Native([string]$What, [scriptblock]$Command) {
 }
 
 $Root = Split-Path -Parent $PSScriptRoot
-$Ui = Join-Path $Root 'apps\lumen-ui'
+$Ui = Join-Path $Root 'apps\diorama-ui'
 $Bins = Join-Path $Ui 'src-tauri\binaries'
 
 & (Join-Path $PSScriptRoot 'fetch-dxc.ps1')
 
 Push-Location $Root
 try {
-    Invoke-Native 'cargo build' { cargo build --release --locked -p lumend -p lumen-webhost -p lumen-cli }
+    Invoke-Native 'cargo build' { cargo build --release --locked -p dioramad -p diorama-webhost -p diorama-cli }
 
     # Tauri's externalBin wants each program named for its target triple.
     $Triple = ((rustc -vV | Select-String '^host: ').Line -replace '^host: ', '').Trim()
     New-Item -ItemType Directory -Force $Bins | Out-Null
-    foreach ($Name in 'lumend', 'lumen-webhost', 'lumen') {
+    foreach ($Name in 'dioramad', 'diorama-webhost', 'diorama') {
         Copy-Item (Join-Path $Root "target\release\$Name.exe") (Join-Path $Bins "$Name-$Triple.exe")
     }
 
@@ -40,7 +40,7 @@ try {
     if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
         Write-Host 'TAURI_SIGNING_PRIVATE_KEY not set: building without update files'
         # A file: Windows PowerShell mangles JSON quotes passed to programs.
-        $NoUpdates = Join-Path ([IO.Path]::GetTempPath()) 'lumen-no-updater.json'
+        $NoUpdates = Join-Path ([IO.Path]::GetTempPath()) 'diorama-no-updater.json'
         Set-Content -Encoding ascii $NoUpdates '{"bundle":{"createUpdaterArtifacts":false}}'
         $Config += @('--config', $NoUpdates)
     }

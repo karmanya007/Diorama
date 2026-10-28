@@ -5,7 +5,7 @@
 - **Automated:** no
 
 ## Steps
-1. `lumend --scene <dir> --layout span`.
+1. `dioramad --scene <dir> --layout span`.
 2. Maximize a window on one monitor.
 
 ## Pass when

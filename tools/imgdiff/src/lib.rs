@@ -4,7 +4,7 @@
 use image::{RgbaImage, imageops};
 
 /// Scales `img` to cover `width × height` and crops the centre, like WE's
-/// scene presentation and Lumen's `FitMode::Fill`.
+/// scene presentation and Diorama's `FitMode::Fill`.
 pub fn cover(img: &RgbaImage, width: u32, height: u32) -> RgbaImage {
     let scale = f64::max(
         f64::from(width) / f64::from(img.width()),

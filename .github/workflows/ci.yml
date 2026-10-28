@@ -25,7 +25,7 @@ jobs:
       fail-fast: false
       matrix:
         # Windows is the primary target; Linux runs the same tests from day 1 so
-        # Windows-only assumptions cannot leak outside lumen-platform.
+        # Windows-only assumptions cannot leak outside diorama-platform.
         os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
@@ -38,8 +38,8 @@ jobs:
         shell: pwsh
         run: |
           ./scripts/fetch-dxc.ps1
-          "LUMEN_DXC=$PWD\.tools\dxc\dxc.exe" >> $env:GITHUB_ENV
-      # lumen-ui (Tauri) builds against WebKitGTK on Linux.
+          "DIORAMA_DXC=$PWD\.tools\dxc\dxc.exe" >> $env:GITHUB_ENV
+      # diorama-ui (Tauri) builds against WebKitGTK on Linux.
       - if: runner.os == 'Linux'
         run: |
           sudo apt-get update
@@ -56,7 +56,7 @@ jobs:
       - run: cargo build --workspace
 
   layers:
-    # Architecture rules (ADR-002): layer dependencies and OS code confined to lumen-platform.
+    # Architecture rules (ADR-002): layer dependencies and OS code confined to diorama-platform.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

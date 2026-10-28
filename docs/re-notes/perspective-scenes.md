@@ -18,7 +18,7 @@ particle draws (`particledraws.py`).
   f·n/(f−n)`, `w = −z_view` (near → 1, far → 0). Captured
   `g_ViewProjectionMatrix` rows: (1.372484, 0, 0, 0), (0, 2.144507, 0, 0),
   (0, 0, 1e-6, −1), (0, 0, 0.009994, 6) — reproduced exactly by
-  `lumen_scene::Camera` (unit test).
+  `diorama_scene::Camera` (unit test).
 
 ## Object transforms
 - Row-vector matrices: `world = S · Rx · Ry · Rz · T · parent` (column form
@@ -41,7 +41,7 @@ particle draws (`particledraws.py`).
 - A material texture `_rt_imageLayerComposite_<id>_a` of a layer that is not
   drawn (hidden) samples as empty: the red equator ring (`Hollow Cylinder`,
   translucent, red tint) is invisible in the capture.
-- WE renders into a 2× MSAA RGBA16F target; Lumen does not multisample yet.
+- WE renders into a 2× MSAA RGBA16F target; Diorama does not multisample yet.
 
 ## Scripts in this scene
 - The sky turns 3°/s of `engine.runtime` from scene start (+28° at 9.33 s):

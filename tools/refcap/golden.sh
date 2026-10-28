@@ -1,16 +1,16 @@
 #!/bin/bash
 # Renders every captured scene in <captures>/manifest.json at the capture's
-# g_Time (and recorded cursor) with `lumend --frame-out`, presented into a
+# g_Time (and recorded cursor) with `dioramad --frame-out`, presented into a
 # frame the size of WE's swapchain with the wallpaper's own WE fit (read from
 # <captures>/we-config.json, the WE config at capture time), and compares it
 # with WE's frame using imgdiff. Scripts see the capture's wall clock (the
 # .rdc file's modification time).
 # Captures and WE content stay local; nothing here is committed.
 # Usage: CAPTURES=scratch/captures tools/refcap/golden.sh
-#        (after `cargo build --release -p lumend -p imgdiff`)
+#        (after `cargo build --release -p dioramad -p imgdiff`)
 set -euo pipefail
 caps=${CAPTURES:-scratch/captures}
-export LUMEN_DXC=${LUMEN_DXC:-$PWD/.tools/dxc/dxc.exe}
+export DIORAMA_DXC=${DIORAMA_DXC:-$PWD/.tools/dxc/dxc.exe}
 config_args=()
 [ -f "$caps/we-config.json" ] && config_args=(--we-config "$caps/we-config.json")
 
@@ -36,9 +36,9 @@ for entry in json.load(open(caps / "manifest.json")):
     scene = pathlib.Path(entry["scene"]).parent
     print(rdc, scene, t, f"{(cx - ox) / sw},{(cy - oy) / sh}", f"{sw}x{sh}", sep="|")
 PY
-  out="$caps/$frame.lumen.png"
+  out="$caps/$frame.diorama.png"
   clock=$(python -c "import os,sys; print(int(os.path.getmtime(sys.argv[1]) * 1000))" "$caps/$frame.rdc")
-  ./target/release/lumend --scene "$scene" --frame-out "$out" --time "$time" --pointer "$pointer" \
+  ./target/release/dioramad --scene "$scene" --frame-out "$out" --time "$time" --pointer "$pointer" \
     --frame-size "$size" --clock "$clock" "${config_args[@]}" >/dev/null 2>&1
   echo -n "$frame $(basename "$scene"): "
   ./target/release/imgdiff "$caps/$frame.final.png" "$out" --side-by-side "$caps/$frame.sbs.png"

@@ -2,7 +2,7 @@
 
 - **Pain point:** Interacting toggles.
 - **Fix:** Per-output policy model now (`--on-*` flags); presets in Phase 6.
-- **Automated:** unit tests in `lumend::policy`
+- **Automated:** unit tests in `dioramad::policy`
 
 ## Steps
 —

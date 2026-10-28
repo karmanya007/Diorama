@@ -2,8 +2,8 @@
 
 Every web wallpaper in WE gets a few options of WE's own, stored next to its
 property choices (`<user>.wproperties[<page>].MonitorN` in `config.json`),
-plus a `language` general property. Lumen's implementation: the page script
-(`apps/lumen-webhost/src/shim.js`, `adjust`) and `crates/lumen-we/src/language.rs`.
+plus a `language` general property. Diorama's implementation: the page script
+(`apps/diorama-webhost/src/shim.js`, `adjust`) and `crates/diorama-we/src/language.rs`.
 
 ## Method (2026-10-26)
 
@@ -46,6 +46,6 @@ one of 36 codes from a table pairing codes with Steam language names
 codes outside the table become `en-us` (index 0). `steamlanguage` itself is
 removed before the page sees it.
 
-Lumen sends WE's code when WE's config is available and otherwise maps the
+Diorama sends WE's code when WE's config is available and otherwise maps the
 OS display language to the nearest code (`en-GB` → `en-us`, `zh-Hant-TW` →
 `zh-cht`, unknown → `en-us`).

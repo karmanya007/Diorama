@@ -5,7 +5,7 @@
 - **Automated:** no
 
 ## Steps
-1. `lumend --list-outputs`; note ids.
+1. `dioramad --list-outputs`; note ids.
 2. Reboot or reconnect a monitor; list again.
 3. Hotplug: run a scene on all monitors; Win+P → "PC screen only", wait 5 s, Win+P → "Extend" (or unplug/replug a cable).
 

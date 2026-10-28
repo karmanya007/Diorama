@@ -1,0 +1,12 @@
+[package]
+name = "diorama-core"
+description = "Foundation types shared by every Diorama crate: clock, limits, ids."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

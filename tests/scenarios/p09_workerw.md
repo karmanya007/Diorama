@@ -5,7 +5,7 @@
 - **Automated:** no
 
 ## Steps
-1. Hide desktop icons; start `lumend`.
+1. Hide desktop icons; start `dioramad`.
 2. Kill and restart `explorer.exe`.
 
 ## Pass when

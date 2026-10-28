@@ -1,22 +1,22 @@
 [workspace]
 resolver = "3"
 members = [
-    "apps/lumen-cli",
-    "apps/lumend",
-    "apps/lumen-webhost",
-    "apps/lumen-ui/src-tauri",
-    "crates/lumen-core",
-    "crates/lumen-gpu",
-    "crates/lumen-ipc",
-    "crates/lumen-library",
-    "crates/lumen-media",
-    "crates/lumen-particles",
-    "crates/lumen-platform",
-    "crates/lumen-render",
-    "crates/lumen-scene",
-    "crates/lumen-script",
-    "crates/lumen-text",
-    "crates/lumen-we",
+    "apps/diorama-cli",
+    "apps/dioramad",
+    "apps/diorama-webhost",
+    "apps/diorama-ui/src-tauri",
+    "crates/diorama-core",
+    "crates/diorama-gpu",
+    "crates/diorama-ipc",
+    "crates/diorama-library",
+    "crates/diorama-media",
+    "crates/diorama-particles",
+    "crates/diorama-platform",
+    "crates/diorama-render",
+    "crates/diorama-scene",
+    "crates/diorama-script",
+    "crates/diorama-text",
+    "crates/diorama-we",
     "tools/imgdiff",
     "tools/wpdump",
 ]
@@ -26,23 +26,23 @@ exclude = ["fuzz"]
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/karmanya007/Lumen"
+repository = "https://github.com/karmanya007/Diorama"
 publish = false
 
 [workspace.dependencies]
 # internal
-lumen-core = { path = "crates/lumen-core", version = "0.1.0" }
-lumen-we = { path = "crates/lumen-we", version = "0.1.0" }
-lumen-library = { path = "crates/lumen-library", version = "0.1.0" }
-lumen-gpu = { path = "crates/lumen-gpu", version = "0.1.0" }
-lumen-ipc = { path = "crates/lumen-ipc", version = "0.1.0" }
-lumen-media = { path = "crates/lumen-media", version = "0.1.0" }
-lumen-particles = { path = "crates/lumen-particles", version = "0.1.0" }
-lumen-platform = { path = "crates/lumen-platform", version = "0.1.0" }
-lumen-render = { path = "crates/lumen-render", version = "0.1.0" }
-lumen-scene = { path = "crates/lumen-scene", version = "0.1.0" }
-lumen-script = { path = "crates/lumen-script", version = "0.1.0" }
-lumen-text = { path = "crates/lumen-text", version = "0.1.0" }
+diorama-core = { path = "crates/diorama-core", version = "0.1.0" }
+diorama-we = { path = "crates/diorama-we", version = "0.1.0" }
+diorama-library = { path = "crates/diorama-library", version = "0.1.0" }
+diorama-gpu = { path = "crates/diorama-gpu", version = "0.1.0" }
+diorama-ipc = { path = "crates/diorama-ipc", version = "0.1.0" }
+diorama-media = { path = "crates/diorama-media", version = "0.1.0" }
+diorama-particles = { path = "crates/diorama-particles", version = "0.1.0" }
+diorama-platform = { path = "crates/diorama-platform", version = "0.1.0" }
+diorama-render = { path = "crates/diorama-render", version = "0.1.0" }
+diorama-scene = { path = "crates/diorama-scene", version = "0.1.0" }
+diorama-script = { path = "crates/diorama-script", version = "0.1.0" }
+diorama-text = { path = "crates/diorama-text", version = "0.1.0" }
 
 # external
 anyhow = "1"

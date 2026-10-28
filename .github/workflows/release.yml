@@ -6,7 +6,7 @@ name: Release
 # (no code-signing certificate): Windows SmartScreen warns on first run.
 #
 # Secrets: TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD
-# (the updater key; its public half is in apps/lumen-ui/src-tauri/tauri.conf.json).
+# (the updater key; its public half is in apps/diorama-ui/src-tauri/tauri.conf.json).
 
 on:
   push:
@@ -25,13 +25,13 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: apps/lumen-ui/package-lock.json
+          cache-dependency-path: apps/diorama-ui/package-lock.json
 
       - name: Check the tag matches the version
         shell: pwsh
         run: |
           $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages |
-            Where-Object name -eq 'lumen-ui' | Select-Object -ExpandProperty version
+            Where-Object name -eq 'diorama-ui' | Select-Object -ExpandProperty version
           if ("v$version" -ne $env:GITHUB_REF_NAME) {
             throw "tag $env:GITHUB_REF_NAME does not match version $version (Cargo.toml)"
           }
@@ -67,4 +67,4 @@ jobs:
         run: |
           $dir = 'target/release/bundle/nsis'
           $files = @(Get-ChildItem $dir -Filter '*-setup.exe*') + (Get-Item "$dir/latest.json")
-          gh release create $env:GITHUB_REF_NAME --title "Lumen $env:GITHUB_REF_NAME" --generate-notes @($files.FullName)
+          gh release create $env:GITHUB_REF_NAME --title "Diorama $env:GITHUB_REF_NAME" --generate-notes @($files.FullName)

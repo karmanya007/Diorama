@@ -1,7 +1,7 @@
 # Audio spectrum (`g_AudioSpectrum*`, script audio buffers)
 
 How Wallpaper Engine turns what the system plays into band levels, as far as
-captures show. Lumen's implementation: `crates/lumen-media/src/spectrum.rs`.
+captures show. Diorama's implementation: `crates/diorama-media/src/spectrum.rs`.
 
 ## Method (2026-10-21)
 
@@ -18,7 +18,7 @@ captures show. Lumen's implementation: `crates/lumen-media/src/spectrum.rs`.
 
 - WE's levels do not follow playback volume. The music was quiet (−40 dBFS
   RMS, peaks −23 dBFS, about 30 dB below mastered level), yet WE's 16 bands
-  averaged 0.42 and reached 1.0. A fixed dB scale (Lumen's old −60..0 dB)
+  averaged 0.42 and reached 1.0. A fixed dB scale (Diorama's old −60..0 dB)
   gave a mean of 0.05 for the same audio. WE normalises automatically.
 - The upper bands are nearly as busy as the bass (band 15 mean 0.18,
   bands 9–14 0.30–0.55), far more than music's natural treble roll-off.

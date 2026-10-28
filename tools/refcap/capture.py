@@ -104,7 +104,7 @@ def main():
     if result.ident == 0:
         raise RuntimeError("injection failed")
 
-    target = rd.CreateTargetControl("", result.ident, "lumen-refcap", True)
+    target = rd.CreateTargetControl("", result.ident, "diorama-refcap", True)
     if target is None or not target.Connected():
         raise RuntimeError("could not connect to target")
     log("connected to %s pid=%d" % (target.GetTarget(), target.GetPID()))

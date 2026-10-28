@@ -5,7 +5,7 @@
 - **Automated:** unit tests `render_size_*`
 
 ## Steps
-1. `lumend --scene <4K scene>`; read working set after 10 s.
+1. `dioramad --scene <4K scene>`; read working set after 10 s.
 
 ## Pass when
 Working set well below the decoded texture size.

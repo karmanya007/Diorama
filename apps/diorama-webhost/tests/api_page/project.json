@@ -1,0 +1,2 @@
+{ "title": "Diorama web API test", "type": "web", "file": "index.html",
+  "general": { "properties": { "speed": { "type": "slider", "value": 3 }, "tint": { "type": "color", "value": "1 0 0" } } } }

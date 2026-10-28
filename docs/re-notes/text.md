@@ -14,7 +14,7 @@ compared with `wpdump text`.
   Atami 32 pt: digit "1" (bbox 255×738 units) → 35×99 px bitmap, bitmap left 6,
   exactly FreeType's floor/ceil of the scaled outline box.
 - A glyph bitmap sits at the pen position plus its bearing; captured positions
-  match an unhinted rasterizer to ±1 px (WE hints; Lumen does not).
+  match an unhinted rasterizer to ±1 px (WE hints; Diorama does not).
 - Line metrics follow FreeType's size metrics: ascender = ceil(asc·s),
   descender = floor(desc·s), line height = round((asc − desc + gap)·s), from
   `hhea`. Quicksand Bold 32 pt: 127 / −29 / 155. Anurati 32 pt: 120 / −40 / 160.
@@ -40,7 +40,7 @@ Coordinates in the object's local space (pixels before the object's scale), y up
   - bottom: −floor(desc) for one line (origin = lowest descent),
   - center: −asc/2 (half an ascender above the baseline; Anurati exactly 60 of
     its 120 ascender, Quicksand 63.7 of 127).
-  Further lines go down by the line height; for several lines Lumen assumes
+  Further lines go down by the line height; for several lines Diorama assumes
   center lifts the block by half the extra rows (not yet captured).
 - The object's `size` is a stale editor value; WE recomputes the box from the text.
 

@@ -10,9 +10,9 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
-use lumen_core::Limits;
-use lumen_we::tex_decode::freeimage_format_name;
-use lumen_we::{Pkg, Tex, TexFlags, mip_to_rgba8};
+use diorama_core::Limits;
+use diorama_we::tex_decode::freeimage_format_name;
+use diorama_we::{Pkg, Tex, TexFlags, mip_to_rgba8};
 
 mod shader_check;
 mod survey;
@@ -206,24 +206,24 @@ fn run(cli: Cli) -> Result<()> {
             atlas,
         } => {
             let bytes = read_input(&font, entry.as_deref(), &limits)?;
-            let font = lumen_text::Font::new(bytes.into(), 0).context("loading font")?;
-            let style = lumen_text::Style {
+            let font = diorama_text::Font::new(bytes.into(), 0).context("loading font")?;
+            let style = diorama_text::Style {
                 pixel_size: pointsize * 300.0 / 72.0,
                 halign: match halign.as_str() {
-                    "left" => lumen_text::HAlign::Left,
-                    "right" => lumen_text::HAlign::Right,
-                    _ => lumen_text::HAlign::Center,
+                    "left" => diorama_text::HAlign::Left,
+                    "right" => diorama_text::HAlign::Right,
+                    _ => diorama_text::HAlign::Center,
                 },
                 valign: match valign.as_str() {
-                    "top" => lumen_text::VAlign::Top,
-                    "bottom" => lumen_text::VAlign::Bottom,
-                    _ => lumen_text::VAlign::Center,
+                    "top" => diorama_text::VAlign::Top,
+                    "bottom" => diorama_text::VAlign::Bottom,
+                    _ => diorama_text::VAlign::Center,
                 },
                 max_width: None,
                 max_rows: None,
                 ellipsis: false,
             };
-            let mut engine = lumen_text::TextEngine::new();
+            let mut engine = diorama_text::TextEngine::new();
             let layout = engine.layout(&font, &text, &style);
             writeln!(out, "metrics {:?}", font.metrics(style.pixel_size))?;
             for q in &layout.quads {
@@ -255,7 +255,7 @@ fn run(cli: Cli) -> Result<()> {
             let tex = Tex::parse(&bytes, &limits)?;
             let mip = tex.first_mip().context("texture has no mips")?;
             let mut rgba = mip_to_rgba8(&tex, mip)?;
-            if tex.header.format == lumen_we::TexFormat::R8 {
+            if tex.header.format == diorama_we::TexFormat::R8 {
                 // Shaders see (r, 0, 0, 1); a grey preview is easier to read.
                 for p in rgba.pixels.as_chunks_mut::<4>().0 {
                     p[1] = p[0];

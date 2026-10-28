@@ -1,8 +1,8 @@
 # Security policy
 
-Lumen loads wallpapers made by other people: packed files, textures, models, shaders, scripts and web pages. All of it is treated as untrusted input. If you find a way for a wallpaper to do any of the following, that is a security bug:
+Diorama loads wallpapers made by other people: packed files, textures, models, shaders, scripts and web pages. All of it is treated as untrusted input. If you find a way for a wallpaper to do any of the following, that is a security bug:
 
-- crash Lumen in a way you can control;
+- crash Diorama in a way you can control;
 - read or write files outside what it is allowed to;
 - reach the network without permission;
 - run code outside the script sandbox.

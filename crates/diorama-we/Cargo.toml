@@ -1,0 +1,19 @@
+[package]
+name = "diorama-we"
+description = "Wallpaper Engine importer: reads pkg/tex/json content and converts it to Diorama's scene IR."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+image.workspace = true
+diorama-core.workspace = true
+diorama-scene.workspace = true
+diorama-text.workspace = true
+lz4_flex.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

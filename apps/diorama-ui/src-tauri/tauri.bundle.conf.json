@@ -1,0 +1,27 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "createUpdaterArtifacts": true,
+    "publisher": "Diorama",
+    "copyright": "Diorama contributors",
+    "license": "MIT OR Apache-2.0",
+    "category": "Utility",
+    "shortDescription": "Live wallpapers: Wallpaper Engine content and your own",
+    "longDescription": "Diorama plays scene, video, web and image wallpapers, including Wallpaper Engine content you already have.",
+    "externalBin": ["binaries/dioramad", "binaries/diorama-webhost", "binaries/diorama"],
+    "resources": {
+      "../../../.tools/dxc/dxc.exe": "dxc/dxc.exe",
+      "../../../.tools/dxc/dxcompiler.dll": "dxc/dxcompiler.dll",
+      "../../../.tools/dxc/LICENSE-LLVM.txt": "dxc/LICENSE-LLVM.txt",
+      "../../../.tools/dxc/LICENCE-MIT.txt": "dxc/LICENCE-MIT.txt"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "installerHooks": "installer-hooks.nsh"
+      }
+    }
+  }
+}

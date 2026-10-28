@@ -6,7 +6,7 @@
 
 ## Steps
 1. Monitors with different refresh rates (here 180 Hz + 144 Hz).
-2. `RUST_LOG=info,lumen_gpu=debug lumend --scene <dir> --fps 240`.
+2. `RUST_LOG=info,diorama_gpu=debug dioramad --scene <dir> --fps 240`.
 3. Check the log shows `present_mode=Mailbox` per surface; watch both monitors.
 
 ## Pass when

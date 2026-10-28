@@ -17,9 +17,9 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Result, bail};
-use lumen_core::Limits;
-use lumen_we::Pkg;
-use lumen_we::shader::{self, GlslPair, HlslPair};
+use diorama_core::Limits;
+use diorama_we::Pkg;
+use diorama_we::shader::{self, GlslPair, HlslPair};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum Backend {
@@ -73,7 +73,8 @@ pub fn run(opts: &Options<'_>) -> Result<String> {
         seen.insert(h.finish())
     });
 
-    let work_dir = std::env::temp_dir().join(format!("lumen-shader-check-{}", std::process::id()));
+    let work_dir =
+        std::env::temp_dir().join(format!("diorama-shader-check-{}", std::process::id()));
     fs::create_dir_all(&work_dir)?;
     if let Some(dir) = opts.dump {
         fs::create_dir_all(dir)?;

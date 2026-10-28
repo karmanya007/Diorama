@@ -9,8 +9,8 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use lumen_core::Limits;
-use lumen_we::Pkg;
+use diorama_core::Limits;
+use diorama_we::Pkg;
 use serde_json::Value;
 
 #[derive(Debug, Default)]

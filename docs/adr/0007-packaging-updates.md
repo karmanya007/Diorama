@@ -4,19 +4,19 @@ Status: accepted (2026-10-28)
 
 ## Context
 
-Phase 6 ships Lumen to people who do not build it: an installer, a way to
-update, and the daemon, web host, CLI and DXC placed where lumen-ui and
-lumend look for them (beside each other, `dxc\dxc.exe` beside lumend).
+Phase 6 ships Diorama to people who do not build it: an installer, a way to
+update, and the daemon, web host, CLI and DXC placed where diorama-ui and
+dioramad look for them (beside each other, `dxc\dxc.exe` beside dioramad).
 No code-signing certificate yet.
 
 ## Decision
 
 - **Tauri's NSIS bundler**, per-user install (no admin) into
-  `%LOCALAPPDATA%\Lumen`. lumend, lumen-webhost and `lumen` are Tauri
+  `%LOCALAPPDATA%\Diorama`. dioramad, diorama-webhost and `diorama` are Tauri
   `externalBin`s; DXC is a resource in `dxc\`.
 - **Only `dxc.exe` + `dxcompiler.dll`** of the pinned DXC release ship, with
   their LLVM and MIT licences. `dxil.dll` (closed, Microsoft licence with
-  distributor obligations) is left out: Lumen compiles to SPIR-V, which does
+  distributor obligations) is left out: Diorama compiles to SPIR-V, which does
   not need it.
 - **Bundle settings live in `tauri.bundle.conf.json`**, merged only by
   `tauri build` (`scripts/bundle.ps1`). Tauri's build script checks that
@@ -31,9 +31,9 @@ No code-signing certificate yet.
   feature brought `zip` 4 with open advisories) and with the OS's TLS
   (`native-tls`: SChannel, Windows certificate store).
 - **Installer hooks** (`installer-hooks.nsh`): before installing over or
-  removing Lumen, quit lumend (`lumen quit`) and stop its processes started
+  removing Diorama, quit dioramad (`diorama quit`) and stop its processes started
   from the install folder; on uninstall, remove the sign-in entry, and with
-  "delete application data" ticked, Lumen's settings and caches.
+  "delete application data" ticked, Diorama's settings and caches.
 - **Unsigned** for now: SmartScreen warns on first run. Signing can be added
   to the release workflow later without changing the rest.
 - **Releases**: pushing a `v*` tag equal to the workspace version runs

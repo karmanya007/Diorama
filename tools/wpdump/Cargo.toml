@@ -10,9 +10,9 @@ publish.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 image.workspace = true
-lumen-core.workspace = true
-lumen-text.workspace = true
-lumen-we.workspace = true
+diorama-core.workspace = true
+diorama-text.workspace = true
+diorama-we.workspace = true
 naga.workspace = true
 serde_json.workspace = true
 

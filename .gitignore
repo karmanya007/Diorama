@@ -18,7 +18,7 @@
 /.tools/
 
 # Programs staged for the installer by scripts/bundle.ps1
-/apps/lumen-ui/src-tauri/binaries/
+/apps/diorama-ui/src-tauri/binaries/
 
 # Internal planning and progress log (kept locally, not published)
 /PROGRESS.md

@@ -1,8 +1,13 @@
 # Changelog
 
-All notable changes to Lumen are listed here. Versions follow [Semantic Versioning](https://semver.org); before 1.0, minor versions may change behaviour.
+All notable changes to Diorama are listed here. Versions follow [Semantic Versioning](https://semver.org); before 1.0, minor versions may change behaviour.
 
-## 0.1.0 (unreleased)
+## 0.1.1 (unreleased)
+
+- **Renamed from Lumen to Diorama** (the old name clashed with Unreal Engine's Lumen). Programs, folders and the installer now use the new name: `diorama`, `dioramad`, `%APPDATA%\Diorama`, `%LOCALAPPDATA%\Diorama`. Settings from Lumen 0.1.0 move over the first time Diorama starts. If you installed Lumen 0.1.0, uninstall it from Windows Settings → Apps; it does not update itself to Diorama.
+- Example wallpapers made for Diorama, free to use (`examples/wallpapers`).
+
+## 0.1.0 (2026-10-28, released as Lumen)
 
 First public preview (Windows).
 
@@ -30,12 +35,12 @@ First public preview (Windows).
   - static wallpapers stop drawing.
 - Recovers from Explorer restarts, graphics driver resets, sleep, monitor changes and audio device changes.
 
-### The Lumen app
+### The Diorama app
 
 - Library with search, filters, mature-content hiding and a measured cost per wallpaper.
 - Per-wallpaper settings, starting from your Wallpaper Engine choices.
 - Playlists by interval or time of day, per monitor.
-- Notification-area icon; start at sign-in; `lumen` command line.
+- Notification-area icon; start at sign-in; `diorama` command line.
 
 ### Installation
 

@@ -1,5 +1,5 @@
 [package]
-name = "lumen-fuzz"
+name = "diorama-fuzz"
 version = "0.0.0"
 edition = "2024"
 publish = false
@@ -9,8 +9,8 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-lumen-core = { path = "../crates/lumen-core" }
-lumen-we = { path = "../crates/lumen-we" }
+diorama-core = { path = "../crates/diorama-core" }
+diorama-we = { path = "../crates/diorama-we" }
 
 # Kept out of the main workspace: needs nightly + libFuzzer.
 [workspace]

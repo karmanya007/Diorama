@@ -220,24 +220,24 @@ dependencies = [
 ]
 
 [[package]]
-name = "lumen-core"
+name = "diorama-core"
 version = "0.0.1"
 
 [[package]]
-name = "lumen-fuzz"
+name = "diorama-fuzz"
 version = "0.0.0"
 dependencies = [
  "libfuzzer-sys",
- "lumen-core",
- "lumen-we",
+ "diorama-core",
+ "diorama-we",
 ]
 
 [[package]]
-name = "lumen-scene"
+name = "diorama-scene"
 version = "0.0.1"
 
 [[package]]
-name = "lumen-text"
+name = "diorama-text"
 version = "0.0.1"
 dependencies = [
  "harfrust",
@@ -246,13 +246,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "lumen-we"
+name = "diorama-we"
 version = "0.0.1"
 dependencies = [
  "image",
- "lumen-core",
- "lumen-scene",
- "lumen-text",
+ "diorama-core",
+ "diorama-scene",
+ "diorama-text",
  "lz4_flex",
  "serde_json",
  "thiserror",

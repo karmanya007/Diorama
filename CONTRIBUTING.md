@@ -1,4 +1,4 @@
-# Contributing to Lumen
+# Contributing to Diorama
 
 Thanks for helping. Bug reports, compatibility reports and pull requests are all welcome.
 
@@ -8,7 +8,7 @@ Open an issue with:
 
 - the Workshop id (or the Wallpaper Engine default project's name);
 - what differs from Wallpaper Engine, ideally with screenshots of both side by side;
-- `lumen status` output, and the relevant part of `%APPDATA%\Lumen\lumend.log` (plus `lumen-webhost.log` for web wallpapers).
+- `diorama status` output, and the relevant part of `%APPDATA%\Diorama\dioramad.log` (plus `diorama-webhost.log` for web wallpapers).
 
 Do **not** attach the wallpaper's files or anything extracted from them. Workshop content belongs to its authors; the id is enough to find it.
 
@@ -28,14 +28,14 @@ bash scripts/check-layers.sh     # architecture rules
 cargo deny check                 # licences, advisories, sources
 ```
 
-For changes to the Lumen window, also run `npm run build` in `apps/lumen-ui`.
+For changes to the Diorama window, also run `npm run build` in `apps/diorama-ui`.
 
 Guidelines:
 
 - **Layering**:
   - lower crates never depend on higher ones;
   - the renderer never sees Wallpaper Engine formats;
-  - OS-specific code stays in `lumen-platform` and `lumen-media`.
+  - OS-specific code stays in `diorama-platform` and `diorama-media`.
 
   `scripts/check-layers.sh` enforces this.
 - **Workshop content is untrusted input.** Parsers return errors instead of panicking (`unwrap`/`expect` are denied in library crates), check sizes and offsets, and cap allocations. Add a fuzz target or a test with hostile input when you touch a parser.
@@ -49,4 +49,4 @@ Guidelines:
 
 ## Licence
 
-By contributing you agree that your work is dual-licensed under MIT or Apache-2.0, like the rest of Lumen, without additional terms.
+By contributing you agree that your work is dual-licensed under MIT or Apache-2.0, like the rest of Diorama, without additional terms.

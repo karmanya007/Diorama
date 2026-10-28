@@ -6,7 +6,7 @@
 
 ## Steps
 1. Note `dwm.exe` private bytes.
-2. Run `lumend --scene <dir>` for 30 min, moving windows occasionally.
+2. Run `dioramad --scene <dir>` for 30 min, moving windows occasionally.
 3. Note `dwm.exe` private bytes again.
 
 ## Pass when

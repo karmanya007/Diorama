@@ -1,0 +1,29 @@
+[package]
+name = "diorama-webhost"
+description = "Hosts one web wallpaper (WebView2 on Windows) behind the desktop icons for dioramad."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+diorama-platform.workspace = true
+diorama-we.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# The WebView: WebView2 on Windows, WKWebView on macOS; WebKitGTK with the
+# Linux port (wry's `os-webview` feature, which needs the GTK libraries).
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+raw-window-handle.workspace = true
+wry.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.39"
+windows = { workspace = true, features = ["Win32_UI_Shell", "Win32_System_Com_StructuredStorage"] }
+
+[lints]
+workspace = true

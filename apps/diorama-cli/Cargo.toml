@@ -1,0 +1,22 @@
+[package]
+name = "diorama-cli"
+description = "Command-line control for the Diorama wallpaper daemon."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "diorama"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+diorama-ipc.workspace = true
+diorama-library.workspace = true
+diorama-platform.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
