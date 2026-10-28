@@ -18,6 +18,16 @@
 
 !macro NSIS_HOOK_PREINSTALL
   !insertmacro DIORAMA_STOP_DAEMON
+  ; Lumen 0.1.0 (Diorama's old name, another install folder): remove it so
+  ; two daemons don't compete. Its uninstaller stops it and drops its sign-in
+  ; entry; its settings (%APPDATA%\Lumen) stay, and dioramad moves them over.
+  IfFileExists "$LOCALAPPDATA\Lumen\uninstall.exe" 0 diorama_no_lumen
+    ExecWait '"$LOCALAPPDATA\Lumen\uninstall.exe" /S _?=$LOCALAPPDATA\Lumen'
+    Delete "$LOCALAPPDATA\Lumen\uninstall.exe"
+    RMDir /r "$LOCALAPPDATA\Lumen\cache"
+    RMDir /r "$LOCALAPPDATA\Lumen\webview"
+    RMDir "$LOCALAPPDATA\Lumen"
+  diorama_no_lumen:
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
