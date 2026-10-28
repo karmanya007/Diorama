@@ -341,6 +341,27 @@ fn same(a: &Path, b: &Path) -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn example_wallpapers_are_listed_with_previews_and_settings() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/wallpapers");
+        let items = folder_items(&dir);
+        let titles: Vec<&str> = items.iter().map(|i| i.title.as_str()).collect();
+        assert_eq!(titles, ["Aurora", "Dunes", "Paper Valley"]);
+        for item in &items {
+            assert_eq!(item.kind, Kind::Web, "{}", item.title);
+            assert!(
+                item.preview.as_ref().is_some_and(|p| p.is_file()),
+                "{}",
+                item.title
+            );
+            assert!(
+                item.properties.get("schemecolor").is_some(),
+                "{}",
+                item.title
+            );
+        }
+    }
+
     fn temp(name: &str) -> PathBuf {
         let dir =
             std::env::temp_dir().join(format!("diorama-library-{name}-{}", std::process::id()));

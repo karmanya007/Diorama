@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Paper Valley</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0b1026; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+'use strict';
+// Paper Valley: an example wallpaper made for Diorama (MIT OR Apache-2.0).
+// Paper-cut hills under a night sky. Fireflies drift between the layers and
+// brighten with music; the layers shift with the cursor.
+// `?t=<seconds>` draws one still frame (previews); `&loop=<s>` makes every
+// motion repeat after that many seconds; `&demo` moves a pretend cursor and
+// pretend music for recordings.
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const params = new URLSearchParams(location.search);
+const still = params.has('t') ? parseFloat(params.get('t')) : null;
+const LOOP = parseFloat(params.get('loop')) || 24;
+const DEMO = params.has('demo');
+const TAU = Math.PI * 2;
+
+const settings = { tint: [0.36, 0.42, 0.85], fireflies: 60, parallax: true, speed: 1 };
+let bass = 0;
+const pointer = { x: 0.5, y: 0.5 };
+const eased = { x: 0.5, y: 0.5 };
+let scene = null;
+
+// Small seeded random generator: the same picture on every start.
+function random(seed) {
+  return () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const mix = (a, b, k) => a.map((v, i) => v + (b[i] - v) * k);
+const css = (c, a = 1) => `rgba(${c.map((v) => Math.round(Math.min(1, Math.max(0, v)) * 255)).join(',')},${a})`;
+const layer = (w, h) => {
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(w));
+  c.height = Math.max(1, Math.round(h));
+  return c;
+};
+
+function palette() {
+  const night = [0.03, 0.04, 0.11];
+  const horizon = mix([0.1, 0.11, 0.26], settings.tint, 0.55);
+  return { night, horizon, ink: [0.02, 0.025, 0.06] };
+}
+
+function build() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.round(innerWidth * dpr);
+  const h = Math.round(innerHeight * dpr);
+  canvas.width = w;
+  canvas.height = h;
+  const pal = palette();
+  const rnd = random(11);
+  const margin = Math.round(w * 0.05);
+  const s = { w, h, margin, layers: [], stars: [], flies: [], sky: layer(w, h) };
+
+  // Sky in paper bands.
+  const g = s.sky.getContext('2d');
+  const bands = 8;
+  for (let i = 0; i < bands; i++) {
+    g.fillStyle = css(mix(pal.night, pal.horizon, Math.pow(i / (bands - 1), 1.6)));
+    g.fillRect(0, (h * 0.8 * i) / bands, w, h);
+  }
+
+  // Moon: a crescent (cut on its own canvas) over a soft glow.
+  const mr = h * 0.038;
+  const c0 = mr * 6;
+  const crescent = layer(c0 * 2, c0 * 2);
+  const cg = crescent.getContext('2d');
+  cg.fillStyle = css([1, 0.96, 0.84]);
+  cg.beginPath();
+  cg.arc(c0, c0, mr, 0, TAU);
+  cg.fill();
+  cg.globalCompositeOperation = 'destination-out';
+  cg.beginPath();
+  cg.arc(c0 + mr * 0.5, c0 - mr * 0.25, mr * 0.88, 0, TAU);
+  cg.fill();
+  s.moon = layer(c0 * 2, c0 * 2);
+  const m = s.moon.getContext('2d');
+  const glow = m.createRadialGradient(c0, c0, mr * 0.6, c0, c0, c0);
+  glow.addColorStop(0, css(mix([1, 0.97, 0.88], settings.tint, 0.25), 0.22));
+  glow.addColorStop(0.35, css(mix([1, 0.97, 0.88], settings.tint, 0.5), 0.07));
+  glow.addColorStop(1, css([1, 1, 1], 0));
+  m.fillStyle = glow;
+  m.fillRect(0, 0, c0 * 2, c0 * 2);
+  m.drawImage(crescent, 0, 0);
+
+  for (let i = 0; i < 180; i++) {
+    s.stars.push({
+      x: rnd() * w, y: Math.pow(rnd(), 1.4) * h * 0.62,
+      r: (0.5 + rnd() * 1.2) * (h / 1080) * 1.3,
+      k: 1 + Math.floor(rnd() * 3), p: rnd() * TAU,
+    });
+  }
+
+  // Hills: five paper layers, far to near, each with its own shadow.
+  const count = 5;
+  for (let i = 0; i < count; i++) {
+    const depth = i / (count - 1);
+    const lw = w + margin * 2;
+    const c = layer(lw, h);
+    const lg = c.getContext('2d');
+    const base = h * (0.56 + depth * 0.2);
+    const amp = h * (0.045 + depth * 0.03);
+    const waves = [1, 2, 3, 5, 8].map((k) => ({ k, p: rnd() * TAU, a: (0.4 + rnd() * 0.6) / k }));
+    const ridge = (x) => base - amp * waves.reduce((sum, v) => sum + v.a * Math.sin((x / lw) * TAU * v.k + v.p), 0);
+    const path = new Path2D();
+    const edge = new Path2D();
+    path.moveTo(0, h);
+    edge.moveTo(0, ridge(0));
+    for (let x = 0; x <= lw + 4; x += 4) {
+      path.lineTo(x, ridge(x));
+      edge.lineTo(x, ridge(x));
+    }
+    path.lineTo(lw, h);
+    path.closePath();
+    if (i > 0) {
+      // Pines along the ridge, bigger on nearer layers.
+      const trees = 14 + i * 6;
+      for (let t = 0; t < trees; t++) {
+        const x = rnd() * lw;
+        if (rnd() < 0.35) continue;
+        const y = ridge(x) + 2;
+        const th = h * (0.025 + depth * 0.05) * (0.6 + rnd() * 0.6);
+        const tw = th * 0.55;
+        for (const [top, bottom, spread] of [[1, 0.45, 0.55], [0.78, 0.2, 0.8], [0.55, -0.02, 1]]) {
+          path.moveTo(x, y - th * top);
+          path.lineTo(x + tw * 0.5 * spread, y - th * bottom);
+          path.lineTo(x - tw * 0.5 * spread, y - th * bottom);
+          path.closePath();
+        }
+      }
+    }
+    const tone = mix(mix(pal.horizon, [0.85, 0.88, 1], 0.14 * (1 - depth)), [0.035, 0.035, 0.1], 0.12 + 0.72 * Math.pow(depth, 1.1));
+    lg.shadowColor = 'rgba(0,0,0,0.5)';
+    lg.shadowBlur = h * 0.025;
+    lg.shadowOffsetY = -h * 0.005;
+    lg.fillStyle = css(tone);
+    lg.fill(path);
+    // Moonlit paper edge.
+    lg.shadowColor = 'transparent';
+    lg.strokeStyle = css(mix(tone, [0.85, 0.88, 1], 0.45), 0.35 - depth * 0.15);
+    lg.lineWidth = Math.max(1, h * 0.0016);
+    lg.stroke(edge);
+    s.layers.push({ canvas: c, depth });
+  }
+
+  // Firefly glow sprite.
+  const fr = h * 0.03;
+  s.glow = layer(fr * 2, fr * 2);
+  const fg = s.glow.getContext('2d');
+  const fgrad = fg.createRadialGradient(fr, fr, 0, fr, fr, fr);
+  fgrad.addColorStop(0, 'rgba(255,248,200,1)');
+  fgrad.addColorStop(0.12, 'rgba(255,214,110,0.9)');
+  fgrad.addColorStop(0.4, 'rgba(255,170,60,0.22)');
+  fgrad.addColorStop(1, 'rgba(255,150,40,0)');
+  fg.fillStyle = fgrad;
+  fg.fillRect(0, 0, fr * 2, fr * 2);
+
+  const fly = random(23);
+  for (let i = 0; i < 160; i++) {
+    s.flies.push({
+      x: fly(), y: 0.6 + fly() * 0.36, ax: 0.015 + fly() * 0.05, ay: 0.01 + fly() * 0.025,
+      k1: 1 + Math.floor(fly() * 2), k2: 1 + Math.floor(fly() * 3), k3: 2 + Math.floor(fly() * 4),
+      p1: fly() * TAU, p2: fly() * TAU, p3: fly() * TAU,
+      after: 2 + Math.floor(fly() * 3), size: 0.6 + fly() * 0.6,
+    });
+  }
+  scene = s;
+}
+
+function draw(t) {
+  const s = scene;
+  const { w, h, margin } = s;
+  const phase = (k) => (TAU * k * t) / LOOP;
+  if (DEMO) {
+    pointer.x = 0.5 + 0.4 * Math.cos(phase(1));
+    pointer.y = 0.5 + 0.25 * Math.sin(phase(1));
+    bass = Math.pow(0.5 + 0.5 * Math.sin(phase(4)), 6);
+  }
+  const follow = still !== null ? 1 : 0.06;
+  eased.x += (pointer.x - eased.x) * follow;
+  eased.y += (pointer.y - eased.y) * follow;
+  const px = settings.parallax ? eased.x - 0.5 : 0;
+  const py = settings.parallax ? eased.y - 0.5 : 0;
+
+  ctx.drawImage(s.sky, 0, 0);
+  for (const st of s.stars) {
+    const a = 0.35 + 0.65 * Math.pow(0.5 + 0.5 * Math.sin(phase(st.k) + st.p), 2);
+    ctx.fillStyle = `rgba(235,240,255,${a})`;
+    ctx.beginPath();
+    ctx.arc(st.x - px * margin * 0.1, st.y, st.r, 0, TAU);
+    ctx.fill();
+  }
+  ctx.drawImage(s.moon, w * 0.74 - s.moon.width / 2 - px * margin * 0.2, h * 0.2 - s.moon.height / 2 - py * h * 0.004);
+
+  const flies = s.flies.slice(0, settings.fireflies);
+  s.layers.forEach((l, i) => {
+    const dx = -margin - px * margin * 1.8 * (0.15 + l.depth);
+    const dy = -py * h * 0.02 * (0.15 + l.depth);
+    ctx.drawImage(l.canvas, dx, dy);
+    ctx.globalCompositeOperation = 'lighter';
+    for (const f of flies) {
+      if (f.after !== i) continue;
+      const x = (f.x + f.ax * Math.sin(phase(f.k1) + f.p1)) * w + dx * 0.6;
+      const y = (f.y + f.ay * Math.sin(phase(f.k2) + f.p2)) * h + dy;
+      const glow = 0.25 + 0.75 * Math.pow(0.5 + 0.5 * Math.sin(phase(f.k3) + f.p3), 3);
+      ctx.globalAlpha = Math.min(1, glow * (0.8 + bass * 0.9));
+      const size = s.glow.width * f.size * (1 + bass * 0.5);
+      ctx.drawImage(s.glow, x - size / 2, y - size / 2, size, size);
+    }
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+  });
+}
+
+let last = null;
+let time = 0;
+function frame(now) {
+  if (last !== null) time += Math.min(0.1, (now - last) / 1000) * settings.speed;
+  last = now;
+  bass *= 0.92;
+  draw(time);
+  requestAnimationFrame(frame);
+}
+
+// Diorama / Wallpaper Engine web wallpaper API.
+window.wallpaperPropertyListener = {
+  applyUserProperties(p) {
+    if (p.schemecolor) settings.tint = p.schemecolor.value.split(' ').map(Number);
+    if (p.fireflies) settings.fireflies = Math.round(p.fireflies.value);
+    if (p.parallax) settings.parallax = p.parallax.value;
+    if (p.speed) settings.speed = p.speed.value;
+    if (p.schemecolor) build();
+    if (still !== null) draw(still);
+  },
+};
+if (window.wallpaperRegisterAudioListener) {
+  window.wallpaperRegisterAudioListener((a) => {
+    let sum = 0;
+    for (let i = 0; i < 6; i++) sum += (a[i] || 0) + (a[64 + i] || 0);
+    bass = Math.max(bass, Math.min(1, sum / 12));
+  });
+}
+addEventListener('mousemove', (e) => {
+  pointer.x = e.clientX / innerWidth;
+  pointer.y = e.clientY / innerHeight;
+});
+addEventListener('resize', () => { build(); if (still !== null) draw(still); });
+
+build();
+if (still !== null) draw(still);
+else requestAnimationFrame(frame);
+</script>
+</body>
+</html>

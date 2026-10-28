@@ -1,0 +1,17 @@
+{
+  "title": "Dunes",
+  "description": "A banded sunset over paper-cut dunes. Birds cross the sky and the sun pulses gently with music. An example wallpaper made for Diorama.",
+  "type": "web",
+  "file": "index.html",
+  "preview": "preview.png",
+  "tags": ["Nature", "Minimalistic"],
+  "contentrating": "Everyone",
+  "general": {
+    "supportsaudioprocessing": true,
+    "properties": {
+      "schemecolor": { "order": 0, "text": "Sun colour", "type": "color", "value": "1 0.62 0.32" },
+      "birds": { "order": 1, "text": "Birds", "type": "slider", "min": 0, "max": 16, "step": 1, "value": 7 },
+      "speed": { "order": 2, "text": "Speed", "type": "slider", "min": 0.2, "max": 2, "step": 0.1, "value": 1 }
+    }
+  }
+}

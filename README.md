@@ -8,10 +8,16 @@ Diorama draws animated wallpapers behind your desktop icons: Wallpaper Engine sc
 
 Diorama is an independent project. It is not affiliated with or endorsed by Wallpaper Engine, its developers, or Valve.
 
+![Paper Valley, one of Diorama's example wallpapers: paper-cut hills under a night sky, fireflies pulsing to music, the layers shifting with the cursor](docs/media/paper-valley.gif)
+
+<sub>*Paper Valley*, one of the [example wallpapers](examples/wallpapers) made for Diorama, with a pretend cursor and music.</sub>
+
+![The Diorama window: the library with three example wallpapers, and Paper Valley's details with its measured cost, monitors and settings](docs/media/app.png)
+
 ## Features
 
 - **Plays Wallpaper Engine content you own**: scenes (layers, effects, particles, 3D models, text, SceneScript, audio-reactive and cursor-reactive layers), videos and web wallpapers, read straight from your local Workshop folder.
-- **Your own wallpapers**: images, videos and web pages from any folder.
+- **Your own wallpapers**: images, videos and web pages from any folder. Three [example wallpapers](examples/wallpapers) are included to start from.
 - **Per-monitor or spanning**: a different wallpaper per monitor, or one stretched across all of them, with fill / fit / stretch.
 - **Wallpaper settings**: each wallpaper's own options (colours, sliders, text, files…), starting from the choices you made in Wallpaper Engine.
 - **Playlists**: rotate wallpapers on a timer or by time of day, per monitor.

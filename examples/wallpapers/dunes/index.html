@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dunes</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #2a1030; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+'use strict';
+// Dunes: an example wallpaper made for Diorama (MIT OR Apache-2.0).
+// A banded sunset over paper-cut dunes; birds cross the sky and the sun
+// pulses gently with music. `?t=<seconds>` draws one still frame,
+// `&loop=<s>` makes every motion repeat after that many seconds.
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const params = new URLSearchParams(location.search);
+const still = params.has('t') ? parseFloat(params.get('t')) : null;
+const LOOP = parseFloat(params.get('loop')) || 40;
+const TAU = Math.PI * 2;
+
+const settings = { sun: [1, 0.62, 0.32], birds: 7, speed: 1 };
+let level = 0;
+let scene = null;
+
+function random(seed) {
+  return () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const mix = (a, b, k) => a.map((v, i) => v + (b[i] - v) * k);
+const css = (c, a = 1) => `rgba(${c.map((v) => Math.round(Math.min(1, Math.max(0, v)) * 255)).join(',')},${a})`;
+const layer = (w, h) => {
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(w));
+  c.height = Math.max(1, Math.round(h));
+  return c;
+};
+
+function build() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.round(innerWidth * dpr);
+  const h = Math.round(innerHeight * dpr);
+  canvas.width = w;
+  canvas.height = h;
+  const rnd = random(3);
+  const s = { w, h, sky: layer(w, h), dunes: [], birds: [] };
+
+  // Sky in paper bands, dusk violet down to the sun's colour.
+  const g = s.sky.getContext('2d');
+  const top = [0.16, 0.07, 0.24];
+  const low = mix([0.98, 0.55, 0.42], settings.sun, 0.5);
+  const bands = 9;
+  for (let i = 0; i < bands; i++) {
+    g.fillStyle = css(mix(top, low, Math.pow(i / (bands - 1), 1.3)));
+    g.fillRect(0, (h * 0.7 * i) / bands, w, h);
+  }
+
+  // The sun: a disc cut by horizontal gaps, low over the dunes.
+  const r = h * 0.17;
+  s.sunDisc = layer(r * 2, r * 2);
+  const sg = s.sunDisc.getContext('2d');
+  const sgrad = sg.createLinearGradient(0, 0, 0, r * 2);
+  sgrad.addColorStop(0, css(mix(settings.sun, [1, 0.95, 0.7], 0.6)));
+  sgrad.addColorStop(1, css(mix(settings.sun, [0.95, 0.3, 0.35], 0.4)));
+  sg.fillStyle = sgrad;
+  sg.beginPath();
+  sg.arc(r, r, r, 0, TAU);
+  sg.fill();
+  sg.globalCompositeOperation = 'destination-out';
+  for (let i = 0; i < 6; i++) {
+    const y = r * (1.05 + i * 0.16);
+    sg.fillRect(0, y, r * 2, r * (0.025 + i * 0.012));
+  }
+  s.sunR = r;
+
+  // Dunes: four layers, each lit on one side.
+  for (let i = 0; i < 4; i++) {
+    const depth = i / 3;
+    const c = layer(w, h);
+    const dg = c.getContext('2d');
+    const base = h * (0.62 + depth * 0.11);
+    const amp = h * (0.05 + depth * 0.05);
+    const waves = [1, 2, 3].map((k) => ({ k: k * (0.8 + rnd() * 0.6), p: rnd() * TAU, a: (0.5 + rnd() * 0.5) / k }));
+    const ridge = (x) => base - amp * waves.reduce((sum, v) => sum + v.a * Math.sin((x / w) * TAU * v.k + v.p), 0);
+    const path = new Path2D();
+    path.moveTo(0, h);
+    for (let x = 0; x <= w + 4; x += 4) path.lineTo(x, ridge(x));
+    path.lineTo(w, h);
+    path.closePath();
+    const lit = mix(mix([0.95, 0.55, 0.4], settings.sun, 0.3), [0.25, 0.08, 0.2], 0.25 + depth * 0.6);
+    const shade = mix(lit, [0.1, 0.03, 0.12], 0.45);
+    const fill = dg.createLinearGradient(0, 0, w, 0);
+    for (let k = 0; k <= 8; k++) fill.addColorStop(k / 8, css(k % 2 ? shade : lit));
+    dg.shadowColor = 'rgba(40,0,30,0.45)';
+    dg.shadowBlur = h * 0.025;
+    dg.shadowOffsetY = -h * 0.004;
+    dg.fillStyle = css(mix(lit, shade, 0.4));
+    dg.fill(path);
+    // Soft side shading along the crest.
+    dg.shadowColor = 'transparent';
+    dg.globalAlpha = 0.22;
+    dg.fillStyle = fill;
+    dg.fill(path);
+    dg.globalAlpha = 1;
+    s.dunes.push(c);
+  }
+
+  for (let i = 0; i < 16; i++) {
+    s.birds.push({ y: 0.12 + rnd() * 0.3, k: 1 + Math.floor(rnd() * 2), p: rnd(), size: 0.6 + rnd() * 0.7, flap: 4 + Math.floor(rnd() * 4) });
+  }
+  scene = s;
+}
+
+function draw(t) {
+  const s = scene;
+  const { w, h } = s;
+  ctx.drawImage(s.sky, 0, 0);
+  const pulse = 1 + level * 0.05;
+  const r = s.sunR * pulse;
+  ctx.drawImage(s.sunDisc, w * 0.5 - r, h * 0.58 - r, r * 2, r * 2);
+  ctx.strokeStyle = 'rgba(40,10,40,0.75)';
+  ctx.lineCap = 'round';
+  for (const b of s.birds.slice(0, settings.birds)) {
+    const u = ((t / LOOP) * b.k + b.p) % 1;
+    const x = -0.1 * w + u * 1.2 * w;
+    const y = (b.y + 0.02 * Math.sin(TAU * u * 3)) * h;
+    const span = h * 0.012 * b.size;
+    const lift = span * 0.6 * Math.sin((TAU * b.flap * t) / LOOP * 4);
+    ctx.lineWidth = Math.max(1, h * 0.0022 * b.size);
+    ctx.beginPath();
+    ctx.moveTo(x - span, y - lift);
+    ctx.quadraticCurveTo(x - span * 0.4, y - span * 0.3, x, y);
+    ctx.quadraticCurveTo(x + span * 0.4, y - span * 0.3, x + span, y - lift);
+    ctx.stroke();
+  }
+  for (const d of s.dunes) ctx.drawImage(d, 0, 0);
+}
+
+let last = null;
+let time = 0;
+function frame(now) {
+  if (last !== null) time += Math.min(0.1, (now - last) / 1000) * settings.speed;
+  last = now;
+  level *= 0.93;
+  draw(time);
+  requestAnimationFrame(frame);
+}
+
+window.wallpaperPropertyListener = {
+  applyUserProperties(p) {
+    if (p.schemecolor) settings.sun = p.schemecolor.value.split(' ').map(Number);
+    if (p.birds) settings.birds = Math.round(p.birds.value);
+    if (p.speed) settings.speed = p.speed.value;
+    if (p.schemecolor) build();
+    if (still !== null) draw(still);
+  },
+};
+if (window.wallpaperRegisterAudioListener) {
+  window.wallpaperRegisterAudioListener((a) => {
+    let sum = 0;
+    for (let i = 0; i < 8; i++) sum += (a[i] || 0) + (a[64 + i] || 0);
+    level = Math.max(level, Math.min(1, sum / 16));
+  });
+}
+addEventListener('resize', () => { build(); if (still !== null) draw(still); });
+
+build();
+if (still !== null) draw(still);
+else requestAnimationFrame(frame);
+</script>
+</body>
+</html>
