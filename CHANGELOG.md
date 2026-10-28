@@ -2,7 +2,7 @@
 
 All notable changes to Diorama are listed here. Versions follow [Semantic Versioning](https://semver.org); before 1.0, minor versions may change behaviour.
 
-## 0.1.1 (unreleased)
+## 0.1.1 (2026-10-29)
 
 - **Renamed from Lumen to Diorama** (the old name clashed with Unreal Engine's Lumen). Programs, folders and the installer now use the new name: `diorama`, `dioramad`, `%APPDATA%\Diorama`, `%LOCALAPPDATA%\Diorama`. If Lumen 0.1.0 is installed, the Diorama installer removes it, and its settings move over the first time Diorama starts.
 - Example wallpapers made for Diorama, free to use (`examples/wallpapers`).
