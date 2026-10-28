@@ -13,3 +13,4 @@
 
 ## Last run
 2026-10-14: 1080p24 0.53%, 4K30 1.0% machine CPU. UI warning/transcode offer: Phase 6.
+2026-10-27: DXVA probe per codec/profile/size; `diorama convert` made an H.264 copy (60 s 1080p → 640×360 in 2.5 s, sound kept) that dioramad swapped in. All 21 corpus videos and this GPU decode in hardware, so the UI offer has only been seen in the mock UI.
