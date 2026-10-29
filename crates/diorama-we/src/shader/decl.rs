@@ -4,8 +4,9 @@ use serde_json::Value;
 
 use crate::error::{Error, Result};
 
-/// Annotation JSON as WE reads it: also accepts numbers with leading zeros
-/// (`"range":[0,01]` in a workshop shader of 2216027178) and trailing commas.
+/// JSON as WE reads it: also accepts numbers with leading zeros
+/// (`"range":[0,01]` in a workshop shader of 2216027178), trailing commas and
+/// `//` / `/* */` comments (`//"cullmode"` in Fantastic Car's glass material).
 pub fn lenient_json(text: &str) -> Option<Value> {
     if let Ok(v) = serde_json::from_str(text) {
         return Some(v);
@@ -28,6 +29,27 @@ pub fn lenient_json(text: &str) -> Option<Value> {
         }
         match c {
             '"' => in_string = true,
+            '/' if chars.peek() == Some(&'/') => {
+                for c in chars.by_ref() {
+                    if c == '\n' {
+                        break;
+                    }
+                }
+                out.push('\n');
+                continue;
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                let mut star = false;
+                for c in chars.by_ref() {
+                    if star && c == '/' {
+                        break;
+                    }
+                    star = c == '*';
+                }
+                out.push(' ');
+                continue;
+            }
             '0' if !prev.is_ascii_digit() && prev != '.' => {
                 // Drop leading zeros of an integer part ("01" → "1", "00" → "0").
                 while chars.peek() == Some(&'0') {
@@ -179,6 +201,12 @@ mod tests {
         assert_eq!(v["a"], "x,]0");
         assert_eq!(v["b"], serde_json::json!([0.05, 0, -7, 10]));
         assert!(lenient_json("{nope").is_none());
+        // Fantastic Car's glass material comments a key out; slashes in strings stay.
+        let v = lenient_json(
+            "{\r\n\t\"a\": 1,\r\n\t//\"cullmode\": \"nocull\",\r\n\t\"b\": \"x//y\" /* note */\r\n}",
+        )
+        .unwrap();
+        assert_eq!(v, serde_json::json!({"a": 1, "b": "x//y"}));
     }
 
     #[test]

@@ -93,9 +93,13 @@ impl Vfs {
             what: "missing file",
             value: path.to_owned(),
         })?;
-        serde_json::from_str(&text).map_err(|e| Error::Unsupported {
-            what: "invalid JSON",
-            value: format!("{path}: {e}"),
+        let text = text.trim_start_matches('\u{feff}');
+        serde_json::from_str(text).or_else(|e| {
+            // WE also reads comments, trailing commas and leading zeros.
+            crate::shader::decl::lenient_json(text).ok_or_else(|| Error::Unsupported {
+                what: "invalid JSON",
+                value: format!("{path}: {e}"),
+            })
         })
     }
 }
