@@ -39,6 +39,12 @@ No code-signing certificate yet.
 - **Releases**: pushing a `v*` tag equal to the workspace version runs
   `.github/workflows/release.yml`, which builds, signs the update file,
   writes `latest.json` and publishes the GitHub Release.
+- **winget**: package `karmanya007.Diorama` points at the release
+  installer (`nullsoft`, user scope, product code `Diorama`).
+  `scripts/winget-manifest.sh [version]` writes and validates the
+  manifests after a release; the maintainer submits them to
+  `microsoft/winget-pkgs` by pull request. winget users upgrade through
+  winget or the in-app updater; both run the same installer.
 
 ## Consequences
 
