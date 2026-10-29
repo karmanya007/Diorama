@@ -2,7 +2,7 @@
 
 All notable changes to Diorama are listed here. Versions follow [Semantic Versioning](https://semver.org); before 1.0, minor versions may change behaviour.
 
-## Unreleased
+## 0.2.0 (2026-10-29)
 
 - Reflective floors in 3D scenes (Wallpaper Engine's `reflected` objects): Fantastic Car's floor now reflects the car and Audiophile's the clouds, as in Wallpaper Engine.
 - Scene files with comments now load like in Wallpaper Engine: Fantastic Car (a default project) lost its whole car model to one commented-out line and now shows wheels, glass and interior.

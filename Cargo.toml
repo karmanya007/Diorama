@@ -23,7 +23,7 @@ members = [
 exclude = ["fuzz"]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/karmanya007/Diorama"
@@ -31,18 +31,18 @@ publish = false
 
 [workspace.dependencies]
 # internal
-diorama-core = { path = "crates/diorama-core", version = "0.1.1" }
-diorama-we = { path = "crates/diorama-we", version = "0.1.1" }
-diorama-library = { path = "crates/diorama-library", version = "0.1.1" }
-diorama-gpu = { path = "crates/diorama-gpu", version = "0.1.1" }
-diorama-ipc = { path = "crates/diorama-ipc", version = "0.1.1" }
-diorama-media = { path = "crates/diorama-media", version = "0.1.1" }
-diorama-particles = { path = "crates/diorama-particles", version = "0.1.1" }
-diorama-platform = { path = "crates/diorama-platform", version = "0.1.1" }
-diorama-render = { path = "crates/diorama-render", version = "0.1.1" }
-diorama-scene = { path = "crates/diorama-scene", version = "0.1.1" }
-diorama-script = { path = "crates/diorama-script", version = "0.1.1" }
-diorama-text = { path = "crates/diorama-text", version = "0.1.1" }
+diorama-core = { path = "crates/diorama-core", version = "0.2.0" }
+diorama-we = { path = "crates/diorama-we", version = "0.2.0" }
+diorama-library = { path = "crates/diorama-library", version = "0.2.0" }
+diorama-gpu = { path = "crates/diorama-gpu", version = "0.2.0" }
+diorama-ipc = { path = "crates/diorama-ipc", version = "0.2.0" }
+diorama-media = { path = "crates/diorama-media", version = "0.2.0" }
+diorama-particles = { path = "crates/diorama-particles", version = "0.2.0" }
+diorama-platform = { path = "crates/diorama-platform", version = "0.2.0" }
+diorama-render = { path = "crates/diorama-render", version = "0.2.0" }
+diorama-scene = { path = "crates/diorama-scene", version = "0.2.0" }
+diorama-script = { path = "crates/diorama-script", version = "0.2.0" }
+diorama-text = { path = "crates/diorama-text", version = "0.2.0" }
 
 # external
 anyhow = "1"
