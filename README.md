@@ -84,12 +84,12 @@ Measured against the author's own 80 Workshop items and Wallpaper Engine's defau
 |---|---|
 | Videos | 21 / 21 play (hardware decoding; unsupported codecs can be converted) |
 | Web wallpapers | 4 / 4 work (audio, media and property APIs, PerformanceMonitor widgets) |
-| Scenes | 55 / 55 import; compared frame by frame with Wallpaper Engine, 48 / 55 match closely (SSIM ≥ 0.90) and 35 / 55 very closely (≥ 0.95) |
+| Scenes | 55 / 55 import; compared frame by frame with Wallpaper Engine, 49 / 55 match closely (SSIM ≥ 0.90) and 38 / 55 very closely (≥ 0.95) |
 
 Known gaps:
 
-- planar reflections;
-- some camera fades;
+- camera fades between shots (three default projects);
+- scenes with many random particles never match frame by frame;
 - a few shader effects that rely on Direct3D 11 behaviour;
 - Wallpaper Engine's application wallpapers and plugins, which are not planned.
 
