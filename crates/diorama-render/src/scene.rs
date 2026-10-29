@@ -162,6 +162,8 @@ struct GpuPass {
     indices: Option<wgpu::Buffer>,
     /// Draws with the scene depth buffer (models).
     depth: bool,
+    /// Draws a reflected model mirrored into `targets[REFLECTION]`.
+    mirrored: bool,
     /// Uniform data changed outside the frame loop; upload before drawing.
     dirty: bool,
     /// (effect, pass) this GPU pass draws; `None` for albedo / composite.
@@ -195,6 +197,8 @@ struct GpuLayer {
     children: Vec<GpuLayer>,
     /// Particle simulation feeding this layer's passes (one per system).
     particles: Option<crate::particles::ParticleGpu>,
+    /// Its passes again, mirrored into the reflection (reflected models).
+    mirrored: Vec<GpuPass>,
     children_at: usize,
     blend: Blend,
     /// Samples `_rt_FullFrameBuffer`: snapshot the scene before running.
@@ -208,9 +212,27 @@ struct GpuLayer {
 }
 
 /// `targets[SCENE]` is the composited scene, `targets[FRAMEBUFFER]` its
-/// snapshot for layers that read what is below them.
+/// snapshot for layers that read what is below them, `targets[REFLECTION]`
+/// the reflected models drawn mirrored (1×1 when the scene has none).
 const SCENE: usize = 0;
 const FRAMEBUFFER: usize = 1;
+const REFLECTION: usize = 2;
+
+/// Negates y (row vectors).
+const FLIP_Y: Rows = [
+    [1.0, 0.0, 0.0, 0.0],
+    [0.0, -1.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0],
+    [0.0, 0.0, 0.0, 1.0],
+];
+
+/// The camera of the reflection: the world mirrored about y = 0, then the
+/// image flipped upside down. Floors sample it at `clip.xy * 0.5 + 0.5`,
+/// which reads texture rows from the top (WE's shaders target D3D), so WE's
+/// reflection is stored flipped. The two flips keep the winding.
+fn reflection_camera(camera: Rows) -> Rows {
+    mat_mul(mat_mul(FLIP_Y, camera), FLIP_Y)
+}
 
 pub struct SceneRenderer {
     size: [u32; 2],
@@ -238,6 +260,8 @@ pub struct SceneRenderer {
     camera_axes: Option<[[f32; 3]; 3]>,
     /// Depth buffer of the scene target (perspective scenes).
     depth: Option<wgpu::TextureView>,
+    /// Depth buffer of the reflection target (scenes with reflected models).
+    reflection_depth: Option<wgpu::TextureView>,
     clear: wgpu::Color,
     targets: Vec<Target>,
     programs: Vec<Option<Program>>,
@@ -579,6 +603,39 @@ impl SceneRenderer {
                 texture_frame: None,
             })
             .collect();
+        // A reflection only when something is reflected and something samples it.
+        let reflects = scene.camera.is_some()
+            && scene
+                .layers
+                .iter()
+                .any(|l| l.model.as_ref().is_some_and(|m| m.reflected))
+            && scene.layers.iter().any(|l| {
+                std::iter::once(&l.albedo)
+                    .chain(l.effects.iter().flat_map(|e| &e.passes))
+                    .any(|p| {
+                        p.textures
+                            .values()
+                            .any(|t| *t == TextureBinding::Reflection)
+                    })
+            });
+        let depth_view = |label: &str| {
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d {
+                        width: output[0],
+                        height: output[1],
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: DEPTH_FORMAT,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    view_formats: &[],
+                })
+                .create_view(&wgpu::TextureViewDescriptor::default())
+        };
         let mut renderer = Self {
             size: [scene.width, scene.height],
             shake: scene.shake,
@@ -599,24 +656,8 @@ impl SceneRenderer {
                     [world[r][0], world[r][1], world[r][2]]
                 }))
             }),
-            depth: scene.camera.map(|_| {
-                device
-                    .create_texture(&wgpu::TextureDescriptor {
-                        label: Some("scene depth"),
-                        size: wgpu::Extent3d {
-                            width: output[0],
-                            height: output[1],
-                            depth_or_array_layers: 1,
-                        },
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        format: DEPTH_FORMAT,
-                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                        view_formats: &[],
-                    })
-                    .create_view(&wgpu::TextureViewDescriptor::default())
-            }),
+            depth: scene.camera.map(|_| depth_view("scene depth")),
+            reflection_depth: reflects.then(|| depth_view("reflection depth")),
             clear: wgpu::Color {
                 r: f64::from(scene.clear_color[0]),
                 g: f64::from(scene.clear_color[1]),
@@ -626,6 +667,12 @@ impl SceneRenderer {
             targets: vec![
                 create_target(device, "scene", output, format),
                 create_target(device, "framebuffer", output, format),
+                create_target(
+                    device,
+                    "reflection",
+                    if reflects { output } else { [1, 1] },
+                    format,
+                ),
             ],
             programs,
             layers: Vec::new(),
@@ -1138,6 +1185,7 @@ impl SceneRenderer {
             owned: Vec::new(),
             passes,
             background: None,
+            mirrored: Vec::new(),
             particles: Some(ParticleGpu {
                 sim,
                 draws,
@@ -1277,6 +1325,23 @@ impl SceneRenderer {
             };
             let mut pass = self.build_pass(ctx, &plan)?;
             pass.load |= into_group;
+            // Reflected models also draw mirrored about y = 0 into the
+            // reflection, which floors sample at their screen position.
+            let reflected = layer.model.as_ref().is_some_and(|m| m.reflected);
+            let mirrored = if reflected && self.reflection_depth.is_some() && !into_group {
+                let plan = PassPlan {
+                    target: REFLECTION,
+                    geometry: Geometry::Direct {
+                        size: layer.size,
+                        model: placement(layer),
+                        camera: reflection_camera(camera),
+                    },
+                    ..plan
+                };
+                self.build_pass(ctx, &plan).into_iter().collect()
+            } else {
+                Vec::new()
+            };
             return Some(GpuLayer {
                 index,
                 frame,
@@ -1285,6 +1350,7 @@ impl SceneRenderer {
                 passes: vec![pass],
                 background: None,
                 particles: None,
+                mirrored,
                 composite: None,
                 children: Vec::new(),
                 children_at: 0,
@@ -1493,6 +1559,7 @@ impl SceneRenderer {
                             passes,
                             background,
                             particles: None,
+                            mirrored: Vec::new(),
                             composite: None,
                             children,
                             children_at,
@@ -1561,6 +1628,7 @@ impl SceneRenderer {
                     passes,
                     background,
                     particles: None,
+                    mirrored: Vec::new(),
                     composite: None,
                     children,
                     children_at,
@@ -1607,6 +1675,7 @@ impl SceneRenderer {
             passes,
             background,
             particles: None,
+            mirrored: Vec::new(),
             composite: Some((composite, composite_vertices, frame.target, camera)),
             children,
             children_at,
@@ -1641,6 +1710,7 @@ impl SceneRenderer {
                     .get(name)
                     .map_or(Source::Placeholder, |t| Source::Target(*t)),
                 Some(TextureBinding::FrameBuffer) => Source::Target(FRAMEBUFFER),
+                Some(TextureBinding::Reflection) => Source::Target(REFLECTION),
                 Some(TextureBinding::TextAtlas) if plan.atlas.is_some() => Source::Atlas,
                 Some(TextureBinding::System(name)) => Source::System(name.clone()),
                 Some(TextureBinding::TextAtlas) | None => Source::Placeholder,
@@ -1939,6 +2009,7 @@ impl SceneRenderer {
             })
         });
         let depth = mesh.is_some() && self.depth.is_some();
+        let mirrored = plan.target == REFLECTION;
         let pipeline = match mesh {
             Some(m) if depth => create_pipeline(
                 device,
@@ -1980,9 +2051,11 @@ impl SceneRenderer {
                 Geometry::Direct { model, camera, .. } => Some((model, camera)),
                 _ => None,
             },
-            scene_camera: matches!(plan.geometry, Geometry::Direct { camera, .. } if camera == self.camera),
+            scene_camera: matches!(plan.geometry, Geometry::Direct { camera, .. }
+                if camera == if mirrored { reflection_camera(self.camera) } else { self.camera }),
             indices,
             depth,
+            mirrored,
             dirty: false,
             source: None,
             puppet_uv: skinned.map(|_| uv_max),
@@ -2000,7 +2073,7 @@ impl SceneRenderer {
     pub fn read_targets(&self, gpu: &Gpu) -> Vec<(String, [u32; 2], Vec<u8>)> {
         self.targets
             .iter()
-            .skip(FRAMEBUFFER + 1)
+            .skip(REFLECTION + 1)
             .filter_map(|t| Some((t.label.clone(), t.size, read_target(gpu, t)?)))
             .collect()
     }
@@ -2124,7 +2197,16 @@ impl SceneRenderer {
             shake,
             scene_load: &mut scene_load,
             depth_load: wgpu::LoadOp::Clear(0.0),
+            reflection_load: wgpu::LoadOp::Clear(self.clear),
+            reflection_depth_load: wgpu::LoadOp::Clear(0.0),
         };
+        // The reflection first: floors drawn with the scene sample it.
+        for layer in layers.iter_mut().filter(|l| l.visible) {
+            let offset = layer.offset;
+            for pass in &mut layer.mirrored {
+                self.encode_pass(&mut encoder, pass, (true, offset), None, &mut frame);
+            }
+        }
         for layer in &mut layers {
             self.encode_layer(&mut encoder, layer, &mut frame);
         }
@@ -2164,6 +2246,9 @@ struct FrameState<'a> {
     scene_load: &'a mut wgpu::LoadOp<wgpu::Color>,
     /// The scene depth buffer is cleared by the first model drawn.
     depth_load: wgpu::LoadOp<f32>,
+    /// The reflection and its depth are cleared by the first mirrored draw.
+    reflection_load: wgpu::LoadOp<wgpu::Color>,
+    reflection_depth_load: wgpu::LoadOp<f32>,
 }
 
 impl SceneRenderer {
@@ -2387,10 +2472,10 @@ impl SceneRenderer {
             let mut dirty = layout.write(buf, "g_Time", &[inputs.time]);
             let follow = self.camera_moved && pass.scene_camera;
             if let (true, Some((base, camera))) = (moved || follow, pass.placement) {
-                let camera = if pass.scene_camera {
-                    self.camera
-                } else {
-                    camera
+                let camera = match (pass.scene_camera, pass.mirrored) {
+                    (true, true) => reflection_camera(self.camera),
+                    (true, false) => self.camera,
+                    (false, _) => camera,
                 };
                 let model = offset_transform(base, offset);
                 let mvp = upload_matrix(mat_mul(model, camera));
@@ -2442,13 +2527,19 @@ impl SceneRenderer {
         pass.dirty = false;
         let load = if pass.target == SCENE {
             std::mem::replace(f.scene_load, wgpu::LoadOp::Load)
+        } else if pass.target == REFLECTION {
+            std::mem::replace(&mut f.reflection_load, wgpu::LoadOp::Load)
         } else if pass.load {
             wgpu::LoadOp::Load
         } else {
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
         };
-        let depth = match (&self.depth, pass.depth) {
-            (Some(view), true) => {
+        let depth = match (&self.depth, &self.reflection_depth, pass.depth) {
+            (_, Some(view), true) if pass.target == REFLECTION => {
+                let load = std::mem::replace(&mut f.reflection_depth_load, wgpu::LoadOp::Load);
+                Some((view, load))
+            }
+            (Some(view), _, true) => {
                 let load = std::mem::replace(&mut f.depth_load, wgpu::LoadOp::Load);
                 Some((view, load))
             }
@@ -3349,6 +3440,17 @@ mod tests {
         assert!((rows[0][0] - 0.001042).abs() < 1e-6);
         assert!((rows[3][0] - 0.0125).abs() < 1e-4);
         assert!((rows[3][1] + 0.018519).abs() < 1e-4);
+    }
+
+    #[test]
+    fn reflection_mirrors_the_world_and_flips_the_image() {
+        // A camera that lifts everything by 1: a point 0.5 above the floor
+        // lands at clip y 1.5; its reflection (0.5 below) at 0.5, flipped.
+        let mut camera = IDENTITY_ROWS;
+        camera[3][1] = 1.0;
+        let clip_y = |m: Rows, y: f32| y * m[1][1] + m[3][1];
+        assert!((clip_y(camera, 0.5) - 1.5).abs() < 1e-6);
+        assert!((clip_y(reflection_camera(camera), 0.5) + 0.5).abs() < 1e-6);
     }
 
     #[test]

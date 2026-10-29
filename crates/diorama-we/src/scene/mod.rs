@@ -584,6 +584,7 @@ impl Importer<'_> {
                 // draws write; the translucent sun would hide the mountains).
                 depth_write: raster["depthwrite"].as_str() != Some("disabled")
                     && blend == diorama_scene::Blend::Opaque,
+                reflected: object["reflected"].as_bool() == Some(true),
             };
             self.scene.layers.push(ImageLayer {
                 name: if many {
@@ -1656,6 +1657,9 @@ impl Importer<'_> {
         }
         if name == "_rt_FullFrameBuffer" {
             return TextureBinding::FrameBuffer;
+        }
+        if name == "_rt_Reflection" {
+            return TextureBinding::Reflection;
         }
         if name == "_rt_MipMappedFrameBuffer" {
             // Same image; WE samples its mips for blur (we have none yet).

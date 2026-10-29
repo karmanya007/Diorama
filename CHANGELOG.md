@@ -4,6 +4,7 @@ All notable changes to Diorama are listed here. Versions follow [Semantic Versio
 
 ## Unreleased
 
+- Reflective floors in 3D scenes (Wallpaper Engine's `reflected` objects): Fantastic Car's floor now reflects the car and Audiophile's the clouds, as in Wallpaper Engine.
 - Scene files with comments now load like in Wallpaper Engine: Fantastic Car (a default project) lost its whole car model to one commented-out line and now shows wheels, glass and interior.
 - New pause rule action **Stop and free memory** (like Wallpaper Engine's "Stop (free memory)"): when it applies to every monitor a wallpaper shows on, the wallpaper is unloaded (video memory, web page, sound) and comes back when one of those monitors would play again. The Gaming preset now stops behind fullscreen apps instead of pausing. `diorama policy --on-fullscreen stop` sets it from the command line; `diorama status` shows stopped monitors.
 - Web wallpapers now follow the frame rate cap (Settings → When to pause), like scenes. They used to draw at the monitor's refresh rate: a 180 Hz display ran pages six times as often as the default 30 fps.

@@ -454,6 +454,9 @@ pub struct Model {
     pub cull: Cull,
     pub depth_test: bool,
     pub depth_write: bool,
+    /// Also drawn mirrored about the y = 0 plane into
+    /// [`TextureBinding::Reflection`] (WE objects marked `reflected`).
+    pub reflected: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -526,6 +529,9 @@ pub enum TextureBinding {
     Fbo(String),
     /// Everything composited below this layer so far (`_rt_FullFrameBuffer`).
     FrameBuffer,
+    /// The reflected models drawn mirrored about y = 0 this frame, at
+    /// screen size (`_rt_Reflection`; floors sample it at their screen position).
+    Reflection,
     /// The glyph atlas of the layer's text (built by the renderer).
     TextAtlas,
     /// An image the host provides and updates at runtime, by name
