@@ -31,7 +31,7 @@ Diorama is an independent project. It is not affiliated with or endorsed by Wall
   - presets: Balanced, Quality, Gaming, Battery.
 - **Robust desktop integration**: works on Windows 11 24H2 with desktop icons hidden, recovers when Explorer restarts or the graphics driver resets, keeps playing when the audio device changes, and follows monitors as they are plugged in or rearranged.
 - **Video help**: detects videos your graphics card cannot decode (which would load the CPU) and offers to convert them once.
-- **Private by default**: no telemetry, no accounts. Web wallpapers are offline unless you allow a wallpaper to use the internet; updates are checked only when you click "Check for updates".
+- **Private by default**: no telemetry, no accounts. Web wallpapers are offline unless you allow a wallpaper to use the internet; updates are checked only when you click "Check for updates". See [PRIVACY.md](PRIVACY.md).
 - **Notification-area icon**: open Diorama, next wallpaper, pause / resume, quit.
 - **Command line**: everything the app does is also available from `diorama`.
 
