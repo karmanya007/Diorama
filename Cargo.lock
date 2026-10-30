@@ -1013,6 +1013,7 @@ dependencies = [
  "diorama-library",
  "diorama-platform",
  "serde_json",
+ "tauri-winres",
 ]
 
 [[package]]
@@ -1158,6 +1159,7 @@ dependencies = [
  "diorama-we",
  "raw-window-handle",
  "serde_json",
+ "tauri-winres",
  "tracing",
  "tracing-subscriber",
  "webview2-com",
@@ -1184,6 +1186,7 @@ dependencies = [
  "image",
  "serde",
  "serde_json",
+ "tauri-winres",
  "tracing",
  "tracing-subscriber",
 ]

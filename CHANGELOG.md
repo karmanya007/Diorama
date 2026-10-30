@@ -2,6 +2,10 @@
 
 All notable changes to Diorama are listed here. Versions follow [Semantic Versioning](https://semver.org); before 1.0, minor versions may change behaviour.
 
+## Unreleased
+
+- Diorama's background programs (`dioramad`, `diorama-webhost`, `diorama`) now carry their name, version and icon, so Task Manager lists them as "Diorama wallpaper daemon", "Diorama web wallpaper host" and "Diorama command line" instead of bare file names.
+
 ## 0.2.0 (2026-10-29)
 
 - Reflective floors in 3D scenes (Wallpaper Engine's `reflected` objects): Fantastic Car's floor now reflects the car and Audiophile's the clouds, as in Wallpaper Engine.

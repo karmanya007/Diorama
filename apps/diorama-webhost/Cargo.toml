@@ -27,3 +27,6 @@ windows = { workspace = true, features = ["Win32_UI_Shell", "Win32_System_Com_St
 
 [lints]
 workspace = true
+
+[target.'cfg(windows)'.build-dependencies]
+tauri-winres = "0.3"

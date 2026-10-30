@@ -20,3 +20,6 @@ serde_json.workspace = true
 
 [lints]
 workspace = true
+
+[target.'cfg(windows)'.build-dependencies]
+tauri-winres = "0.3"
