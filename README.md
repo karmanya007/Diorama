@@ -4,7 +4,7 @@
 
 Diorama draws animated wallpapers behind your desktop icons: Wallpaper Engine scenes, videos and web wallpapers from your local Steam Workshop folder, Wallpaper Engine's own projects, or files from any folder you add. It is written in Rust on [wgpu](https://wgpu.rs), uses a small [Tauri](https://tauri.app) app for its window, and never needs Steam to be running.
 
-> **Status: early preview (Windows only).** Videos, web wallpapers and images are solid; most scenes look right, some still differ from Wallpaper Engine (see [Compatibility](#compatibility)). Linux and macOS ports are planned.
+> **Status: 1.0 for Windows.** Videos, web wallpapers and images are solid; most scenes look right, some still differ from Wallpaper Engine (see [Compatibility](#compatibility)). Linux and macOS ports are planned.
 
 Diorama is an independent project. It is not affiliated with or endorsed by Wallpaper Engine, its developers, or Valve.
 
@@ -174,7 +174,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) before sending changes.
 
 ## Roadmap
 
-- **Windows 1.0**: signed installer, winget, remaining scene differences.
+- **Windows**: a code-signed installer, the winget listing, remaining scene differences.
 - **Linux**:
   - Wayland (wlr-layer-shell compositors, KDE, GNOME) and X11;
   - VA-API video, PipeWire audio;
