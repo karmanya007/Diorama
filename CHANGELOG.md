@@ -5,6 +5,7 @@ All notable changes to Diorama are listed here. Versions follow [Semantic Versio
 ## Unreleased
 
 - Diorama's background programs (`dioramad`, `diorama-webhost`, `diorama`) now carry their name, version and icon, so Task Manager lists them as "Diorama wallpaper daemon", "Diorama web wallpaper host" and "Diorama command line" instead of bare file names.
+- Videos that Windows cannot decode at all (such as 10-bit H.264) are now refused with a clear reason, and the wallpaper on screen stays. They used to show a blank wallpaper reported as playing, and offered a conversion that could only fail.
 
 ## 0.2.0 (2026-10-29)
 

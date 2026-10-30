@@ -157,8 +157,14 @@ impl Wallpaper {
                 // A copy converted for hardware decoding plays instead, if made.
                 let copy = crate::convert::existing_copy(path);
                 let play = copy.as_deref().unwrap_or(path);
+                let probe = diorama_media::probe(play).ok();
+                // Fail here, so the wallpaper on screen stays, instead of
+                // showing a player whose first frame fails.
+                if let Some(p) = probe.as_ref().filter(|p| !p.decodable) {
+                    return Err(diorama_media::Error::Undecodable(p.codec.clone()).into());
+                }
                 decode = Decode {
-                    software: diorama_media::probe(play).is_ok_and(|p| !p.hardware),
+                    software: probe.is_some_and(|p| !p.hardware),
                     converted: copy.is_some(),
                 };
                 if decode.software {

@@ -9,6 +9,7 @@ fn converts_to_h264_that_decodes_on_the_gpu() {
     let src = PathBuf::from(std::env::var("DIORAMA_TEST_VIDEO").expect("DIORAMA_TEST_VIDEO"));
     let before = diorama_media::probe(&src).unwrap();
     println!("source: {before:?}");
+    assert!(before.decodable);
     // `DIORAMA_TEST_OUT` keeps the copy there for a look.
     let keep = std::env::var("DIORAMA_TEST_OUT").ok().map(PathBuf::from);
     let dst = keep.clone().unwrap_or_else(|| {
@@ -57,4 +58,16 @@ fn stopping_early_is_cancelled() {
         "{result:?}"
     );
     let _ = std::fs::remove_file(&dst);
+}
+
+/// A video Windows has no decoder for (`DIORAMA_TEST_UNDECODABLE_VIDEO`, e.g.
+/// 10-bit H.264) is reported as such instead of failing on its first frame.
+#[test]
+#[ignore = "needs DIORAMA_TEST_UNDECODABLE_VIDEO"]
+fn undecodable_video_is_reported() {
+    let src =
+        std::env::var("DIORAMA_TEST_UNDECODABLE_VIDEO").expect("DIORAMA_TEST_UNDECODABLE_VIDEO");
+    let probe = diorama_media::probe(src.as_ref()).unwrap();
+    println!("{probe:?}");
+    assert!(!probe.hardware && !probe.decodable);
 }

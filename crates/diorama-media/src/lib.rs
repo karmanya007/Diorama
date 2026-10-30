@@ -44,6 +44,11 @@ pub enum Error {
     Audio(String),
     #[error("cancelled")]
     Cancelled,
+    #[error(
+        "Windows cannot decode this video ({0}), so it can be neither played nor converted; \
+         re-encode it as 8-bit H.264 with a video converter"
+    )]
+    Undecodable(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -218,6 +223,10 @@ pub struct VideoProbe {
     pub height: u32,
     /// The GPU decodes it (DXVA); else the CPU does.
     pub hardware: bool,
+    /// Windows decodes it at all. `false` for formats without a Windows
+    /// decoder (10-bit H.264): such videos can be neither played nor
+    /// converted.
+    pub decodable: bool,
 }
 
 /// Whether `path`'s video decodes on the GPU here (P4).

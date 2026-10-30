@@ -74,7 +74,44 @@ pub(crate) fn probe(path: &Path) -> Result<VideoProbe> {
             width,
             height,
             hardware,
+            decodable: hardware || decodes_first_frame(path),
         })
+    }
+}
+
+/// Whether Windows' own decoders turn `path`'s first video frame into NV12,
+/// as playing and converting need. The software H.264 decoder accepts a
+/// 10-bit stream and only fails on its first frame (`CopyDecodedFrame`).
+fn decodes_first_frame(path: &Path) -> bool {
+    // SAFETY: COM calls on interfaces we own.
+    unsafe {
+        let first = || -> Option<bool> {
+            let attrs = attributes().ok()?;
+            attrs
+                .SetUINT32(&MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, 1)
+                .ok()?;
+            let reader =
+                MFCreateSourceReaderFromURL(&HSTRING::from(path.as_os_str()), &attrs).ok()?;
+            reader
+                .SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS.0 as u32, false)
+                .ok()?;
+            reader.SetStreamSelection(VIDEO_STREAM, true).ok()?;
+            let nv12 = media_type(&MFMediaType_Video, &MFVideoFormat_NV12).ok()?;
+            reader.SetCurrentMediaType(VIDEO_STREAM, None, &nv12).ok()?;
+            let (mut flags, mut sample) = (0u32, None);
+            reader
+                .ReadSample(
+                    VIDEO_STREAM,
+                    0,
+                    None,
+                    Some(&mut flags),
+                    None,
+                    Some(&mut sample),
+                )
+                .ok()?;
+            Some(flags & MF_SOURCE_READERF_ERROR.0 as u32 == 0 && sample.is_some())
+        };
+        first().unwrap_or(false)
     }
 }
 
@@ -82,7 +119,7 @@ pub(crate) fn probe(path: &Path) -> Result<VideoProbe> {
 fn decoder_profiles(subtype: GUID, profile: Option<u32>) -> (String, Vec<(GUID, DXGI_FORMAT)>) {
     let (name, profiles): (&str, Vec<(GUID, DXGI_FORMAT)>) = match subtype {
         s if s == MFVideoFormat_H264 => match profile {
-            Some(p) if H264_BEYOND_HIGH.contains(&p) => ("H.264 (10-bit or 4:2:2/4:4:4)", vec![]),
+            Some(p) if H264_BEYOND_HIGH.contains(&p) => ("H.264 10-bit or 4:2:2/4:4:4", vec![]),
             _ => (
                 "H.264",
                 vec![(D3D11_DECODER_PROFILE_H264_VLD_NOFGT, DXGI_FORMAT_NV12)],

@@ -1227,6 +1227,9 @@ impl Daemon<'_> {
         let video = session::wallpaper_path(path, Some(MediaKind::Video))
             .with_context(|| format!("no video in {}", path.display()))?;
         let probe = diorama_media::probe(&video)?;
+        if !probe.decodable {
+            return Err(diorama_media::Error::Undecodable(probe.codec).into());
+        }
         let outputs: Vec<(u32, u32)> = self
             .platform
             .outputs()?
