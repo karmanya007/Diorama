@@ -53,8 +53,6 @@ Diorama is an independent project. It is not affiliated with or endorsed by Wall
 
 **Uninstall**: Windows Settings → Apps → Diorama. Tick "Delete the application data" to also remove Diorama's settings and caches.
 
-**Code signing**: Windows releases are being moved to code signing through the [SignPath Foundation](https://signpath.org), which provides free signing certificates to open-source projects (application pending). Until then the installer is unsigned; see the SmartScreen note above.
-
 ## Using Diorama
 
 - **Library**: lists your Workshop items, Wallpaper Engine's projects and any folders you add (Settings → Library folders). Select a wallpaper to see its details, preview and settings, then choose the monitors and press **Show**.
