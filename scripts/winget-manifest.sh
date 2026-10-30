@@ -18,7 +18,7 @@ out="${2:-$root/target/winget}"
 id=karmanya007.Diorama
 repo=https://github.com/karmanya007/Diorama
 url="$repo/releases/download/v$version/Diorama_${version}_x64-setup.exe"
-schema=1.9.0
+schema=1.12.0
 
 # The release date from the changelog heading `## <version> (YYYY-MM-DD)`.
 release_date="$(sed -n "s/^## ${version//./\\.} (\([0-9-]*\)).*/\1/p" "$root/CHANGELOG.md" | head -n1)"
