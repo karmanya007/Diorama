@@ -14,6 +14,7 @@ image.workspace = true
 diorama-core.workspace = true
 diorama-gpu.workspace = true
 diorama-ipc.workspace = true
+diorama-library.workspace = true
 diorama-media.workspace = true
 diorama-platform.workspace = true
 diorama-render.workspace = true

@@ -39,13 +39,24 @@ jobs:
         run: |
           ./scripts/fetch-dxc.ps1
           "DIORAMA_DXC=$PWD\.tools\dxc\dxc.exe" >> $env:GITHUB_ENV
+      # The Linux release is a 515 MB archive: kept between runs.
+      - if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: .tools/dxc
+          key: dxc-linux-${{ hashFiles('scripts/fetch-dxc.sh') }}
+      - if: runner.os == 'Linux'
+        run: |
+          bash scripts/fetch-dxc.sh
+          echo "DIORAMA_DXC=$PWD/.tools/dxc/bin/dxc" >> "$GITHUB_ENV"
       # diorama-ui (Tauri) builds against WebKitGTK on Linux; media uses the
-      # system's GStreamer and (as cpal's fallback) ALSA.
+      # system's GStreamer and (as cpal's fallback) ALSA; lavapipe gives the
+      # scene goldens a Vulkan adapter.
       - if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev \
-            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libasound2-dev
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libasound2-dev mesa-vulkan-drivers
       - run: cargo test --workspace
 
   build-macos:

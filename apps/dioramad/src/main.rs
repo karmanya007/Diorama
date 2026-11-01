@@ -58,8 +58,9 @@ struct Args {
     /// Web wallpaper at start-up: a Wallpaper Engine web project folder or an HTML page.
     #[arg(long)]
     web: Option<PathBuf>,
-    /// Wallpaper Engine `assets` folder (built-in shaders and effects used by scenes).
-    #[arg(long, default_value = headless::DEFAULT_WE_ASSETS)]
+    /// Wallpaper Engine `assets` folder (built-in shaders and effects used by
+    /// scenes); found through Steam's library folders by default.
+    #[arg(long, default_value_os_t = headless::default_we_assets())]
     we_assets: PathBuf,
     /// Render one frame of `--scene` offscreen to this PNG and exit.
     #[arg(long, requires = "scene")]
@@ -276,7 +277,6 @@ fn main() -> Result<()> {
     if adopted {
         tracing::info!("moved the settings from before the rename to Diorama");
     }
-    let platform = Platform::new().context("platform init")?;
     // DXC runs per new shader variant; no console window may flash.
     diorama_gpu::shader::set_process_hook(diorama_platform::no_console);
 
@@ -310,6 +310,8 @@ fn main() -> Result<()> {
         );
     }
 
+    // Offscreen frames above need no desktop (CI, no compositor).
+    let platform = Platform::new().context("platform init")?;
     if args.list_outputs {
         for o in platform.outputs()? {
             println!(

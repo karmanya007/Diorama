@@ -44,6 +44,16 @@ impl Roots {
             folders: Vec::new(),
         }
     }
+
+    /// Wallpaper Engine's install folder (`steamapps/common/wallpaper_engine`)
+    /// in the first library holding it. On Linux Steam installs it there too
+    /// (it runs through Proton).
+    pub fn we_install(&self) -> Option<PathBuf> {
+        self.steam_libraries
+            .iter()
+            .map(|l| l.join("steamapps").join("common").join("wallpaper_engine"))
+            .find(|d| d.join("assets").is_dir())
+    }
 }
 
 /// What a wallpaper is.

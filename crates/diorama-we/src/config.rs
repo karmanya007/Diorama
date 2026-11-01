@@ -40,6 +40,21 @@ fn normalise(p: &str) -> String {
     p.replace('\\', "/").trim_end_matches('/').to_lowercase()
 }
 
+/// What identifies a wallpaper file across systems: the part from
+/// `steamapps/` on inside a Steam library (the same item read through
+/// `/mnt/c` in WSL, or by WE under Proton), else the whole path, with
+/// Wine's `Z:` drive (the Linux root) as `/`.
+fn key(path: &str) -> String {
+    let p = normalise(path);
+    if let Some(i) = p.find("/steamapps/") {
+        return p[i..].to_owned();
+    }
+    match p.strip_prefix("z:/") {
+        Some(rest) => format!("/{rest}"),
+        None => p,
+    }
+}
+
 /// Display-placement keys, which Diorama applies itself (`alignmentfliph`,
 /// the horizontal flip, stays: web pages apply it).
 const PLACEMENT: [&str; 5] = [
@@ -117,7 +132,7 @@ fn project_file(dir: &Path) -> Option<String> {
 
 /// `<user>.wproperties[<wallpaper file>].Monitor<n>` for `wallpaper`.
 fn monitor_entry<'c>(config: &'c Value, wallpaper: &Path, monitor: usize) -> Option<&'c Value> {
-    let wanted = normalise(&wallpaper.to_string_lossy());
+    let wanted = key(&wallpaper.to_string_lossy());
     // A scene folder is stored as its scene.pkg / scene.json, or the file
     // its project.json names (`<name>.json` in some of WE's own projects).
     let mut candidates = vec![
@@ -134,7 +149,7 @@ fn monitor_entry<'c>(config: &'c Value, wallpaper: &Path, monitor: usize) -> Opt
             continue;
         };
         for (path, entry) in props {
-            if !candidates.contains(&normalise(path)) {
+            if !candidates.contains(&key(path)) {
                 continue;
             }
             return entry.get(format!("Monitor{monitor}"));
@@ -173,6 +188,31 @@ mod tests {
         );
         assert_eq!(alignment_in(&config, Path::new("C:/W/431960/1"), 1), None);
         assert_eq!(alignment_in(&config, Path::new("C:/W/431960/9"), 0), None);
+    }
+
+    #[test]
+    fn same_item_matches_across_systems() {
+        let config = json!({"Alice": {"wproperties": {
+            "C:/Program Files (x86)/Steam/steamapps/workshop/content/431960/7/scene.pkg":
+                {"Monitor0": {"alignment": 2}},
+            "Z:/home/me/Wallpapers/mine/scene.json": {"Monitor0": {"alignment": 4}}
+        }}});
+        // WSL reading the Windows library, and a Linux Steam library.
+        for dir in [
+            "/mnt/c/Program Files (x86)/Steam/steamapps/workshop/content/431960/7",
+            "/home/me/.local/share/Steam/steamapps/workshop/content/431960/7",
+        ] {
+            assert_eq!(
+                alignment_in(&config, Path::new(dir), 0),
+                Some(Alignment::Stretch),
+                "{dir}"
+            );
+        }
+        // WE under Proton names Linux folders through Wine's Z: drive.
+        assert!(matches!(
+            alignment_in(&config, Path::new("/home/me/Wallpapers/mine"), 0),
+            Some(Alignment::Custom { .. })
+        ));
     }
 
     #[test]

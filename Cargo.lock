@@ -1212,6 +1212,7 @@ dependencies = [
  "diorama-core",
  "diorama-gpu",
  "diorama-ipc",
+ "diorama-library",
  "diorama-media",
  "diorama-platform",
  "diorama-render",

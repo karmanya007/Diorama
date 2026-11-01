@@ -12,9 +12,19 @@ use diorama_gpu::{Gpu, GpuOptions};
 use diorama_render::scene::{FrameInputs, SceneRenderer};
 use diorama_render::{FitMode, ImageBlit, Rect, read_rgba8, render_size};
 
-/// Default `<WE install>/assets` (built-in shaders, effects, `util/*`).
+/// Steam's default `<WE install>/assets` on Windows (built-in shaders,
+/// effects, `util/*`).
 pub const DEFAULT_WE_ASSETS: &str =
     r"C:\Program Files (x86)\Steam\steamapps\common\wallpaper_engine\assets";
+
+/// `<WE install>/assets` from Steam's library folders, else
+/// [`DEFAULT_WE_ASSETS`].
+pub fn default_we_assets() -> PathBuf {
+    diorama_platform::steam_dir()
+        .map(|steam| diorama_library::Roots::from_steam(&steam))
+        .and_then(|roots| roots.we_install())
+        .map_or_else(|| PathBuf::from(DEFAULT_WE_ASSETS), |d| d.join("assets"))
+}
 
 pub fn shader_compiler() -> Result<ShaderCompiler> {
     let cache = diorama_platform::cache_dir().map(|d| d.join("shaders"));

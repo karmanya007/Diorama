@@ -2,7 +2,8 @@
 //! uniform-buffer reflection.
 //!
 //! DXC is an external tool for now: `DIORAMA_DXC`, then `dxc/dxc.exe` or
-//! `dxc.exe` beside the running executable, then the repository's
+//! `dxc.exe` beside the running executable (`dxc/bin/dxc` on Linux, whose
+//! release finds `libdxcompiler.so` in `../lib`), then the repository's
 //! `.tools/dxc` above it (development builds), then `dxc` on `PATH`. Compiled
 //! SPIR-V is cached by a hash of (compiler flags, entry, profile, source), so
 //! DXC only runs the first time a shader variant is seen.
@@ -15,7 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ShaderError {
-    #[error("DXC not found (set DIORAMA_DXC to dxc.exe)")]
+    #[error("DXC not found (set DIORAMA_DXC to the dxc program)")]
     NoCompiler,
     #[error("DXC failed to start: {0}")]
     Launch(std::io::Error),
@@ -125,12 +126,15 @@ impl ShaderCompiler {
                 candidates.push(dir.join("dxc").join(name));
                 candidates.push(dir.join(name));
             }
+            candidates.push(dir.join("dxc").join("bin").join("dxc"));
             // Development builds (`target/<profile>/`): the repository's
             // pinned copy from scripts/fetch-dxc.
             for up in dir.ancestors().skip(1).take(3) {
+                let tools = up.join(".tools").join("dxc");
                 for name in ["dxc", "dxc.exe"] {
-                    candidates.push(up.join(".tools").join("dxc").join(name));
+                    candidates.push(tools.join(name));
                 }
+                candidates.push(tools.join("bin").join("dxc"));
             }
         }
         if let Some(found) = candidates.into_iter().find(|p| p.is_file()) {

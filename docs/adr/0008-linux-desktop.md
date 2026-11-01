@@ -88,6 +88,14 @@ implement `wlr-layer-shell`, GNOME does not, and X11 sessions remain.
   list). KDE, waybar and most panels host it; GNOME needs the AppIndicator
   extension; without a host the icon is skipped with a log line, as on
   Windows without a notification area.
+- **Scenes** use the same DXC release (`scripts/fetch-dxc.sh`) and the
+  Wallpaper Engine install Steam keeps for Proton, found through Steam's
+  library folders. WE's `config.json` names wallpapers by Windows or Wine
+  paths (`C:/…`, `Z:/home/…`); entries match from `steamapps/` on, so the
+  user's choices apply whichever system reads them. Headless frames
+  (`--frame-out`) need no desktop. Corpus goldens on lavapipe equal
+  Windows' (mean SSIM 0.9369 on both over 53 captures, largest difference
+  0.022) when run in the same time zone, which time-of-day scenes follow.
 - **No OS fallback wallpaper (P14) yet**: there is no common API. A
   wallpaper client like `swaybg` would take a background-layer surface that
   can stack above Diorama's, and writing GNOME's or Plasma's own wallpaper
