@@ -1,13 +1,19 @@
 //! Placeholder until the Linux (Phase 7) and macOS (Phase 8) backends exist.
-//! Keeps the workspace building and testable on those platforms.
+//! Keeps the workspace building and testable on those platforms; Linux uses
+//! its own `Platform` already and the rest of this file until replaced.
 
+#[cfg(not(target_os = "linux"))]
 use std::time::Duration;
 
-use crate::{Coverage, DesktopEvent, Error, OutputInfo, Result, SurfaceHandles};
+#[cfg(not(target_os = "linux"))]
+use crate::{Coverage, DesktopEvent, OutputInfo, SurfaceHandles};
+use crate::{Error, Result};
 
+#[cfg(not(target_os = "linux"))]
 #[derive(Debug)]
 pub struct Platform;
 
+#[cfg(not(target_os = "linux"))]
 impl Platform {
     pub fn new() -> Result<Self> {
         Err(Error::Unsupported)
@@ -93,17 +99,21 @@ pub fn set_os_wallpaper(_image: &std::path::Path, _span: bool) -> Result<()> {
     Err(Error::Unsupported)
 }
 
+#[cfg(not(target_os = "linux"))]
 #[derive(Debug, Clone)]
 pub struct Waker;
 
+#[cfg(not(target_os = "linux"))]
 impl Waker {
     pub fn wake(&self) {}
 }
 
 /// Uninhabited: no wallpaper windows exist on unsupported platforms.
+#[cfg(not(target_os = "linux"))]
 #[derive(Debug)]
 pub enum WallpaperWindow {}
 
+#[cfg(not(target_os = "linux"))]
 impl WallpaperWindow {
     pub fn raise(&self) {
         match *self {}

@@ -21,14 +21,23 @@ pub use windows::{
     set_autostart, set_os_wallpaper, steam_dir, ui_language,
 };
 
+#[cfg(target_os = "linux")]
+mod linux;
+
+#[cfg(target_os = "linux")]
+pub use linux::{Platform, Waker, WallpaperWindow};
+
 #[cfg(not(windows))]
 mod unsupported;
 
+#[cfg(not(any(windows, target_os = "linux")))]
+pub use unsupported::{Platform, Waker, WallpaperWindow};
+
 #[cfg(not(windows))]
 pub use unsupported::{
-    MediaWatcher, Platform, ProcessMonitor, SystemMonitor, Waker, WallpaperWindow, autostart,
-    cache_dir, config_dir, day_fraction, detach_console, legacy_config_dir, no_console,
-    set_autostart, set_os_wallpaper, steam_dir, ui_language,
+    MediaWatcher, ProcessMonitor, SystemMonitor, autostart, cache_dir, config_dir, day_fraction,
+    detach_console, legacy_config_dir, no_console, set_autostart, set_os_wallpaper, steam_dir,
+    ui_language,
 };
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

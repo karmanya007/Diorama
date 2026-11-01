@@ -21,5 +21,14 @@ windows = { workspace = true, features = [
     "Win32_System_WindowsProgramming",
 ] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+smithay-client-toolkit = { version = "0.21", default-features = false }
+wayland-client = "0.31"
+# `client_system`: libwayland-client's display pointer, which Vulkan's
+# Wayland surfaces need.
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+rustix = { version = "1", features = ["event"] }
+
 [lints]
 workspace = true
