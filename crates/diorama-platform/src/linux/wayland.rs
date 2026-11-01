@@ -12,9 +12,10 @@ use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
+use std::path::Path;
 use std::ptr::NonNull;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use raw_window_handle::{
@@ -61,6 +62,8 @@ pub struct Platform {
     /// Read end of the waker's socket pair (polled with the connection).
     wake_rx: UnixStream,
     wake_tx: Arc<UnixStream>,
+    /// Events from other threads (logind).
+    shared: Arc<Mutex<Vec<DesktopEvent>>>,
 }
 
 #[derive(Debug)]
@@ -94,10 +97,14 @@ impl Platform {
         wake_tx
             .set_nonblocking(true)
             .map_err(|e| wl_err("socketpair")(e.to_string()))?;
+        let wake_tx = Arc::new(wake_tx);
+        let shared = Arc::new(Mutex::new(Vec::new()));
+        super::session::watch_lock(Arc::clone(&shared), Waker(Arc::clone(&wake_tx)));
         Ok(Self {
             inner: RefCell::new(Inner { conn, queue, state }),
             wake_rx,
-            wake_tx: Arc::new(wake_tx),
+            wake_tx,
+            shared,
         })
     }
 
@@ -206,7 +213,11 @@ impl Platform {
         // Drain the waker.
         let mut buf = [0u8; 64];
         while matches!((&self.wake_rx).read(&mut buf), Ok(n) if n > 0) {}
-        std::mem::take(&mut state.events)
+        let mut events = std::mem::take(&mut state.events);
+        if let Ok(mut shared) = self.shared.lock() {
+            events.append(&mut shared);
+        }
+        events
     }
 
     /// What covers each output: windows the compositor reports fullscreen or
@@ -242,7 +253,7 @@ impl Platform {
     }
 
     pub fn on_battery(&self) -> bool {
-        false
+        super::session::on_battery(Path::new("/sys/class/power_supply"))
     }
 
     /// Where the cursor last was over a wallpaper, in virtual-desktop pixels

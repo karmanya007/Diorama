@@ -28,7 +28,9 @@ wayland-client = "0.31"
 # Wayland surfaces need.
 wayland-backend = { version = "0.3", features = ["client_system"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
-rustix = { version = "1", features = ["event"] }
+rustix = { version = "1", features = ["event", "process"] }
+# logind lock events (blocking API on its own thread).
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
 
 [lints]
 workspace = true

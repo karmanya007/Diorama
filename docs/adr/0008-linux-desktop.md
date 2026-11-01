@@ -40,10 +40,18 @@ implement `wlr-layer-shell`, GNOME does not, and X11 sessions remain.
   wallpaper sets the default arrow (`cursor-shape`, else the cursor theme).
 - **Event loop**: the Wayland connection and a socket-pair waker are polled
   together, so other threads wake `poll_events` as on Windows.
+- **Battery** from `/sys/class/power_supply` (what UPower reads): on battery
+  when no mains or USB supply is online and a system battery discharges;
+  device batteries (mice, headsets) do not count. Polled like on Windows.
+- **Lock** from logind on the system bus (zbus, own thread): the session's
+  `Lock`/`Unlock` signals and its `LockedHint`. The session is ours
+  (`XDG_SESSION_ID`, else our process), else the user's graphical session,
+  else the user's first: a daemon started by a systemd user unit belongs to
+  none. A lock that sends neither (`swaylock` run directly) goes unnoticed; their
+  lock screen hides the wallpaper anyway.
 - **Later in Phase 7**: GStreamer for video (system-provided, picks VA-API
   hardware decoding itself, delivers NV12 like Media Foundation), PipeWire
-  for the audio loopback, MPRIS for media information, UPower and logind over
-  D-Bus for battery and lock, WebKitGTK with `gtk-layer-shell` for web
+  for the audio loopback, MPRIS for media information, WebKitGTK with `gtk-layer-shell` for web
   wallpapers, X11 (`_NET_WM_WINDOW_TYPE_DESKTOP`), and a GNOME Shell
   extension last.
 
