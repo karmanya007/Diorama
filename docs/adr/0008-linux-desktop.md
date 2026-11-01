@@ -49,9 +49,17 @@ implement `wlr-layer-shell`, GNOME does not, and X11 sessions remain.
   else the user's first: a daemon started by a systemd user unit belongs to
   none. A lock that sends neither (`swaylock` run directly) goes unnoticed; their
   lock screen hides the wallpaper anyway.
-- **Later in Phase 7**: GStreamer for video (system-provided, picks VA-API
-  hardware decoding itself, delivers NV12 like Media Foundation), PipeWire
-  for the audio loopback, MPRIS for media information, WebKitGTK with `gtk-layer-shell` for web
+- **Video through the system's GStreamer** (gstreamer-rs, LGPL libraries
+  linked dynamically): `decodebin` picks the decoder by rank, so VA-API,
+  NVDEC or V4L2 hardware decoders win when their plugins are installed and
+  libav decodes on the CPU otherwise; `videoconvert` hands NV12 to the same
+  upload path as Media Foundation. Only the video pad is linked (P10).
+  Videos inside packages come through a seekable `appsrc`. Looping rebuilds
+  the pipeline, like the Windows decoder reopens its reader. The probe
+  reports the chosen decoder (hardware from its class) and names streams
+  no plugin decodes. Converting (P4) waits: the encoders a distribution
+  ships vary, and CPU decoding of every codec is the common case there.
+- **Later in Phase 7**: PipeWire for the audio loopback, MPRIS for media information, WebKitGTK with `gtk-layer-shell` for web
   wallpapers, X11 (`_NET_WM_WINDOW_TYPE_DESKTOP`), and a GNOME Shell
   extension last.
 

@@ -13,6 +13,8 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 // Only the Windows audio backend resamples so far; the tests run everywhere.
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod resample;
 pub mod spectrum;
@@ -44,9 +46,19 @@ pub enum Error {
     Audio(String),
     #[error("cancelled")]
     Cancelled,
-    #[error(
-        "Windows cannot decode this video ({0}), so it can be neither played nor converted; \
-         re-encode it as 8-bit H.264 with a video converter"
+    #[cfg_attr(
+        windows,
+        error(
+            "Windows cannot decode this video ({0}), so it can be neither played nor converted; \
+             re-encode it as 8-bit H.264 with a video converter"
+        )
+    )]
+    #[cfg_attr(
+        not(windows),
+        error(
+            "no installed GStreamer plugin decodes this video ({0}); install the codec's \
+             plugins (gstreamer1.0-libav, gst-plugins-bad) or re-encode it as H.264"
+        )
     )]
     Undecodable(String),
 }
@@ -221,11 +233,11 @@ pub struct VideoProbe {
     pub codec: String,
     pub width: u32,
     pub height: u32,
-    /// The GPU decodes it (DXVA); else the CPU does.
+    /// The GPU decodes it (DXVA; VA-API, NVDEC or V4L2); else the CPU does.
     pub hardware: bool,
-    /// Windows decodes it at all. `false` for formats without a Windows
-    /// decoder (10-bit H.264): such videos can be neither played nor
-    /// converted.
+    /// The system decodes it at all. `false` for formats without a decoder
+    /// (on Windows 10-bit H.264; on Linux codecs whose GStreamer plugin is
+    /// missing): such videos can be neither played nor converted.
     pub decodable: bool,
 }
 
@@ -235,7 +247,11 @@ pub fn probe(path: &Path) -> Result<VideoProbe> {
     {
         windows::convert::probe(path)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        linux::probe(path)
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = path;
         Err(Error::Unsupported)
@@ -258,7 +274,10 @@ pub fn convert(
     #[cfg(not(windows))]
     {
         let _ = (src, dst, size, progress);
-        Err(Error::Unsupported)
+        Err(Error::Os {
+            call: "convert",
+            message: "converting videos is not available on this platform yet".into(),
+        })
     }
 }
 
@@ -287,7 +306,11 @@ pub fn open_source(source: &MediaSource) -> Result<Box<dyn VideoDecoder>> {
     {
         windows::MfDecoder::open(source).map(|d| Box::new(d) as Box<dyn VideoDecoder>)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        linux::GstDecoder::open(source).map(|d| Box::new(d) as Box<dyn VideoDecoder>)
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = source;
         Err(Error::Unsupported)
