@@ -268,7 +268,13 @@ fn memory_source(data: Arc<[u8]>) -> gst_app::AppSrc {
                     let _ = src.end_of_stream();
                     return;
                 }
-                let end = (*at + (length as usize).max(4096)).min(data.len());
+                // Pull mode (qtdemux) needs exactly what it asked for; 0 or
+                // u32::MAX means no particular size.
+                let want = match length {
+                    0 | u32::MAX => 64 << 10,
+                    n => n as usize,
+                };
+                let end = (*at + want).min(data.len());
                 let chunk = data[*at..end].to_vec();
                 *at = end;
                 let _ = src.push_buffer(gst::Buffer::from_mut_slice(chunk));

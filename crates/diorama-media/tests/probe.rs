@@ -24,3 +24,23 @@ fn probe_matches_what_decodes() {
         .expect("a frame after restart");
     assert!(first.pts < std::time::Duration::from_millis(100));
 }
+
+#[test]
+#[ignore = "needs DIORAMA_TEST_VIDEO"]
+fn video_decodes_from_memory() {
+    let path = PathBuf::from(std::env::var("DIORAMA_TEST_VIDEO").expect("DIORAMA_TEST_VIDEO"));
+    let data: std::sync::Arc<[u8]> = std::fs::read(&path).unwrap().into();
+    let source = diorama_media::MediaSource::Memory {
+        data,
+        name: "clip.mp4".into(),
+    };
+    let mut decoder = diorama_media::open_source(&source).unwrap();
+    for _ in 0..30 {
+        decoder.next_frame().unwrap().expect("a frame");
+    }
+    decoder.restart().unwrap();
+    decoder
+        .next_frame()
+        .unwrap()
+        .expect("a frame after restart");
+}
