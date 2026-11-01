@@ -77,6 +77,12 @@ implement `wlr-layer-shell`, GNOME does not, and X11 sessions remain.
   (`~/.config/autostart/diorama.desktop`, which desktops list in their
   startup settings); `g_Daytime` uses the local time zone (`localtime_r`);
   Steam is also looked for in its Flatpak's folder.
+- **Load figures from `/proc` and sysfs**: CPU per processor
+  (`/proc/stat`), memory (`MemAvailable`), network from interfaces with a
+  device behind them, process trees from `/proc/<pid>/stat` parents. GPU
+  load and memory only where the driver publishes them in sysfs (amdgpu);
+  per-process GPU figures stay 0. Disks are left out: the wallpaper API
+  names them by Windows drive letter.
 - **No OS fallback wallpaper (P14) yet**: there is no common API. A
   wallpaper client like `swaybg` would take a background-layer surface that
   can stack above Diorama's, and writing GNOME's or Plasma's own wallpaper

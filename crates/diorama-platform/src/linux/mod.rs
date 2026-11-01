@@ -4,10 +4,12 @@
 //! from logind, media information from MPRIS. X11 and GNOME come later.
 
 mod media;
+mod metrics;
 mod session;
 mod system;
 mod wayland;
 
 pub use media::MediaWatcher;
+pub use metrics::{ProcessMonitor, SystemMonitor};
 pub use system::{autostart, day_fraction, set_autostart, steam_dir};
 pub use wayland::{Platform, Waker, WallpaperWindow};

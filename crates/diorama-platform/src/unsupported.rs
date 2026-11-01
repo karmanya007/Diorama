@@ -187,10 +187,12 @@ impl MediaWatcher {
     }
 }
 
-/// Uninhabited until a non-Windows backend exists.
+/// Uninhabited until this platform has a backend.
+#[cfg(not(target_os = "linux"))]
 #[derive(Debug)]
 pub enum ProcessMonitor {}
 
+#[cfg(not(target_os = "linux"))]
 impl ProcessMonitor {
     pub fn new() -> Result<Self> {
         Err(crate::Error::Unsupported)
@@ -200,10 +202,12 @@ impl ProcessMonitor {
     }
 }
 
-/// Uninhabited until a non-Windows backend exists.
+/// Uninhabited until this platform has a backend.
+#[cfg(not(target_os = "linux"))]
 #[derive(Debug)]
 pub enum SystemMonitor {}
 
+#[cfg(not(target_os = "linux"))]
 impl SystemMonitor {
     pub fn new() -> Result<Self> {
         Err(crate::Error::Unsupported)
