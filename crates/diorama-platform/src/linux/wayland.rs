@@ -1,12 +1,14 @@
 //! Wayland: outputs from `wl_output` (+ `xdg-output` names), wallpapers as
 //! `wlr-layer-shell` surfaces on the background layer, and what covers each
-//! output from `wlr-foreign-toplevel-management` (P5/P6).
+//! output from `wlr-foreign-toplevel-management` (P5/P6). The cursor is
+//! known while it is over a wallpaper, which on Wayland means over bare
+//! desktop: windows above take the pointer.
 //!
 //! Single-threaded like the Windows backend: create, use and drop the
 //! [`Platform`] on the thread that calls [`Platform::poll_events`].
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
@@ -22,15 +24,20 @@ use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState};
 use smithay_client_toolkit::dispatch2::Dispatch2;
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
 use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
+use smithay_client_toolkit::seat::pointer::{
+    BTN_LEFT, CursorIcon, PointerEvent, PointerEventKind, PointerHandler, ThemeSpec, ThemedPointer,
+};
+use smithay_client_toolkit::seat::{Capability, SeatHandler, SeatState};
 use smithay_client_toolkit::shell::WaylandSurface;
 use smithay_client_toolkit::shell::wlr_layer::{
     Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
     LayerSurfaceConfigure,
 };
+use smithay_client_toolkit::shm::{Shm, ShmHandler};
 use smithay_client_toolkit::{delegate_dispatch2, delegate_registry, registry_handlers};
-use wayland_client::backend::ObjectData;
+use wayland_client::backend::{ObjectData, ObjectId};
 use wayland_client::globals::{GlobalList, registry_queue_init};
-use wayland_client::protocol::{wl_output, wl_surface};
+use wayland_client::protocol::{wl_output, wl_pointer, wl_seat, wl_surface};
 use wayland_client::{Connection, EventQueue, Proxy, QueueHandle};
 use wayland_protocols_wlr::foreign_toplevel::v1::client::{
     zwlr_foreign_toplevel_handle_v1::{self, ZwlrForeignToplevelHandleV1},
@@ -159,11 +166,20 @@ impl Platform {
         };
         let display = NonNull::new(conn.backend().display_ptr().cast())
             .ok_or(Error::DesktopNotFound("Wayland display"))?;
+        state.origins.borrow_mut().insert(
+            id,
+            Origin {
+                x: output.x,
+                y: output.y,
+                scale,
+            },
+        );
         Ok(WallpaperWindow {
             size: (w * scale as u32, h * scale as u32),
             display,
             layer,
             state_ref: Rc::clone(&state.closed),
+            origins: Rc::clone(&state.origins),
         })
     }
 
@@ -229,13 +245,30 @@ impl Platform {
         false
     }
 
-    /// Wayland clients never see the global cursor position.
+    /// Where the cursor last was over a wallpaper, in virtual-desktop pixels
+    /// (Wayland clients never see the global position). `None` until it
+    /// first comes over one.
     pub fn cursor_position(&self) -> Option<(i32, i32)> {
-        None
+        self.inner.borrow().state.pointer.position
     }
 
+    /// Whether the cursor is over a wallpaper (bare desktop) and the left
+    /// button is down there. A press or release since the last call counts
+    /// for one call each, so a click shorter than a frame is still seen.
     pub fn desktop_pointer(&self) -> crate::DesktopPointer {
-        crate::DesktopPointer::default()
+        let mut inner = self.inner.borrow_mut();
+        let pointer = &mut inner.state.pointer;
+        if let Some(down) = pointer.edges.pop_front() {
+            return crate::DesktopPointer {
+                over_desktop: true,
+                left_down: down,
+            };
+        }
+        let over = pointer.over.is_some();
+        crate::DesktopPointer {
+            over_desktop: over,
+            left_down: over && pointer.left_down,
+        }
     }
 
     pub fn lower_priority(&self) {}
@@ -310,7 +343,8 @@ pub struct WallpaperWindow {
     display: NonNull<std::ffi::c_void>,
     /// Buffer size: the configured (logical) size times the output's scale.
     size: (u32, u32),
-    state_ref: Rc<RefCell<Vec<wayland_client::backend::ObjectId>>>,
+    state_ref: Rc<RefCell<Vec<ObjectId>>>,
+    origins: Rc<RefCell<HashMap<ObjectId, Origin>>>,
 }
 
 impl WallpaperWindow {
@@ -343,7 +377,30 @@ impl Drop for WallpaperWindow {
     fn drop(&mut self) {
         let id = self.layer.wl_surface().id();
         self.state_ref.borrow_mut().retain(|c| *c != id);
+        self.origins.borrow_mut().remove(&id);
     }
+}
+
+/// Where a wallpaper surface sits: its output's top-left corner in
+/// virtual-desktop pixels and the output's scale.
+#[derive(Debug, Clone, Copy)]
+struct Origin {
+    x: i32,
+    y: i32,
+    scale: i32,
+}
+
+/// The cursor as our wallpaper surfaces see it.
+#[derive(Debug, Default)]
+struct Pointer {
+    /// The wallpaper under the cursor (it is over bare desktop).
+    over: Option<ObjectId>,
+    /// Last position over a wallpaper, in virtual-desktop pixels.
+    position: Option<(i32, i32)>,
+    left_down: bool,
+    /// Left-button presses (`true`) and releases on wallpapers, in order,
+    /// not yet seen by `Platform::desktop_pointer`.
+    edges: VecDeque<bool>,
 }
 
 /// One application window as `wlr-foreign-toplevel` reports it.
@@ -363,12 +420,20 @@ struct State {
     output_state: OutputState,
     compositor: CompositorState,
     layer_shell: LayerShell,
+    seat_state: SeatState,
+    /// For cursor images on compositors without `cursor-shape`.
+    shm: Shm,
+    /// One per seat with a pointer.
+    pointers: Vec<(wl_seat::WlSeat, ThemedPointer)>,
+    pointer: Pointer,
     /// Configured (logical) size of each layer surface; `None` until the
     /// first configure.
-    configured: HashMap<wayland_client::backend::ObjectId, Option<(u32, u32)>>,
+    configured: HashMap<ObjectId, Option<(u32, u32)>>,
     /// Surfaces the compositor closed (shared with their windows).
-    closed: Rc<RefCell<Vec<wayland_client::backend::ObjectId>>>,
-    toplevels: HashMap<wayland_client::backend::ObjectId, Toplevel>,
+    closed: Rc<RefCell<Vec<ObjectId>>>,
+    /// Live wallpaper surfaces (shared with their windows).
+    origins: Rc<RefCell<HashMap<ObjectId, Origin>>>,
+    toplevels: HashMap<ObjectId, Toplevel>,
     /// Desktop events not yet returned by `poll_events`.
     events: Vec<DesktopEvent>,
     /// Initial roundtrips done: output changes from now on are events.
@@ -384,6 +449,7 @@ impl State {
                 "{e} (this compositor has no layer-shell; GNOME needs Diorama's extension)"
             ))
         })?;
+        let shm = Shm::bind(globals, qh).map_err(|e| wl_err("bind wl_shm")(e.to_string()))?;
         // Optional: without it nothing ever counts as covering an output.
         if globals
             .bind::<ZwlrForeignToplevelManagerV1, _, _>(qh, 1..=3, ToplevelManagerData)
@@ -396,8 +462,13 @@ impl State {
             output_state: OutputState::new(globals, qh),
             compositor,
             layer_shell,
+            seat_state: SeatState::new(globals, qh),
+            shm,
+            pointers: Vec::new(),
+            pointer: Pointer::default(),
             configured: HashMap::new(),
             closed: Rc::new(RefCell::new(Vec::new())),
+            origins: Rc::new(RefCell::new(HashMap::new())),
             toplevels: HashMap::new(),
             events: Vec::new(),
             ready: false,
@@ -530,11 +601,118 @@ impl LayerShellHandler for State {
     }
 }
 
+impl SeatHandler for State {
+    fn seat_state(&mut self) -> &mut SeatState {
+        &mut self.seat_state
+    }
+
+    fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+
+    fn new_capability(
+        &mut self,
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+        seat: wl_seat::WlSeat,
+        capability: Capability,
+    ) {
+        if capability != Capability::Pointer || self.pointers.iter().any(|(s, _)| *s == seat) {
+            return;
+        }
+        let surface = self.compositor.create_surface(qh);
+        match self.seat_state.get_pointer_with_theme::<_, ()>(
+            qh,
+            &seat,
+            self.shm.wl_shm(),
+            surface,
+            ThemeSpec::System,
+        ) {
+            Ok(pointer) => self.pointers.push((seat, pointer)),
+            Err(e) => tracing::warn!("no pointer on a Wayland seat: {e}"),
+        }
+    }
+
+    fn remove_capability(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        seat: wl_seat::WlSeat,
+        capability: Capability,
+    ) {
+        if capability == Capability::Pointer {
+            self.pointers.retain(|(s, _)| *s != seat);
+        }
+    }
+
+    fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, seat: wl_seat::WlSeat) {
+        self.pointers.retain(|(s, _)| *s != seat);
+    }
+}
+
+impl PointerHandler for State {
+    fn pointer_frame(
+        &mut self,
+        conn: &Connection,
+        _: &QueueHandle<Self>,
+        pointer: &wl_pointer::WlPointer,
+        events: &[PointerEvent],
+    ) {
+        for event in events {
+            let id = event.surface.id();
+            let Some(origin) = self.origins.borrow().get(&id).copied() else {
+                continue;
+            };
+            let p = &mut self.pointer;
+            let (sx, sy) = event.position;
+            p.position = Some((
+                origin.x + (sx * f64::from(origin.scale)).round() as i32,
+                origin.y + (sy * f64::from(origin.scale)).round() as i32,
+            ));
+            match event.kind {
+                PointerEventKind::Enter { .. } => {
+                    p.over = Some(id);
+                    // Entering surfaces set the cursor image; the desktop
+                    // shows the default arrow.
+                    if let Some((_, themed)) =
+                        self.pointers.iter().find(|(_, t)| t.pointer() == pointer)
+                        && let Err(e) = themed.set_cursor(conn, CursorIcon::Default)
+                    {
+                        tracing::debug!("cursor image: {e}");
+                    }
+                }
+                PointerEventKind::Leave { .. } => {
+                    if p.over.as_ref() == Some(&id) {
+                        p.over = None;
+                    }
+                    if std::mem::take(&mut p.left_down) {
+                        p.edges.push_back(false);
+                    }
+                }
+                PointerEventKind::Press { button, .. } if button == BTN_LEFT => {
+                    p.left_down = true;
+                    p.edges.push_back(true);
+                }
+                PointerEventKind::Release { button, .. } if button == BTN_LEFT => {
+                    p.left_down = false;
+                    p.edges.push_back(false);
+                }
+                _ => continue,
+            }
+            tracing::trace!(kind = ?event.kind, position = ?p.position, "pointer on wallpaper");
+        }
+    }
+}
+
+impl ShmHandler for State {
+    fn shm_state(&mut self) -> &mut Shm {
+        &mut self.shm
+    }
+}
+
 impl ProvidesRegistryState for State {
     fn registry(&mut self) -> &mut RegistryState {
         &mut self.registry
     }
-    registry_handlers![OutputState];
+    registry_handlers![OutputState, SeatState];
 }
 
 /// Handler data of the `wlr-foreign-toplevel` manager.

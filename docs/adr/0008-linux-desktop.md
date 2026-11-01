@@ -31,8 +31,13 @@ implement `wlr-layer-shell`, GNOME does not, and X11 sessions remain.
   minimized ones excluded. Compositors without it (GNOME) never pause on
   windows; battery and lock rules still apply.
 - **The cursor**: Wayland clients never see the global cursor position.
-  The background surface receives pointer events while the cursor is over
-  bare desktop, which is when Wallpaper Engine reacts to it (planned).
+  The wallpaper surfaces receive pointer events while the cursor is over
+  bare desktop, which is when Wallpaper Engine reacts to it. Positions map
+  to virtual-desktop pixels through each surface's output; the last one
+  stays when the cursor goes over a window. Left-button presses and
+  releases are queued as on Windows, and a drag that starts on the desktop
+  keeps reporting until release (Wayland's implicit grab). Entering a
+  wallpaper sets the default arrow (`cursor-shape`, else the cursor theme).
 - **Event loop**: the Wayland connection and a socket-pair waker are polled
   together, so other threads wake `poll_events` as on Windows.
 - **Later in Phase 7**: GStreamer for video (system-provided, picks VA-API
@@ -46,7 +51,9 @@ implement `wlr-layer-shell`, GNOME does not, and X11 sessions remain.
 
 - Development and tests run in a headless Sway (no window on the host):
   `grim` captures each virtual output, `swaymsg create_output` hotplugs one
-  and a fullscreen terminal checks pausing per output.
+  and a fullscreen terminal checks pausing per output. Headless Sway has no
+  input devices; a small virtual-pointer client (`wlr-virtual-pointer`)
+  drives the cursor.
 - On GNOME the Wayland backend fails at start with a message naming the
   missing layer-shell until the extension exists.
 - Two identical monitors swapped between ports swap their wallpapers.
