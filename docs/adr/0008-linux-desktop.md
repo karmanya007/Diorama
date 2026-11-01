@@ -67,9 +67,15 @@ implement `wlr-layer-shell`, GNOME does not, and X11 sessions remain.
   wallpapers record the default sink's `.monitor` source, which is what
   WASAPI loopback gives on Windows. Tests run in a private PipeWire whose
   only sink is a null sink, so nothing is heard.
-- **Later in Phase 7**: MPRIS for media information, WebKitGTK with
-  `gtk-layer-shell` for web wallpapers, X11 (`_NET_WM_WINDOW_TYPE_DESKTOP`),
-  and a GNOME Shell extension last.
+- **Media information from MPRIS** (`org.mpris.MediaPlayer2.*` on the
+  session bus), polled like the Windows media session. Several players can
+  run; wallpapers follow one that plays (keeping the one they followed while
+  it still plays), else the last one followed. Album art comes only from
+  `file://` URLs: remote art would be a network request Diorama does not
+  make on its own.
+- **Later in Phase 7**: WebKitGTK with `gtk-layer-shell` for web
+  wallpapers, X11 (`_NET_WM_WINDOW_TYPE_DESKTOP`), and a GNOME Shell
+  extension last.
 
 ## Consequences
 

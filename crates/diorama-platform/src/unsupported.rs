@@ -168,9 +168,11 @@ pub fn day_fraction() -> f32 {
 }
 
 /// No media session on this platform yet: reports media integration as off.
+#[cfg(not(target_os = "linux"))]
 #[derive(Debug)]
 pub struct MediaWatcher;
 
+#[cfg(not(target_os = "linux"))]
 impl MediaWatcher {
     pub fn start() -> Self {
         Self
