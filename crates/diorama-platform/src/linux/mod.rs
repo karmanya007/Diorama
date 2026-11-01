@@ -5,7 +5,9 @@
 
 mod media;
 mod session;
+mod system;
 mod wayland;
 
 pub use media::MediaWatcher;
+pub use system::{autostart, day_fraction, set_autostart, steam_dir};
 pub use wayland::{Platform, Waker, WallpaperWindow};

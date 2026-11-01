@@ -85,10 +85,12 @@ pub fn legacy_config_dir() -> Option<std::path::PathBuf> {
     config_dir().and_then(|d| d.parent().map(|p| p.join("lumen")))
 }
 
+#[cfg(not(target_os = "linux"))]
 pub fn set_autostart(_command: Option<&str>) -> Result<()> {
     Err(Error::Unsupported)
 }
 
+#[cfg(not(target_os = "linux"))]
 pub fn autostart() -> Result<Option<String>> {
     Err(Error::Unsupported)
 }
@@ -143,6 +145,7 @@ pub fn cache_dir() -> Option<std::path::PathBuf> {
 /// Starts `cmd` without a console window (nothing to do here).
 pub fn no_console(_cmd: &mut std::process::Command) {}
 
+#[cfg(not(target_os = "linux"))]
 /// Steam's install folder: `~/.local/share/Steam` or `~/.steam/steam`.
 pub fn steam_dir() -> Option<std::path::PathBuf> {
     let home = std::path::PathBuf::from(std::env::var_os("HOME")?);
@@ -159,7 +162,8 @@ pub fn ui_language() -> Option<String> {
         .find(|v| !v.is_empty())
 }
 
-/// Fraction of the day elapsed (UTC until the Linux backend reads the time zone).
+#[cfg(not(target_os = "linux"))]
+/// Fraction of the day elapsed (UTC: no time zone support here).
 pub fn day_fraction() -> f32 {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

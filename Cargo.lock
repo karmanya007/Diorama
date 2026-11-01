@@ -1102,6 +1102,7 @@ dependencies = [
 name = "diorama-platform"
 version = "1.0.0"
 dependencies = [
+ "libc",
  "raw-window-handle",
  "rustix",
  "smithay-client-toolkit",

@@ -73,6 +73,15 @@ implement `wlr-layer-shell`, GNOME does not, and X11 sessions remain.
   it still plays), else the last one followed. Album art comes only from
   `file://` URLs: remote art would be a network request Diorama does not
   make on its own.
+- **Session**: autostart is an XDG autostart entry
+  (`~/.config/autostart/diorama.desktop`, which desktops list in their
+  startup settings); `g_Daytime` uses the local time zone (`localtime_r`);
+  Steam is also looked for in its Flatpak's folder.
+- **No OS fallback wallpaper (P14) yet**: there is no common API. A
+  wallpaper client like `swaybg` would take a background-layer surface that
+  can stack above Diorama's, and writing GNOME's or Plasma's own wallpaper
+  setting is a lasting change to the desktop that needs testing on those
+  desktops first.
 - **Later in Phase 7**: WebKitGTK with `gtk-layer-shell` for web
   wallpapers, X11 (`_NET_WM_WINDOW_TYPE_DESKTOP`), and a GNOME Shell
   extension last.
