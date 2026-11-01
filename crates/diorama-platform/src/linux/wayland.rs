@@ -62,8 +62,9 @@ pub struct Platform {
     /// Read end of the waker's socket pair (polled with the connection).
     wake_rx: UnixStream,
     wake_tx: Arc<UnixStream>,
-    /// Events from other threads (logind).
+    /// Events from other threads (logind, the tray).
     shared: Arc<Mutex<Vec<DesktopEvent>>>,
+    tray: RefCell<Option<super::tray::Tray>>,
 }
 
 #[derive(Debug)]
@@ -105,6 +106,7 @@ impl Platform {
             wake_rx,
             wake_tx,
             shared,
+            tray: RefCell::new(None),
         })
     }
 
@@ -284,15 +286,26 @@ impl Platform {
 
     pub fn lower_priority(&self) {}
 
+    /// Panels scale the pixmap to their size; 64 stays sharp on HiDPI.
     pub fn tray_icon_size(&self) -> u32 {
-        16
+        64
     }
 
-    pub fn show_tray(&self, _rgba: &[u8], _size: u32, _state: crate::TrayState) -> Result<()> {
-        Err(Error::Unsupported)
+    /// Shows (or replaces) the tray icon: `rgba` is `size`×`size`.
+    pub fn show_tray(&self, rgba: &[u8], size: u32, state: crate::TrayState) -> Result<()> {
+        // The old icon leaves the panel (and frees its bus name) first.
+        self.tray.borrow_mut().take();
+        let tray =
+            super::tray::Tray::show(rgba, size, state, Arc::clone(&self.shared), self.waker())?;
+        *self.tray.borrow_mut() = Some(tray);
+        Ok(())
     }
 
-    pub fn set_tray_state(&self, _state: crate::TrayState) {}
+    pub fn set_tray_state(&self, state: crate::TrayState) {
+        if let Some(tray) = self.tray.borrow().as_ref() {
+            tray.set_state(state);
+        }
+    }
 
     pub fn waker(&self) -> Waker {
         Waker(Arc::clone(&self.wake_tx))

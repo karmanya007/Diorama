@@ -83,6 +83,11 @@ implement `wlr-layer-shell`, GNOME does not, and X11 sessions remain.
   load and memory only where the driver publishes them in sysfs (amdgpu);
   per-process GPU figures stay 0. Disks are left out: the wallpaper API
   names them by Windows drive letter.
+- **Tray icon through StatusNotifierItem** with a `com.canonical.dbusmenu`
+  menu, served by zbus (the `ksni` crate's licence is outside the allowed
+  list). KDE, waybar and most panels host it; GNOME needs the AppIndicator
+  extension; without a host the icon is skipped with a log line, as on
+  Windows without a notification area.
 - **No OS fallback wallpaper (P14) yet**: there is no common API. A
   wallpaper client like `swaybg` would take a background-layer surface that
   can stack above Diorama's, and writing GNOME's or Plasma's own wallpaper
