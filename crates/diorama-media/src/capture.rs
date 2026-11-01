@@ -1,6 +1,7 @@
-//! What the system is playing, for audio-reactive wallpapers: a WASAPI
-//! loopback stream on the default output device (cpal records an output
-//! device when an input stream is built on it).
+//! What the system is playing, for audio-reactive wallpapers: on Windows a
+//! WASAPI loopback stream on the default output device (cpal records an
+//! output device when an input stream is built on it); on Linux the default
+//! sink's monitor source (PulseAudio, or PipeWire's Pulse server).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -30,8 +31,8 @@ fn audio_err(e: impl std::fmt::Display) -> Error {
 impl AudioCapture {
     pub fn start() -> Result<Self> {
         let host = cpal::default_host();
-        let device = host.default_output_device().ok_or(Error::NoAudioDevice)?;
-        let config = device.default_output_config().map_err(audio_err)?.config();
+        let output = host.default_output_device().ok_or(Error::NoAudioDevice)?;
+        let (device, config) = loopback(&host, &output)?;
         let channels = usize::from(config.channels);
         let analyzer = Arc::new(Mutex::new(SpectrumAnalyzer::new(config.sample_rate)));
         let failed = Arc::new(AtomicBool::new(false));
@@ -62,7 +63,7 @@ impl AudioCapture {
         Ok(Self {
             analyzer,
             failed,
-            device: device.id().ok(),
+            device: output.id().ok(),
             _stream: stream,
         })
     }
@@ -93,4 +94,29 @@ impl AudioCapture {
             .and_then(|d| d.id().ok())
             != self.device
     }
+}
+
+/// The device that records what `output` plays, and its format.
+#[cfg(windows)]
+fn loopback(_: &cpal::Host, output: &cpal::Device) -> Result<(cpal::Device, cpal::StreamConfig)> {
+    let config = output.default_output_config().map_err(audio_err)?.config();
+    Ok((output.clone(), config))
+}
+
+/// The device that records what `output` plays, and its format: the sink's
+/// monitor source (`<sink>.monitor`, PulseAudio's naming, which PipeWire
+/// keeps). Plain ALSA has none.
+#[cfg(not(windows))]
+fn loopback(
+    host: &cpal::Host,
+    output: &cpal::Device,
+) -> Result<(cpal::Device, cpal::StreamConfig)> {
+    let monitor = format!("{}.monitor", output.id().map_err(audio_err)?.id());
+    let device = host
+        .input_devices()
+        .map_err(audio_err)?
+        .find(|d| d.id().is_ok_and(|id| id.id() == monitor))
+        .ok_or_else(|| Error::Audio(format!("no monitor source ({monitor}) to record playback")))?;
+    let config = device.default_input_config().map_err(audio_err)?.config();
+    Ok((device, config))
 }

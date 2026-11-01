@@ -6,7 +6,6 @@
 //! pipeline failed with MF_E_NO_AUDIO_PLAYBACK_DEVICE when no device existed).
 
 pub(crate) mod audio;
-pub(crate) mod capture;
 pub(crate) mod convert;
 
 use std::time::Duration;

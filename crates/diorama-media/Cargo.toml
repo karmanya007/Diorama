@@ -1,6 +1,6 @@
 [package]
 name = "diorama-media"
-description = "Video decoding (and later audio capture) behind OS-neutral traits."
+description = "Video decoding, sound playback and capture behind OS-neutral types."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -15,6 +15,8 @@ cpal.workspace = true
 windows.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# PulseAudio's protocol (pure Rust), which PipeWire serves too; ALSA otherwise.
+cpal = { workspace = true, features = ["pulseaudio"] }
 # The system's GStreamer (LGPL, linked dynamically) with its installed plugins.
 gstreamer = "0.25"
 gstreamer-app = "0.25"

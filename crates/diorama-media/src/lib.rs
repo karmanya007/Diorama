@@ -12,21 +12,29 @@ use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-// Only the Windows audio backend resamples so far; the tests run everywhere.
+#[cfg(any(windows, target_os = "linux"))]
+mod audio;
+#[cfg(any(windows, target_os = "linux"))]
+mod capture;
 #[cfg(target_os = "linux")]
 mod linux;
-#[cfg_attr(not(windows), allow(dead_code))]
+// Only platforms with sound playback resample; the tests run everywhere.
+#[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
 mod resample;
 pub mod spectrum;
 #[cfg(windows)]
 mod windows;
 
-#[cfg(not(windows))]
+#[cfg(any(windows, target_os = "linux"))]
+pub use audio::AudioPlayer;
+#[cfg(any(windows, target_os = "linux"))]
+pub use capture::AudioCapture;
+#[cfg(target_os = "linux")]
+use linux::audio as sys_audio;
+#[cfg(not(any(windows, target_os = "linux")))]
 pub use unsupported_audio::{AudioCapture, AudioPlayer};
 #[cfg(windows)]
-pub use windows::audio::AudioPlayer;
-#[cfg(windows)]
-pub use windows::capture::AudioCapture;
+use windows::audio as sys_audio;
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
@@ -492,17 +500,17 @@ mod tests {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 mod unsupported_audio {
     use std::path::Path;
 
     use crate::{Error, Result};
 
-    /// Uninhabited until a non-Windows audio backend exists.
+    /// Uninhabited until this platform has an audio backend.
     #[derive(Debug)]
     pub enum AudioPlayer {}
 
-    /// Uninhabited until a non-Windows capture backend exists.
+    /// Uninhabited until this platform has a capture backend.
     #[derive(Debug)]
     pub enum AudioCapture {}
 

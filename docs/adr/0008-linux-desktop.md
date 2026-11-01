@@ -59,9 +59,17 @@ implement `wlr-layer-shell`, GNOME does not, and X11 sessions remain.
   reports the chosen decoder (hardware from its class) and names streams
   no plugin decodes. Converting (P4) waits: the encoders a distribution
   ships vary, and CPU decoding of every codec is the common case there.
-- **Later in Phase 7**: PipeWire for the audio loopback, MPRIS for media information, WebKitGTK with `gtk-layer-shell` for web
-  wallpapers, X11 (`_NET_WM_WINDOW_TYPE_DESKTOP`), and a GNOME Shell
-  extension last.
+- **Sound through cpal's PulseAudio host** (the protocol in pure Rust, so
+  no client library; PipeWire's `pipewire-pulse` serves it on current
+  desktops; plain ALSA otherwise). The player (playlists, gaps, ring
+  buffer, resampling) is shared with Windows; only the track reader is per
+  platform, GStreamer decoding to interleaved float here. Audio-reactive
+  wallpapers record the default sink's `.monitor` source, which is what
+  WASAPI loopback gives on Windows. Tests run in a private PipeWire whose
+  only sink is a null sink, so nothing is heard.
+- **Later in Phase 7**: MPRIS for media information, WebKitGTK with
+  `gtk-layer-shell` for web wallpapers, X11 (`_NET_WM_WINDOW_TYPE_DESKTOP`),
+  and a GNOME Shell extension last.
 
 ## Consequences
 

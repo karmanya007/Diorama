@@ -1,4 +1,4 @@
-//! GStreamer video decoder (Linux).
+//! GStreamer decoders (Linux): video here, sound tracks in [`audio`].
 //!
 //! `decodebin` picks the decoder by rank: the GPU's (VA-API, NVDEC, V4L2)
 //! when its plugin is installed, else libav on the CPU. Only the video stream
@@ -15,19 +15,21 @@ use gstreamer_video::prelude::*;
 
 use crate::{Error, MediaSource, Nv12Frame, Result, VideoDecoder, VideoInfo, VideoProbe};
 
+pub(crate) mod audio;
+
 /// How long opening may take before the file counts as undecodable, and how
 /// long one frame may take (4K on a slow CPU stays well below).
 const OPEN_TIMEOUT: gst::ClockTime = gst::ClockTime::from_seconds(10);
 const FRAME_TIMEOUT: gst::ClockTime = gst::ClockTime::from_seconds(10);
 
-fn gst_err(call: &'static str) -> impl FnOnce(gst::glib::BoolError) -> Error {
+pub(super) fn gst_err(call: &'static str) -> impl FnOnce(gst::glib::BoolError) -> Error {
     move |e| Error::Os {
         call,
         message: e.to_string(),
     }
 }
 
-fn init() -> Result<()> {
+pub(super) fn init() -> Result<()> {
     static INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
     INIT.get_or_init(|| gst::init().map_err(|e| e.to_string()))
         .clone()
@@ -37,9 +39,9 @@ fn init() -> Result<()> {
         })
 }
 
-/// What `decodebin` chose (or failed to find) for the video stream.
+/// What `decodebin` chose (or failed to find) for the stream.
 #[derive(Debug, Default)]
-struct Choice {
+pub(super) struct Choice {
     decoder: Option<gst::Element>,
     /// The decoder's class says it runs on dedicated hardware.
     hardware: bool,
@@ -114,15 +116,67 @@ impl VideoDecoder for GstDecoder {
     }
 }
 
-fn lock(choice: &Mutex<Choice>) -> std::sync::MutexGuard<'_, Choice> {
+pub(super) fn lock(choice: &Mutex<Choice>) -> std::sync::MutexGuard<'_, Choice> {
     choice
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// `source ! decodebin ! videoconvert ! appsink(NV12)`, with only the
-/// video pad linked.
-fn build(source: &MediaSource) -> Result<(gst::Pipeline, gst_app::AppSink, Arc<Mutex<Choice>>)> {
+type Decoding = (gst::Pipeline, gst_app::AppSink, Arc<Mutex<Choice>>);
+
+/// `source ! decodebin ! videoconvert ! appsink(NV12)`.
+fn build(source: &MediaSource) -> Result<Decoding> {
+    let sink = gst_app::AppSink::builder()
+        .caps(
+            &gst_video::VideoCapsBuilder::new()
+                .format(gst_video::VideoFormat::Nv12)
+                .build(),
+        )
+        // Frames are paced by the player; decode as fast as the queue drains.
+        .sync(false)
+        .max_buffers(2)
+        .build();
+    decode_pipeline(source, Media::Video, sink)
+}
+
+/// The kind of stream a pipeline decodes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Media {
+    Video,
+    Audio,
+}
+
+impl Media {
+    fn caps_prefix(self) -> &'static str {
+        match self {
+            Self::Video => "video/",
+            Self::Audio => "audio/",
+        }
+    }
+
+    /// The word in a decoder's class (`Codec/Decoder/Video`).
+    fn klass(self) -> &'static str {
+        match self {
+            Self::Video => "Video",
+            Self::Audio => "Audio",
+        }
+    }
+
+    fn converter(self) -> &'static str {
+        match self {
+            Self::Video => "videoconvert",
+            Self::Audio => "audioconvert",
+        }
+    }
+}
+
+/// `source ! decodebin ! (video|audio)convert ! sink` with only the first
+/// stream of `media` linked; the others stay unlinked and are dropped.
+pub(super) fn decode_pipeline(
+    source: &MediaSource,
+    media: Media,
+    sink: gst_app::AppSink,
+) -> Result<Decoding> {
     let pipeline = gst::Pipeline::new();
     let src = match source {
         MediaSource::File(path) => gst::ElementFactory::make("filesrc")
@@ -134,19 +188,9 @@ fn build(source: &MediaSource) -> Result<(gst::Pipeline, gst_app::AppSink, Arc<M
     let decodebin = gst::ElementFactory::make("decodebin")
         .build()
         .map_err(gst_err("decodebin"))?;
-    let convert = gst::ElementFactory::make("videoconvert")
+    let convert = gst::ElementFactory::make(media.converter())
         .build()
-        .map_err(gst_err("videoconvert"))?;
-    let sink = gst_app::AppSink::builder()
-        .caps(
-            &gst_video::VideoCapsBuilder::new()
-                .format(gst_video::VideoFormat::Nv12)
-                .build(),
-        )
-        // Frames are paced by the player; decode as fast as the queue drains.
-        .sync(false)
-        .max_buffers(2)
-        .build();
+        .map_err(gst_err(media.converter()))?;
     pipeline
         .add_many([&src, &decodebin, &convert, sink.upcast_ref()])
         .map_err(gst_err("gst_bin_add"))?;
@@ -155,18 +199,21 @@ fn build(source: &MediaSource) -> Result<(gst::Pipeline, gst_app::AppSink, Arc<M
 
     let convert_sink = convert
         .static_pad("sink")
-        .ok_or(Error::BadFrame("videoconvert without a sink pad".into()))?;
+        .ok_or(Error::BadFrame("converter without a sink pad".into()))?;
     decodebin.connect_pad_added(move |_, pad| {
-        let video = pad
+        let wanted = pad
             .current_caps()
             .or_else(|| Some(pad.query_caps(None)))
-            .and_then(|c| c.structure(0).map(|s| s.name().starts_with("video/")))
+            .and_then(|c| {
+                c.structure(0)
+                    .map(|s| s.name().starts_with(media.caps_prefix()))
+            })
             .unwrap_or(false);
-        if video
+        if wanted
             && !convert_sink.is_linked()
             && let Err(e) = pad.link(&convert_sink)
         {
-            tracing::warn!("linking the video stream: {e}");
+            tracing::warn!("linking the decoded stream: {e}");
         }
     });
 
@@ -182,7 +229,7 @@ fn build(source: &MediaSource) -> Result<(gst::Pipeline, gst_app::AppSink, Arc<M
             else {
                 return;
             };
-            if klass.contains("Decoder") && klass.contains("Video") {
+            if klass.contains("Decoder") && klass.contains(media.klass()) {
                 let mut c = lock(&chosen);
                 c.hardware = klass.contains("Hardware");
                 c.decoder = Some(element.clone());
@@ -193,7 +240,7 @@ fn build(source: &MediaSource) -> Result<(gst::Pipeline, gst_app::AppSink, Arc<M
         if let Some(caps) = args.get(2).and_then(|v| v.get::<gst::Caps>().ok())
             && caps
                 .structure(0)
-                .is_some_and(|s| s.name().starts_with("video/"))
+                .is_some_and(|s| s.name().starts_with(media.caps_prefix()))
         {
             lock(&unknown).unknown = Some(caps);
         }
@@ -202,7 +249,7 @@ fn build(source: &MediaSource) -> Result<(gst::Pipeline, gst_app::AppSink, Arc<M
     Ok((pipeline, sink, choice))
 }
 
-/// A seekable source over a file held in memory (videos inside packages).
+/// A seekable source over a file held in memory (media inside packages).
 fn memory_source(data: Arc<[u8]>) -> gst_app::AppSrc {
     let offset = Arc::new(Mutex::new(0usize));
     let seek_to = Arc::clone(&offset);
@@ -262,7 +309,7 @@ fn preroll(pipeline: &gst::Pipeline, sink: &gst_app::AppSink) -> Result<VideoInf
 }
 
 /// The first error the pipeline posted, if any.
-fn bus_error(pipeline: &gst::Pipeline) -> Option<Error> {
+pub(super) fn bus_error(pipeline: &gst::Pipeline) -> Option<Error> {
     let msg = pipeline.bus()?.pop_filtered(&[gst::MessageType::Error])?;
     let gst::MessageView::Error(err) = msg.view() else {
         return None;

@@ -39,13 +39,13 @@ jobs:
         run: |
           ./scripts/fetch-dxc.ps1
           "DIORAMA_DXC=$PWD\.tools\dxc\dxc.exe" >> $env:GITHUB_ENV
-      # diorama-ui (Tauri) builds against WebKitGTK on Linux; video uses the
-      # system's GStreamer.
+      # diorama-ui (Tauri) builds against WebKitGTK on Linux; media uses the
+      # system's GStreamer and (as cpal's fallback) ALSA.
       - if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev \
-            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libasound2-dev
       - run: cargo test --workspace
 
   build-macos:
