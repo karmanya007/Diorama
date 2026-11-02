@@ -47,6 +47,9 @@ pub struct AudioPlayer {
     shared: Arc<Shared>,
     decoder: Option<JoinHandle<()>>,
     device: Option<cpal::DeviceId>,
+    /// Kept for the default-device checks: a new host is a new server
+    /// connection on PulseAudio.
+    host: cpal::Host,
     _stream: cpal::Stream,
     name: String,
 }
@@ -141,6 +144,7 @@ impl AudioPlayer {
             shared,
             decoder: Some(decoder),
             device: device.id().ok(),
+            host,
             _stream: stream,
             name,
         })
@@ -174,9 +178,7 @@ impl AudioPlayer {
         if self.shared.stream_failed.load(Ordering::SeqCst) {
             return true;
         }
-        let current = cpal::default_host()
-            .default_output_device()
-            .and_then(|d| d.id().ok());
+        let current = self.host.default_output_device().and_then(|d| d.id().ok());
         current != self.device
     }
 }

@@ -15,6 +15,9 @@ pub struct AudioCapture {
     analyzer: Arc<Mutex<SpectrumAnalyzer>>,
     failed: Arc<AtomicBool>,
     device: Option<cpal::DeviceId>,
+    /// Kept for the default-device checks: a new host is a new server
+    /// connection on PulseAudio.
+    host: cpal::Host,
     _stream: cpal::Stream,
 }
 
@@ -64,6 +67,7 @@ impl AudioCapture {
             analyzer,
             failed,
             device: output.id().ok(),
+            host,
             _stream: stream,
         })
     }
@@ -89,10 +93,7 @@ impl AudioCapture {
         if self.failed.load(Ordering::SeqCst) {
             return true;
         }
-        cpal::default_host()
-            .default_output_device()
-            .and_then(|d| d.id().ok())
-            != self.device
+        self.host.default_output_device().and_then(|d| d.id().ok()) != self.device
     }
 }
 
