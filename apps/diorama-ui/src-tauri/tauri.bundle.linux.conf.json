@@ -1,0 +1,34 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "active": true,
+    "targets": ["deb", "appimage"],
+    "createUpdaterArtifacts": false,
+    "publisher": "Diorama",
+    "copyright": "Diorama contributors",
+    "license": "MIT OR Apache-2.0",
+    "category": "Utility",
+    "shortDescription": "Live wallpapers: Wallpaper Engine content and your own",
+    "longDescription": "Diorama plays scene, video, web and image wallpapers, including Wallpaper Engine content you already have.",
+    "externalBin": ["binaries/dioramad", "binaries/diorama-webhost", "binaries/diorama"],
+    "resources": {
+      "../../../.tools/dxc/bin/dxc": "dxc/bin/dxc",
+      "../../../.tools/dxc/lib/libdxcompiler.so": "dxc/lib/libdxcompiler.so",
+      "../../../.tools/dxc/LICENSE-LLVM.txt": "dxc/LICENSE-LLVM.txt",
+      "../../../.tools/dxc/LICENCE-MIT.txt": "dxc/LICENCE-MIT.txt"
+    },
+    "linux": {
+      "deb": {
+        "depends": [
+          "libgtk-layer-shell0",
+          "gstreamer1.0-plugins-base",
+          "gstreamer1.0-plugins-good"
+        ],
+        "recommends": ["gstreamer1.0-libav", "gstreamer1.0-vaapi"]
+      },
+      "appimage": {
+        "bundleMediaFramework": true
+      }
+    }
+  }
+}

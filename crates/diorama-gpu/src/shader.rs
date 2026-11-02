@@ -3,7 +3,8 @@
 //!
 //! DXC is an external tool for now: `DIORAMA_DXC`, then `dxc/dxc.exe` or
 //! `dxc.exe` beside the running executable (`dxc/bin/dxc` on Linux, whose
-//! release finds `libdxcompiler.so` in `../lib`), then the repository's
+//! release finds `libdxcompiler.so` in `../lib`; packages keep it in
+//! `../lib/Diorama/dxc`), then the repository's
 //! `.tools/dxc` above it (development builds), then `dxc` on `PATH`. Compiled
 //! SPIR-V is cached by a hash of (compiler flags, entry, profile, source), so
 //! DXC only runs the first time a shader variant is seen.
@@ -127,6 +128,8 @@ impl ShaderCompiler {
                 candidates.push(dir.join(name));
             }
             candidates.push(dir.join("dxc").join("bin").join("dxc"));
+            // Linux packages (.deb, AppImage): Tauri's resource folder.
+            candidates.push(dir.join("../lib/Diorama/dxc/bin/dxc"));
             // Development builds (`target/<profile>/`): the repository's
             // pinned copy from scripts/fetch-dxc.
             for up in dir.ancestors().skip(1).take(3) {

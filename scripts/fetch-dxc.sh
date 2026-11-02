@@ -12,7 +12,8 @@ sha256=55665c87824051ed4774ff3280a79ccbbb7d39243b9736ca5e98222134112d54
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 dest="$root/.tools/dxc"
-if [ -x "$dest/bin/dxc" ] && [ -f "$dest/lib/libdxcompiler.so" ] && [ -f "$dest/LICENSE-LLVM.txt" ]; then
+if [ -x "$dest/bin/dxc" ] && [ -f "$dest/lib/libdxcompiler.so" ] && [ -f "$dest/LICENSE-LLVM.txt" ] \
+    && [ "$(stat -c %s "$dest/lib/libdxcompiler.so")" -lt 100000000 ]; then
     echo "DXC already present in $dest"
     exit 0
 fi
@@ -28,5 +29,7 @@ tar -xzf "$tmp/$asset" -C "$tmp" "$dir/bin/dxc" "$dir/lib/libdxcompiler.so" \
 mkdir -p "$dest/bin" "$dest/lib"
 cp "$tmp/$dir/bin/dxc" "$dest/bin/"
 cp "$tmp/$dir/lib/libdxcompiler.so" "$dest/lib/"
+# The release keeps debug symbols: 315 MB of library, 25 MB without.
+strip --strip-unneeded "$dest/bin/dxc" "$dest/lib/libdxcompiler.so"
 cp "$tmp/$dir"/LICEN* "$dest/"
 echo "DXC $tag installed in $dest"

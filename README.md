@@ -130,7 +130,7 @@ cargo build --release -p diorama-ui        # the window, with the built front en
 target/release/diorama-ui                  # starts dioramad on demand
 ```
 
-Linux support is in progress (Wayland compositors with layer-shell, such as Sway, Hyprland and KDE). It builds the same way, with `bash scripts/fetch-dxc.sh` for the shader compiler, and needs the GStreamer, ALSA, WebKitGTK and gtk-layer-shell development packages (on Debian/Ubuntu: `libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libasound2-dev libwebkit2gtk-4.1-dev libgtk-layer-shell-dev`).
+Linux support is in progress (Wayland compositors with layer-shell, such as Sway, Hyprland and KDE). It builds the same way, with `bash scripts/fetch-dxc.sh` for the shader compiler, and needs the GStreamer, ALSA, WebKitGTK and gtk-layer-shell development packages (on Debian/Ubuntu: `libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libasound2-dev libwebkit2gtk-4.1-dev libgtk-layer-shell-dev`). `bash scripts/bundle.sh` builds the .deb and AppImage (it also needs `patchelf`).
 
 During development the daemon also runs on its own:
 

@@ -46,6 +46,16 @@ No code-signing certificate yet.
   `microsoft/winget-pkgs` by pull request. winget users upgrade through
   winget or the in-app updater; both run the same installer.
 
+- **Linux (Phase 7)**: `scripts/bundle.sh` builds a `.deb` and an
+  AppImage from `tauri.bundle.linux.conf.json`: the programs in
+  `/usr/bin`, DXC (stripped: 25 MB instead of 315 MB) in Tauri's resource
+  folder `/usr/lib/Diorama/dxc`, where the shader compiler looks. The
+  `.deb` depends on the distribution's WebKitGTK, gtk-layer-shell and
+  GStreamer (libav and VA-API plugins recommended); the AppImage carries
+  GTK, WebKitGTK and GStreamer itself (185 MB). CI builds both as
+  artifacts on every push to `main`; they are not released or updated in
+  place yet.
+
 ## Consequences
 
 - The updater's download URLs must be reachable without credentials: the
