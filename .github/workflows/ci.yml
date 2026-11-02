@@ -26,7 +26,9 @@ jobs:
       matrix:
         # Windows is the primary target; Linux runs the same tests from day 1 so
         # Windows-only assumptions cannot leak outside diorama-platform.
-        os: [windows-latest, ubuntu-latest]
+        # Ubuntu pinned: the scene goldens run on its lavapipe (Mesa 26 on
+        # 26.04 crashed in them), and the WSL test bed is 24.04 too.
+        os: [windows-latest, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
