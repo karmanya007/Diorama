@@ -96,13 +96,24 @@ implement `wlr-layer-shell`, GNOME does not, and X11 sessions remain.
   (`--frame-out`) need no desktop. Corpus goldens on lavapipe equal
   Windows' (mean SSIM 0.9369 on both over 53 captures, largest difference
   0.022) when run in the same time zone, which time-of-day scenes follow.
+- **Web wallpapers in WebKitGTK**: wry cannot put WebKitGTK into a raw
+  Wayland surface, so the web host makes its own GTK windows background
+  layer surfaces with `gtk-layer-shell` (created hidden and shown when the
+  page has painted, as on Windows) and runs the GTK main loop; Diorama's
+  Wayland connection still reports outputs and their changes. The pages
+  get real pointer input there, so dioramad forwards none. Network off is
+  a proxy that is not there, set on the page's data manager before it
+  runs, as with WebView2. The `diorama:` scheme handler lives in the web
+  context the pages share and is registered once. Not on Linux: answers
+  for the PerformanceMonitor companion (WebKitGTK cannot intercept
+  `http://127.0.0.1` requests), and `--snapshot` of pages that animate
+  with CSS transitions (WebKit throttles an off-screen window's page).
 - **No OS fallback wallpaper (P14) yet**: there is no common API. A
   wallpaper client like `swaybg` would take a background-layer surface that
   can stack above Diorama's, and writing GNOME's or Plasma's own wallpaper
   setting is a lasting change to the desktop that needs testing on those
   desktops first.
-- **Later in Phase 7**: WebKitGTK with `gtk-layer-shell` for web
-  wallpapers, X11 (`_NET_WM_WINDOW_TYPE_DESKTOP`), and a GNOME Shell
+- **Later in Phase 7**: X11 (`_NET_WM_WINDOW_TYPE_DESKTOP`), and a GNOME Shell
   extension last.
 
 ## Consequences

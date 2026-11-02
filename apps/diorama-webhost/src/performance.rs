@@ -7,6 +7,10 @@
 //! The format follows the app's documented response: `psutil` numbers
 //! rounded to one decimal, disks and memory as `"<used> GB/<total> GB"`
 //! (GiB), network in kilobits per second, a UNIX `timestamp`.
+//!
+//! Only WebView2 lets the host answer `http://127.0.0.1` requests itself;
+//! WebKitGTK cannot intercept them, so on Linux these go unanswered.
+#![cfg_attr(not(windows), allow(dead_code))]
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};

@@ -1,5 +1,7 @@
-//! The web wallpaper host proper (needs a WebView: WebView2 on Windows).
+//! The web wallpaper host proper (needs a WebView: WebView2 on Windows,
+//! WebKitGTK on Linux).
 
+use crate::desktop::{Desktop, Surface};
 use crate::local::LocalFiles;
 use crate::performance::Performance;
 use crate::watch::{Reports, Watchdog};
@@ -13,8 +15,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use diorama_platform::{OutputInfo, Platform, WallpaperWindow};
-use raw_window_handle::{HandleError, HasWindowHandle, RawWindowHandle, WindowHandle};
+use diorama_platform::OutputInfo;
 use serde_json::{Map, Value};
 use wry::dpi::{PhysicalPosition, PhysicalSize};
 use wry::{Rect, WebContext, WebView, WebViewBuilder};
@@ -122,21 +123,10 @@ fn parse(line: &str) -> Option<Command> {
     })
 }
 
-/// A raw handle as `HasWindowHandle` for wry.
-struct Parent(RawWindowHandle);
-
-impl HasWindowHandle for Parent {
-    fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
-        // SAFETY: the handle comes from a WallpaperWindow that outlives the
-        // WebView built on it (both live in the same `Screen`).
-        Ok(unsafe { WindowHandle::borrow_raw(self.0) })
-    }
-}
-
 /// A WebView on one output. Field order: the WebView goes before its window.
 struct Screen {
     webview: WebView,
-    window: WallpaperWindow,
+    window: Surface,
     output: OutputInfo,
     watchdog: Watchdog,
 }
@@ -163,6 +153,8 @@ struct Host {
     performance: Performance,
     /// Create windows below the other wallpaper windows (until shown).
     below: bool,
+    /// The `diorama:` scheme handler is in the web context.
+    protocol_registered: bool,
 }
 
 impl Host {
@@ -195,19 +187,15 @@ impl Host {
         self.directories = directories;
     }
 
-    fn screen(&mut self, platform: &Platform, output: &OutputInfo) -> Result<Screen> {
-        let window = if self.below {
-            platform.create_wallpaper_below(output)
-        } else {
-            platform.create_wallpaper(output)
-        }
-        .context("creating the wallpaper window")?;
+    fn screen(&mut self, desktop: &Desktop, output: &OutputInfo) -> Result<Screen> {
+        let window = desktop
+            .window(output, self.below)
+            .context("creating the wallpaper window")?;
         self.page(window, output)
     }
 
-    fn page(&mut self, window: WallpaperWindow, output: &OutputInfo) -> Result<Screen> {
+    fn page(&mut self, window: Surface, output: &OutputInfo) -> Result<Screen> {
         let (w, h) = window.size();
-        let parent = Parent(window.handles().window);
         let root = self.root.clone();
         let local = Arc::clone(&self.local);
         let origin = self.url.split('/').take(3).collect::<Vec<_>>().join("/");
@@ -215,17 +203,26 @@ impl Host {
         let init = self.init_script(output);
         let (allow_network, devtools) = (self.allow_network, self.devtools);
         let reports = self.reports.clone();
-        let builder = WebViewBuilder::new_with_web_context(&mut self.context)
+        // WebKitGTK keeps the scheme handler in the web context the pages
+        // share: registered for the first page only (WebView2 wants it on
+        // every WebView).
+        let register = !(cfg!(target_os = "linux") && self.protocol_registered);
+        let mut builder = WebViewBuilder::new_with_web_context(&mut self.context)
             .with_url(&self.url)
             .with_bounds(Rect {
                 position: PhysicalPosition::new(0, 0).into(),
                 size: PhysicalSize::new(w, h).into(),
             })
-            .with_initialization_script(init)
-            .with_custom_protocol("diorama".into(), move |_, request| match local.read() {
+            .with_initialization_script(init);
+        if register {
+            builder = builder.with_custom_protocol("diorama".into(), move |_, request| match local
+                .read()
+            {
                 Ok(local) => protocol::serve(&root, &local, &request),
                 Err(_) => protocol::serve(&root, &LocalFiles::default(), &request),
-            })
+            });
+        }
+        let builder = builder
             // Pages stay on the wallpaper; links and popups go nowhere.
             .with_navigation_handler(move |url| {
                 allowed.iter().any(|o| url.starts_with(o.as_str())) || url == "about:blank"
@@ -235,9 +232,9 @@ impl Host {
             .with_autoplay(true)
             .with_devtools(devtools);
         let builder = platform_options(builder, allow_network, devtools);
-        let webview = builder
-            .build_as_child(&parent)
-            .context("creating the WebView (is the WebView2 runtime installed?)")?;
+        let webview = window.build(builder).context(WEBVIEW_MISSING)?;
+        self.protocol_registered = true;
+        after_build(&webview, allow_network);
         answer_performance(&webview, &self.performance);
         Ok(Screen {
             webview,
@@ -289,11 +286,47 @@ fn platform_options(
     builder
 }
 
+#[cfg(windows)]
+const WEBVIEW_MISSING: &str = "creating the WebView (is the WebView2 runtime installed?)";
+#[cfg(not(windows))]
+const WEBVIEW_MISSING: &str = "creating the WebView";
+
+/// Settings only the built WebView takes.
+#[cfg(not(target_os = "linux"))]
+fn after_build(_webview: &WebView, _allow_network: bool) {}
+
+/// Network off: every request goes through a proxy that is not there (as
+/// on Windows); the wallpaper's own files come through the `diorama:`
+/// scheme, which never reaches the network. Set before the page runs.
+#[cfg(target_os = "linux")]
+fn after_build(webview: &WebView, allow_network: bool) {
+    use webkit2gtk::{NetworkProxyMode, NetworkProxySettings, WebViewExt, WebsiteDataManagerExt};
+    use wry::WebViewExtUnix;
+    if allow_network {
+        return;
+    }
+    if let Some(data) = webview.webview().website_data_manager() {
+        let mut settings = NetworkProxySettings::new(Some("http://127.0.0.1:9"), &[]);
+        data.set_network_proxy_settings(NetworkProxyMode::Custom, Some(&mut settings));
+    }
+}
+
+/// `%LOCALAPPDATA%/Diorama/webview`; on Linux
+/// `$XDG_DATA_HOME/diorama/webview` (pages' `localStorage` lives there, so
+/// not in the cache folder).
 fn default_data_dir() -> PathBuf {
-    std::env::var_os("LOCALAPPDATA")
+    if cfg!(windows) {
+        return std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join("Diorama")
+            .join("webview");
+    }
+    std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
         .unwrap_or_else(std::env::temp_dir)
-        .join("Diorama")
+        .join("diorama")
         .join("webview")
 }
 
@@ -326,7 +359,7 @@ fn run(args: Args) -> Result<()> {
 
     // Commands: dioramad's stdin, read on a thread; the first may be the
     // initial properties, so read it before building the pages.
-    let platform = Platform::new()?;
+    let platform = Desktop::new()?;
     let (tx, rx) = mpsc::channel::<Option<Command>>();
     let driven = !std::io::stdin().is_terminal();
     if driven {
@@ -389,6 +422,7 @@ fn run(args: Args) -> Result<()> {
         reports: Reports::new(root.clone(), args.allow_network),
         performance: Performance::default(),
         below: args.below,
+        protocol_registered: false,
     };
     host.set_properties(&choices);
     // General properties reach the init script; the rest needs the pages.
@@ -458,7 +492,7 @@ fn run(args: Args) -> Result<()> {
 
 /// Writes the primary page's capture to `path` (via a temporary file, so a
 /// reader never sees half a PNG).
-fn save_snapshot(screens: &[Screen], platform: &Platform, path: &Path) {
+fn save_snapshot(screens: &[Screen], platform: &Desktop, path: &Path) {
     let Some(screen) = screens
         .iter()
         .find(|s| s.output.primary)
@@ -500,7 +534,7 @@ fn span_output(outputs: &[OutputInfo]) -> Option<OutputInfo> {
 /// `--snapshot`: the page in an off-screen window, saved as PNG.
 fn snapshot(
     host: &mut Host,
-    platform: &Platform,
+    platform: &Desktop,
     args: &Args,
     out: &Path,
     early: Vec<Command>,
@@ -511,7 +545,7 @@ fn snapshot(
         .split_once(['x', 'X'])
         .and_then(|(w, h)| Some((w.trim().parse().ok()?, h.trim().parse().ok()?)))
         .context("--size must be WxH")?;
-    let window = platform.create_offscreen(w, h)?;
+    let window = platform.offscreen(w, h)?;
     let output = OutputInfo {
         id: diorama_platform::OutputId("offscreen".into()),
         name: String::new(),
@@ -626,6 +660,7 @@ fn answer_performance(_webview: &WebView, _performance: &Performance) {}
 
 /// (`/performance` or `/status`, port) when `uri` asks the companion app on
 /// this machine (`http://127.0.0.1:<port>/…` or `localhost`).
+#[cfg_attr(not(windows), allow(dead_code))]
 fn companion_request(uri: &str) -> Option<(String, u16)> {
     let rest = uri.strip_prefix("http://")?;
     let (authority, path) = rest.split_once('/')?;
@@ -642,7 +677,7 @@ fn companion_request(uri: &str) -> Option<(String, u16)> {
 
 /// PNG of what the WebView shows (WebView2 `CapturePreview`).
 #[cfg(windows)]
-fn capture(webview: &WebView, platform: &Platform) -> Result<Vec<u8>> {
+fn capture(webview: &WebView, platform: &Desktop) -> Result<Vec<u8>> {
     use webview2_com::CapturePreviewCompletedHandler;
     use webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG;
     use windows::Win32::System::Com::{STATFLAG_NONAME, STREAM_SEEK_SET};
@@ -701,12 +736,50 @@ fn capture(webview: &WebView, platform: &Platform) -> Result<Vec<u8>> {
     }
 }
 
-#[cfg(not(windows))]
-fn capture(_webview: &WebView, _platform: &Platform) -> Result<Vec<u8>> {
-    anyhow::bail!("snapshots need WebView2 (Windows)")
+/// PNG of what the WebView shows (WebKitGTK snapshot of the visible area).
+#[cfg(target_os = "linux")]
+fn capture(webview: &WebView, platform: &Desktop) -> Result<Vec<u8>> {
+    use webkit2gtk::{SnapshotOptions, SnapshotRegion, WebViewExt};
+    use wry::WebViewExtUnix;
+
+    let (tx, rx) = mpsc::channel();
+    webview.webview().snapshot(
+        SnapshotRegion::Visible,
+        SnapshotOptions::NONE,
+        None::<&gtk::gio::Cancellable>,
+        move |result| {
+            let png = result.map_err(|e| e.to_string()).and_then(|surface| {
+                let image = cairo::ImageSurface::try_from(surface)
+                    .map_err(|_| "not an image surface".to_owned())?;
+                let mut png = Vec::new();
+                image.write_to_png(&mut png).map_err(|e| e.to_string())?;
+                Ok(png)
+            });
+            let _ = tx.send(png);
+        },
+    );
+    // A page stuck in a script never finishes a capture; give up rather
+    // than stop serving dioramad.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        platform.poll_events(Duration::from_millis(16));
+        match rx.try_recv() {
+            Ok(png) => return png.map_err(|e| anyhow::anyhow!("capture failed: {e}")),
+            Err(mpsc::TryRecvError::Empty) => anyhow::ensure!(
+                std::time::Instant::now() < deadline,
+                "capture timed out (the page is not responding)"
+            ),
+            Err(mpsc::TryRecvError::Disconnected) => anyhow::bail!("capture failed"),
+        }
+    }
 }
 
-fn build(host: &mut Host, platform: &Platform, span: bool, only: &[String]) -> Result<Vec<Screen>> {
+#[cfg(not(any(windows, target_os = "linux")))]
+fn capture(_webview: &WebView, _platform: &Desktop) -> Result<Vec<u8>> {
+    anyhow::bail!("snapshots are not supported on this platform yet")
+}
+
+fn build(host: &mut Host, platform: &Desktop, span: bool, only: &[String]) -> Result<Vec<Screen>> {
     let mut outputs = platform.outputs()?;
     if !only.is_empty() {
         outputs.retain(|o| only.contains(&o.id.0));
@@ -728,7 +801,7 @@ fn build(host: &mut Host, platform: &Platform, span: bool, only: &[String]) -> R
     Ok(screens)
 }
 
-fn apply(host: &mut Host, screens: &[Screen], platform: &Platform, command: Command) {
+fn apply(host: &mut Host, screens: &[Screen], platform: &Desktop, command: Command) {
     let js = match command {
         Command::Properties(choices) => {
             host.set_properties(&choices);

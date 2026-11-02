@@ -6,27 +6,29 @@
 //! stdin closes, so it never outlives dioramad. Run alone (stdin a terminal)
 //! it shows the wallpaper with its default properties until killed.
 //!
-//! The WebView backends: WebView2 on Windows; WebKitGTK arrives with the
-//! Linux port.
+//! The WebView backends: WebView2 on Windows, WebKitGTK on Linux (in GTK
+//! layer-shell windows).
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+mod desktop;
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 mod host;
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 mod local;
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 mod performance;
 mod properties;
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 mod protocol;
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 mod watch;
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 fn main() {
     host::main();
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 fn main() {
     // Keeps the shared module compiled (and tested) on every platform.
     let _ = properties::user_properties;

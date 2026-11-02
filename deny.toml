@@ -9,11 +9,17 @@ ignore = [
     # (glib-macros 0.18). Revisit when Tauri moves to GTK 4.
     { id = "RUSTSEC-2024-0370", reason = "unmaintained build-time macro via tauri's Linux GTK stack" },
     # zbus 5 split crates (unmaintained since merged into zbus 6, no known
-    # vulnerability): Linux D-Bus of tauri-plugin-single-instance. Revisit
-    # when the plugin moves to zbus 6.
-    { id = "RUSTSEC-2026-0370", reason = "zvariant merged into zbus 6; via tauri-plugin-single-instance on Linux" },
-    { id = "RUSTSEC-2026-0371", reason = "zbus_names merged into zbus 6; via tauri-plugin-single-instance on Linux" },
-    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive merged into zbus 6; via tauri-plugin-single-instance on Linux" },
+    # vulnerability): Linux D-Bus of tauri-plugin-single-instance, and
+    # diorama-platform's logind/MPRIS/tray code, which stays on zbus 5 to
+    # share one copy with it. Revisit when the plugin moves to zbus 6.
+    { id = "RUSTSEC-2026-0370", reason = "zvariant merged into zbus 6; zbus 5 shared with tauri-plugin-single-instance on Linux" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names merged into zbus 6; zbus 5 shared with tauri-plugin-single-instance on Linux" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive merged into zbus 6; zbus 5 shared with tauri-plugin-single-instance on Linux" },
+    # gtk-layer-shell GTK 3 bindings (unmaintained, no known vulnerability):
+    # the Linux web host's layer-shell windows; wry's WebKitGTK is GTK 3 like
+    # Tauri's. Revisit with GTK 4 (gtk4-layer-shell, WebKitGTK 6).
+    { id = "RUSTSEC-2024-0422", reason = "unmaintained GTK 3 binding; the web host follows wry's GTK 3 WebKitGTK" },
+    { id = "RUSTSEC-2024-0423", reason = "unmaintained GTK 3 binding (sys); the web host follows wry's GTK 3 WebKitGTK" },
 ]
 
 [licenses]

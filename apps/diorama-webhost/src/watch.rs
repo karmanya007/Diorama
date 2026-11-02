@@ -155,7 +155,10 @@ impl Reports {
 #[derive(Default)]
 pub struct Watchdog {
     answered: Arc<AtomicBool>,
+    /// When the open question was first asked.
     asked: Option<Instant>,
+    /// When it was last asked again.
+    pinged: Option<Instant>,
     next: Option<Instant>,
     stuck: bool,
 }
@@ -177,13 +180,23 @@ impl Watchdog {
                 }
                 self.asked = None;
                 self.next = Some(asked + PING_EVERY);
-            } else if !self.stuck && now.duration_since(asked) > STUCK_AFTER {
+                return;
+            }
+            if !self.stuck && now.duration_since(asked) > STUCK_AFTER {
                 self.stuck = true;
                 tracing::warn!(
                     "web wallpaper page stopped responding (a script is probably stuck in a \
                      loop){}",
                     reports.hint()
                 );
+            }
+            // Ask again meanwhile: WebKitGTK drops the answer to a script
+            // sent before the page finished loading.
+            if self
+                .pinged
+                .is_some_and(|p| now.duration_since(p) >= PING_EVERY)
+            {
+                self.ping(now, ask);
             }
             return;
         }
@@ -192,6 +205,11 @@ impl Watchdog {
         }
         self.answered.store(false, Ordering::SeqCst);
         self.asked = Some(now);
+        self.ping(now, ask);
+    }
+
+    fn ping(&mut self, now: Instant, ask: impl FnOnce(Box<dyn Fn() + Send>)) {
+        self.pinged = Some(now);
         let answered = Arc::clone(&self.answered);
         ask(Box::new(move || answered.store(true, Ordering::SeqCst)));
     }
@@ -232,6 +250,20 @@ mod tests {
         reply();
         dog.tick(&reports, |_| again = true);
         assert!(!again, "next question waits {PING_EVERY:?}");
+        assert!(dog.asked.is_none() && !dog.stuck);
+    }
+
+    #[test]
+    fn unanswered_questions_are_asked_again() {
+        let reports = Reports::new(PathBuf::from("C:/w"), true);
+        let mut dog = Watchdog::default();
+        dog.tick(&reports, |_| {});
+        // The first answer was lost (asked before the page loaded).
+        dog.pinged = dog.pinged.map(|p| p - PING_EVERY);
+        let mut reply = None;
+        dog.tick(&reports, |done| reply = Some(done));
+        reply.expect("asked again")();
+        dog.tick(&reports, |_| {});
         assert!(dog.asked.is_none() && !dog.stuck);
     }
 }
