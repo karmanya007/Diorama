@@ -30,6 +30,8 @@ wayland-client = "0.31"
 wayland-backend = { version = "0.3", features = ["client_system"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 rustix = { version = "1", features = ["event", "process"] }
+# X11 through libxcb (whose connection Vulkan's XCB surfaces take).
+x11rb = { version = "0.13", features = ["allow-unsafe-code", "randr", "xinput"] }
 # logind lock events (blocking API on its own thread).
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
 

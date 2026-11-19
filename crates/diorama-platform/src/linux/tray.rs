@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use zbus::blocking::Connection;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
-use super::wayland::Waker;
+use super::Waker;
 use crate::{DesktopEvent, Error, Result, TrayCommand, TrayState};
 
 const ITEM_PATH: &str = "/StatusNotifierItem";

@@ -153,6 +153,13 @@ mod gtk_desktop {
         /// only on [`Surface::raise`] (layer surfaces of one layer have no
         /// order, so the page it replaces stays until then).
         pub fn window(&self, output: &OutputInfo, below: bool) -> Result<Surface> {
+            if !gtk_layer_shell::is_supported() {
+                let surface = x11_window(output);
+                if !below {
+                    surface.raise();
+                }
+                return Ok(surface);
+            }
             let window = gtk::Window::new(gtk::WindowType::Toplevel);
             window.init_layer_shell();
             window.set_layer(Layer::Background);
@@ -190,6 +197,31 @@ mod gtk_desktop {
             };
             surface.raise();
             Ok(surface)
+        }
+    }
+
+    /// X11 (no layer-shell): a popup window, which the window manager never
+    /// manages, over `output` and kept at the bottom of the stack, under
+    /// every application. A page replacing another one appears when the old
+    /// one's host exits.
+    fn x11_window(output: &OutputInfo) -> Surface {
+        let window = gtk::Window::new(gtk::WindowType::Popup);
+        window.move_(output.x, output.y);
+        let (w, h) = (
+            i32::try_from(output.width).unwrap_or(1920),
+            i32::try_from(output.height).unwrap_or(1080),
+        );
+        window.set_default_size(w, h);
+        window.resize(w, h);
+        window.connect_map(|window| {
+            if let Some(gdk) = window.window() {
+                gdk.lower();
+            }
+        });
+        Surface {
+            window,
+            size: (output.width, output.height),
+            shown: Cell::new(false),
         }
     }
 

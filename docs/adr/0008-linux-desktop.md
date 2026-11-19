@@ -113,8 +113,26 @@ implement `wlr-layer-shell`, GNOME does not, and X11 sessions remain.
   can stack above Diorama's, and writing GNOME's or Plasma's own wallpaper
   setting is a lasting change to the desktop that needs testing on those
   desktops first.
-- **Later in Phase 7**: X11 (`_NET_WM_WINDOW_TYPE_DESKTOP`), and a GNOME Shell
-  extension last.
+- **X11 when there is no Wayland session** (`WAYLAND_DISPLAY` unset;
+  `DIORAMA_DISPLAY=x11|wayland` overrides), through x11rb over libxcb so
+  Vulkan gets an XCB surface. Outputs from RandR, identity from the EDID
+  (manufacturer, product, serial, connector). Wallpapers are EWMH desktop
+  windows (`_NET_WM_WINDOW_TYPE_DESKTOP`, below, sticky, on every
+  workspace) when the window manager lists that type in `_NET_SUPPORTED`;
+  otherwise (i3, no window manager) override-redirect windows the window
+  manager never sees, kept at the bottom of the stack and raised only above
+  Diorama's other windows. Coverage reads `_NET_CLIENT_LIST`,
+  `_NET_WM_STATE` and `_NET_WM_DESKTOP`: a window the window manager calls
+  fullscreen covers its output even when it is a few pixels short
+  (terminals size in whole characters), and one filling 85 % of its output
+  counts as maximized, since tiling window managers have no maximize. The
+  cursor comes from `QueryPointer` (X11 tells any client), presses from
+  XInput 2.2 raw events, which arrive even while the window manager grabs
+  the pointer. Web wallpapers on X11 are GTK popup windows lowered to the
+  bottom; they get the pointer themselves on both display systems, so
+  dioramad forwards none on Linux. Desktop icon programs (xfdesktop,
+  pcmanfm) draw their own desktop window, which may hide Diorama's.
+- **Later in Phase 7**: a GNOME Shell extension.
 
 ## Consequences
 

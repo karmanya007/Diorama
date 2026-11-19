@@ -9,7 +9,7 @@ use zbus::blocking::{Connection, MessageIterator, Proxy};
 use zbus::proxy::CacheProperties;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue};
 
-use super::wayland::Waker;
+use super::Waker;
 use crate::DesktopEvent;
 
 const LOGIN1: &str = "org.freedesktop.login1";

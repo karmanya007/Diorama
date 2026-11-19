@@ -45,6 +45,11 @@ pub use unsupported::{
     ui_language,
 };
 
+/// Web wallpapers' own windows receive the pointer (Linux: layer surfaces
+/// and X11 windows below the others get input); elsewhere dioramad forwards
+/// it to them (Windows: pages sit behind the desktop icons).
+pub const WEB_PAGES_GET_POINTER: bool = cfg!(target_os = "linux");
+
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(Debug, thiserror::Error)]

@@ -3,19 +3,14 @@
 //! output from `wlr-foreign-toplevel-management` (P5/P6). The cursor is
 //! known while it is over a wallpaper, which on Wayland means over bare
 //! desktop: windows above take the pointer.
-//!
-//! Single-threaded like the Windows backend: create, use and drop the
-//! [`Platform`] on the thread that calls [`Platform::poll_events`].
 
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
-use std::io::{Read, Write};
 use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
-use std::path::Path;
 use std::ptr::NonNull;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use raw_window_handle::{
@@ -57,14 +52,8 @@ fn wl_err(call: &'static str) -> impl FnOnce(String) -> Error {
 
 /// The Wayland connection and everything bound on it.
 #[derive(Debug)]
-pub struct Platform {
+pub struct Display {
     inner: RefCell<Inner>,
-    /// Read end of the waker's socket pair (polled with the connection).
-    wake_rx: UnixStream,
-    wake_tx: Arc<UnixStream>,
-    /// Events from other threads (logind, the tray).
-    shared: Arc<Mutex<Vec<DesktopEvent>>>,
-    tray: RefCell<Option<super::tray::Tray>>,
 }
 
 #[derive(Debug)]
@@ -74,7 +63,7 @@ struct Inner {
     state: State,
 }
 
-impl Platform {
+impl Display {
     pub fn new() -> Result<Self> {
         let conn = Connection::connect_to_env()
             .map_err(|e| wl_err("wl_display_connect")(e.to_string()))?;
@@ -90,23 +79,8 @@ impl Platform {
         }
         state.ready = true;
         state.events.clear();
-        let (wake_rx, wake_tx) =
-            UnixStream::pair().map_err(|e| wl_err("socketpair")(e.to_string()))?;
-        wake_rx
-            .set_nonblocking(true)
-            .map_err(|e| wl_err("socketpair")(e.to_string()))?;
-        wake_tx
-            .set_nonblocking(true)
-            .map_err(|e| wl_err("socketpair")(e.to_string()))?;
-        let wake_tx = Arc::new(wake_tx);
-        let shared = Arc::new(Mutex::new(Vec::new()));
-        super::session::watch_lock(Arc::clone(&shared), Waker(Arc::clone(&wake_tx)));
         Ok(Self {
             inner: RefCell::new(Inner { conn, queue, state }),
-            wake_rx,
-            wake_tx,
-            shared,
-            tray: RefCell::new(None),
         })
     }
 
@@ -192,34 +166,15 @@ impl Platform {
         })
     }
 
-    /// The same as [`Self::create_wallpaper`]: a layer surface appears only
-    /// with its first frame, so the wallpaper it replaces stays visible
-    /// until then without being stacked above.
-    pub fn create_wallpaper_below(&self, output: &OutputInfo) -> Result<WallpaperWindow> {
-        self.create_wallpaper(output)
-    }
-
-    pub fn create_offscreen(&self, _width: u32, _height: u32) -> Result<WallpaperWindow> {
-        Err(Error::Unsupported)
-    }
-
-    /// Dispatches Wayland events for up to `timeout` and returns desktop
-    /// events raised meanwhile. Returns early when anything arrives or the
-    /// [`Waker`] fires.
-    pub fn poll_events(&self, timeout: Duration) -> Vec<DesktopEvent> {
+    /// Dispatches Wayland events for up to `timeout` (or until `wake` is
+    /// readable) and returns desktop events raised meanwhile.
+    pub fn poll_events(&self, timeout: Duration, wake: &UnixStream) -> Vec<DesktopEvent> {
         let mut inner = self.inner.borrow_mut();
         let Inner { queue, state, .. } = &mut *inner;
-        if let Err(e) = dispatch(queue, state, &self.wake_rx, timeout) {
+        if let Err(e) = dispatch(queue, state, wake, timeout) {
             tracing::warn!("Wayland connection: {e}");
         }
-        // Drain the waker.
-        let mut buf = [0u8; 64];
-        while matches!((&self.wake_rx).read(&mut buf), Ok(n) if n > 0) {}
-        let mut events = std::mem::take(&mut state.events);
-        if let Ok(mut shared) = self.shared.lock() {
-            events.append(&mut shared);
-        }
-        events
+        std::mem::take(&mut state.events)
     }
 
     /// What covers each output: windows the compositor reports fullscreen or
@@ -254,10 +209,6 @@ impl Platform {
             .collect()
     }
 
-    pub fn on_battery(&self) -> bool {
-        super::session::on_battery(Path::new("/sys/class/power_supply"))
-    }
-
     /// Where the cursor last was over a wallpaper, in virtual-desktop pixels
     /// (Wayland clients never see the global position). `None` until it
     /// first comes over one.
@@ -282,33 +233,6 @@ impl Platform {
             over_desktop: over,
             left_down: over && pointer.left_down,
         }
-    }
-
-    pub fn lower_priority(&self) {}
-
-    /// Panels scale the pixmap to their size; 64 stays sharp on HiDPI.
-    pub fn tray_icon_size(&self) -> u32 {
-        64
-    }
-
-    /// Shows (or replaces) the tray icon: `rgba` is `size`×`size`.
-    pub fn show_tray(&self, rgba: &[u8], size: u32, state: crate::TrayState) -> Result<()> {
-        // The old icon leaves the panel (and frees its bus name) first.
-        self.tray.borrow_mut().take();
-        let tray =
-            super::tray::Tray::show(rgba, size, state, Arc::clone(&self.shared), self.waker())?;
-        *self.tray.borrow_mut() = Some(tray);
-        Ok(())
-    }
-
-    pub fn set_tray_state(&self, state: crate::TrayState) {
-        if let Some(tray) = self.tray.borrow().as_ref() {
-            tray.set_state(state);
-        }
-    }
-
-    pub fn waker(&self) -> Waker {
-        Waker(Arc::clone(&self.wake_tx))
     }
 }
 
@@ -345,18 +269,6 @@ fn dispatch(
     }
     queue.dispatch_pending(state).map_err(|e| e.to_string())?;
     Ok(())
-}
-
-/// Wakes the thread blocked in [`Platform::poll_events`]. Cheap to clone;
-/// usable from any thread.
-#[derive(Debug, Clone)]
-pub struct Waker(Arc<UnixStream>);
-
-impl Waker {
-    pub fn wake(&self) {
-        // A full socket already means a pending wake-up.
-        let _ = (&*self.0).write(&[1]);
-    }
 }
 
 /// A layer surface behind every window, covering one output. Destroyed on

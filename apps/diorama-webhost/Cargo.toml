@@ -24,7 +24,7 @@ wry.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 cairo-rs = { version = "0.18", features = ["png"] }
 gtk = "0.18"
-gtk-layer-shell = "0.8"
+gtk-layer-shell = { version = "0.8", features = ["v0_5"] }
 webkit2gtk = { version = "2.0", features = ["v2_32"] }
 wry = { workspace = true, features = ["os-webview"] }
 

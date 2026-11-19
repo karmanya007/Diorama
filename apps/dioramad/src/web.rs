@@ -391,6 +391,9 @@ impl WebHost {
     /// The page sits behind the icons; forward the cursor while it is over
     /// the desktop (moves, and button changes as down/up).
     fn forward_pointer(&mut self, platform: &Platform) {
+        if diorama_platform::WEB_PAGES_GET_POINTER {
+            return;
+        }
         let state = platform.desktop_pointer();
         let Some((x, y)) = platform.cursor_position() else {
             return;
