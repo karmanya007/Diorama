@@ -4,7 +4,7 @@
 
 Diorama draws animated wallpapers behind your desktop icons: Wallpaper Engine scenes, videos and web wallpapers from your local Steam Workshop folder, Wallpaper Engine's own projects, or files from any folder you add. It is written in Rust on [wgpu](https://wgpu.rs), uses a small [Tauri](https://tauri.app) app for its window, and never needs Steam to be running.
 
-> **Status: 1.0 for Windows.** Videos, web wallpapers and images are solid; most scenes look right, some still differ from Wallpaper Engine (see [Compatibility](#compatibility)). Linux and macOS ports are planned.
+> **Status: 1.0 for Windows; Linux preview.** Videos, web wallpapers and images are solid; most scenes look right, some still differ from Wallpaper Engine (see [Compatibility](#compatibility)). The Linux packages are a preview: every wallpaper kind works, but so far only on test desktops. A macOS port is planned.
 
 Diorama is an independent project. It is not affiliated with or endorsed by Wallpaper Engine, its developers, or Valve.
 
@@ -52,6 +52,15 @@ Diorama is an independent project. It is not affiliated with or endorsed by Wall
 **Updates**: Settings → Updates → **Check for updates**. Updates are signed and installed in place; your settings are kept.
 
 **Uninstall**: Windows Settings → Apps → Diorama. Tick "Delete the application data" to also remove Diorama's settings and caches.
+
+### Linux (preview)
+
+Download from the [latest release](https://github.com/karmanya007/Diorama/releases/latest):
+
+- `Diorama_<version>_amd64.deb` for Debian, Ubuntu and their derivatives: `sudo apt install ./Diorama_<version>_amd64.deb`. It uses your system's WebKitGTK and GStreamer.
+- `Diorama_<version>_amd64.AppImage` for any other distribution: make it executable and run it. It carries its own libraries and updates itself from Settings → Updates.
+
+It works on Wayland desktops with layer-shell (Sway, Hyprland, KDE Plasma, niri, COSMIC) and on X11 (most window managers, i3 included). GNOME on Wayland needs an extension that is not ready yet. This build has been tested on virtual desktops only; reports from real ones are welcome. For hardware video decoding install your GPU's GStreamer plugin (`gstreamer1.0-vaapi`, or NVIDIA's `nvcodec` from `gstreamer1.0-plugins-bad`). Wallpaper Engine scenes use Wallpaper Engine's files from your Steam library (installed through Proton).
 
 ## Using Diorama
 
@@ -177,10 +186,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) before sending changes.
 ## Roadmap
 
 - **Windows**: a code-signed installer, the winget listing, remaining scene differences.
-- **Linux**:
-  - Wayland (wlr-layer-shell compositors, KDE, GNOME) and X11;
-  - VA-API video, PipeWire audio;
-  - Flatpak and distribution packages.
+- **Linux**: GNOME on Wayland (an extension); testing on real desktops; Flatpak and distribution packages.
 - **macOS.**
 - **An editor** for Diorama's own wallpaper format.
 

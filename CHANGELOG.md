@@ -2,6 +2,22 @@
 
 All notable changes to Diorama are listed here. Versions follow [Semantic Versioning](https://semver.org); before 1.0, minor versions may change behaviour.
 
+## Unreleased
+
+### Linux (preview)
+
+Diorama runs on Linux: a `.deb` and an AppImage come with each release.
+
+- Wallpapers on Wayland desktops with layer-shell (Sway, Hyprland, KDE Plasma, niri, COSMIC) and on X11 (window managers with EWMH desktop windows, and others such as i3). GNOME on Wayland needs an extension that is not ready yet.
+- Every wallpaper kind: Wallpaper Engine scenes (rendered the same as on Windows in our comparisons), videos through GStreamer (hardware decoding with VA-API or NVDEC when installed), web wallpapers in WebKitGTK, images.
+- Sound and audio-reactive wallpapers through PipeWire or PulseAudio, now-playing information from MPRIS, the cursor on the desktop, per-monitor pausing behind fullscreen and maximized windows, battery and lock-screen rules, the tray icon, autostart and the command line.
+- The AppImage updates itself from Settings → Updates; the `.deb` updates with your system's package tools.
+- Not yet on Linux: converting videos, the OS fallback wallpaper, and the figures web widgets ask the PerformanceMonitor app for.
+
+### Fixes
+
+- Audio playback and capture no longer reopen the system's audio connection every few seconds to check for a changed default device.
+
 ## 1.0.0 (2026-10-30)
 
 First stable release for Windows. From 1.0 on, settings, the `diorama` command line and the folders Diorama uses stay compatible until 2.0.

@@ -2,8 +2,12 @@
 # Builds Diorama's Linux packages (.deb and AppImage) into
 # target/release/bundle/: diorama-ui with dioramad, diorama-webhost, the
 # `diorama` CLI and DXC (as resources). The Linux counterpart of
-# scripts/bundle.ps1; no update files yet (the in-app updater is Windows
-# only for now).
+# scripts/bundle.ps1.
+#
+# With TAURI_SIGNING_PRIVATE_KEY (and _PASSWORD) set, the AppImage is also
+# signed (`.AppImage.sig`) for the in-app updater; without them the
+# packages are built alone (local test builds). The .deb updates through
+# the system's package tools instead.
 #
 # Needs patchelf (the AppImage bundles GStreamer) besides the build
 # packages in the README.
@@ -31,6 +35,11 @@ done
 cd "$ui"
 if [ -n "${CI:-}" ]; then npm ci; else npm install; fi
 config=(--config src-tauri/tauri.bundle.linux.conf.json)
+if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+    config+=(--config '{"bundle":{"createUpdaterArtifacts":true}}')
+else
+    echo "TAURI_SIGNING_PRIVATE_KEY not set: building without update files"
+fi
 if [ -n "${SKIP_FRONTEND:-}" ]; then
     [ -f dist/index.html ] || { echo "SKIP_FRONTEND: apps/diorama-ui/dist is missing" >&2; exit 1; }
     config+=(--config '{"build":{"beforeBuildCommand":""}}')

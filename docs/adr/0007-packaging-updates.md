@@ -53,8 +53,10 @@ No code-signing certificate yet.
   `.deb` depends on the distribution's WebKitGTK, gtk-layer-shell and
   GStreamer (libav and VA-API plugins recommended); the AppImage carries
   GTK, WebKitGTK and GStreamer itself (185 MB). CI builds both as
-  artifacts on every push to `main`; they are not released or updated in
-  place yet.
+  artifacts on every push to `main`; releases publish them. The AppImage
+  is signed for the updater and listed in `latest.json` as
+  `linux-x86_64-appimage`, a key only AppImage installs look up; the
+  `.deb` updates through the system's package tools.
 
 ## Consequences
 
