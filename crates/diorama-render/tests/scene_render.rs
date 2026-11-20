@@ -213,6 +213,37 @@ fn layers_effects_and_fbos() {
     assert_eq!(px(&img, 64, 48, 16), [255, 0, 255, 255], "effect chain");
 }
 
+/// The loop shape of fbm noise (Neon Sunset's terrain): a running sum whose
+/// weight halves each round. DXC's loop updates both in `continuing`, which
+/// naga's HLSL writer (DX12) used to get wrong: every term at half weight.
+const HALVING_LOOP: &str = r"
+cbuffer WeVertexUniforms : register(b0, space0) { float4x4 g_ModelViewProjectionMatrix; };
+cbuffer WeFragmentUniforms : register(b1, space0) { float4 g_Color4; };
+struct VsIn { [[vk::location(0)]] float3 pos : ATTRIBUTE0; [[vk::location(1)]] float2 uv : TEXCOORD0; };
+struct VsOut { float4 position : SV_Position; [[vk::location(0)]] float2 uv : TEXCOORD0; };
+VsOut vs(VsIn i) { VsOut o; o.position = mul(float4(i.pos, 1.0), g_ModelViewProjectionMatrix); o.uv = i.uv; return o; }
+float4 ps(VsOut i) : SV_Target0 {
+    float v = 0.0;
+    float a = 0.5;
+    for (int k = 0; k < 5; ++k) { v += a * g_Color4.r; a *= 0.5; }
+    return float4(v, v, v, 1.0);
+}
+";
+
+#[test]
+fn loops_keep_their_running_values() {
+    let Some((gpu, compiler)) = setup() else {
+        return;
+    };
+    let mut s = scene();
+    s.layers.truncate(1);
+    s.programs[0] = program("halving loop", HALVING_LOOP);
+    let img = render(&gpu, &compiler, &s, [0.5, 0.5]);
+    // 0.5 + 0.25 + … + 0.03125 = 0.96875 → 247 (the bug gave half: 123).
+    let [r, ..] = px(&img, 64, 16, 16);
+    assert!((246..=248).contains(&r), "{r}");
+}
+
 #[test]
 fn translucent_layers_blend_with_alpha() {
     let Some((gpu, compiler)) = setup() else {

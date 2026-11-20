@@ -2,6 +2,12 @@
 
 All notable changes to Diorama are listed here. Versions follow [Semantic Versioning](https://semver.org); before 1.0, minor versions may change behaviour.
 
+## Unreleased
+
+### Fixes
+
+- Scenes on Windows whose shaders add values up in a loop drew them wrong: the loop's running values were updated in the wrong order (a bug in the shader translator Diorama's DirectX 12 path uses). Neon Sunset's mountains came out at half their height; they now match Wallpaper Engine's.
+
 ## 1.1.0 (2026-11-20)
 
 Diorama comes to Linux as a preview, and Wallpaper Engine scenes work again when Steam is not installed on `C:`.

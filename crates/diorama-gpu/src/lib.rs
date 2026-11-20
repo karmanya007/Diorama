@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 
+mod loops;
 pub mod shader;
 
 pub use wgpu;

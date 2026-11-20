@@ -158,8 +158,10 @@ impl ShaderCompiler {
         stage: Stage,
     ) -> Result<naga::Module, ShaderError> {
         let spirv = self.spirv(source, entry, stage)?;
-        naga::front::spv::parse_u8_slice(&spirv, &SPV_OPTIONS)
-            .map_err(|e| ShaderError::Parse(e.to_string()))
+        let mut module = naga::front::spv::parse_u8_slice(&spirv, &SPV_OPTIONS)
+            .map_err(|e| ShaderError::Parse(e.to_string()))?;
+        crate::loops::defer_continuing_stores(&mut module);
+        Ok(module)
     }
 
     fn spirv(&self, source: &str, entry: &str, stage: Stage) -> Result<Vec<u8>, ShaderError> {
