@@ -8,7 +8,7 @@ All notable changes to Diorama are listed here. Versions follow [Semantic Versio
 
 Diorama runs on Linux: a `.deb` and an AppImage come with each release.
 
-- Wallpapers on Wayland desktops with layer-shell (Sway, Hyprland, KDE Plasma, niri, COSMIC) and on X11 (window managers with EWMH desktop windows, and others such as i3). GNOME on Wayland needs an extension that is not ready yet.
+- Wallpapers on Wayland desktops with layer-shell (Sway, Hyprland, KDE Plasma, niri, COSMIC), on GNOME 46+ with Diorama's GNOME Shell extension (installed by the `.deb`; a zip for AppImage users), and on X11 (window managers with EWMH desktop windows, and others such as i3).
 - Every wallpaper kind: Wallpaper Engine scenes (rendered the same as on Windows in our comparisons), videos through GStreamer (hardware decoding with VA-API or NVDEC when installed), web wallpapers in WebKitGTK, images.
 - Sound and audio-reactive wallpapers through PipeWire or PulseAudio, now-playing information from MPRIS, the cursor on the desktop, per-monitor pausing behind fullscreen and maximized windows, battery and lock-screen rules, the tray icon, autostart and the command line.
 - The AppImage updates itself from Settings → Updates; the `.deb` updates with your system's package tools.

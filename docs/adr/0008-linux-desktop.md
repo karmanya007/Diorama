@@ -132,7 +132,19 @@ implement `wlr-layer-shell`, GNOME does not, and X11 sessions remain.
   bottom; they get the pointer themselves on both display systems, so
   dioramad forwards none on Linux. Desktop icon programs (xfdesktop,
   pcmanfm) draw their own desktop window, which may hide Diorama's.
-- **Later in Phase 7**: a GNOME Shell extension.
+- **GNOME through a GNOME Shell extension** (`gnome/`, GNOME 46+). Mutter
+  has no layer-shell, so dioramad opens xdg-shell windows (app id
+  `io.github.karmanya007.diorama.wallpaper`, title
+  `Diorama wallpaper|<connector>`) and the extension keeps each one on its
+  monitor, lowered below every window after each restack, on every
+  workspace, never focused (GNOME raises what it focuses), and out of the
+  overview, its thumbnails, Alt+Tab and the dash. Mutter keeps windows out
+  of the top bar's strip, so the window actor is translated up under it
+  (input follows the actor). GNOME tells applications nothing about other
+  windows, so the extension answers `Coverage()` on GNOME Shell's bus name
+  (`/io/github/karmanya007/Diorama`), per connector; dioramad refuses to
+  start without it rather than open windows that would cover the desktop.
+  The overview still shows GNOME's own wallpaper behind workspaces.
 
 ## Consequences
 

@@ -1,0 +1,8 @@
+{
+  "uuid": "diorama@karmanya007.github.io",
+  "name": "Diorama",
+  "description": "Shows Diorama's live wallpapers behind the desktop. GNOME has no way for applications to draw the desktop background; this extension keeps Diorama's wallpaper windows below every other window, on every workspace, and out of the overview, Alt+Tab and the dash. Diorama itself is a separate program.",
+  "shell-version": ["46", "47", "48", "49"],
+  "url": "https://github.com/karmanya007/Diorama",
+  "version-name": "1.0"
+}

@@ -80,6 +80,13 @@ jobs:
           [ -n "$TAURI_SIGNING_PRIVATE_KEY" ] || { echo 'TAURI_SIGNING_PRIVATE_KEY secret is not set'; exit 1; }
           bash scripts/bundle.sh
 
+      # GNOME's extension, for AppImage users (the .deb installs it):
+      # `gnome-extensions install <zip>`.
+      - name: Pack the GNOME Shell extension
+        run: |
+          cd gnome/diorama@karmanya007.github.io
+          zip ../../target/release/bundle/diorama@karmanya007.github.io.shell-extension.zip metadata.json extension.js
+
       - uses: actions/upload-artifact@v4
         with:
           name: linux
@@ -87,6 +94,7 @@ jobs:
             target/release/bundle/deb/*.deb
             target/release/bundle/appimage/*.AppImage
             target/release/bundle/appimage/*.AppImage.sig
+            target/release/bundle/*.shell-extension.zip
 
   publish:
     needs: [windows, linux]

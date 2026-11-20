@@ -3,6 +3,10 @@
 //! output from `wlr-foreign-toplevel-management` (P5/P6). The cursor is
 //! known while it is over a wallpaper, which on Wayland means over bare
 //! desktop: windows above take the pointer.
+//!
+//! Without layer-shell (GNOME) wallpapers are ordinary windows with
+//! Diorama's app id, which Diorama's GNOME Shell extension moves behind
+//! the desktop (`gnome/`).
 
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
@@ -29,6 +33,10 @@ use smithay_client_toolkit::shell::wlr_layer::{
     Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
     LayerSurfaceConfigure,
 };
+use smithay_client_toolkit::shell::xdg::XdgShell;
+use smithay_client_toolkit::shell::xdg::window::{
+    Window, WindowConfigure, WindowDecorations, WindowHandler,
+};
 use smithay_client_toolkit::shm::{Shm, ShmHandler};
 use smithay_client_toolkit::{delegate_dispatch2, delegate_registry, registry_handlers};
 use wayland_client::backend::{ObjectData, ObjectId};
@@ -46,6 +54,10 @@ use crate::{Coverage, DesktopEvent, Error, OutputId, OutputInfo, Result, Surface
 /// surfaces apart.
 const NAMESPACE: &str = "diorama";
 
+/// App id of wallpaper windows on compositors without layer-shell; the GNOME
+/// Shell extension looks for it. Their title is `Diorama wallpaper|<connector>`.
+pub const WINDOW_APP_ID: &str = "io.github.karmanya007.diorama.wallpaper";
+
 fn wl_err(call: &'static str) -> impl FnOnce(String) -> Error {
     move |message| Error::Os { call, message }
 }
@@ -54,6 +66,26 @@ fn wl_err(call: &'static str) -> impl FnOnce(String) -> Error {
 #[derive(Debug)]
 pub struct Display {
     inner: RefCell<Inner>,
+    /// Without layer-shell: the session bus, to ask Diorama's GNOME Shell
+    /// extension what covers each output.
+    gnome: Option<zbus::blocking::Connection>,
+}
+
+/// Where Diorama's GNOME Shell extension answers (on GNOME Shell's name).
+const GNOME_PATH: &str = "/io/github/karmanya007/Diorama";
+const GNOME_INTERFACE: &str = "io.github.karmanya007.Diorama1";
+
+/// Per wallpaper connector: `fullscreen`, `maximized` or `visible`.
+fn gnome_coverage(bus: &zbus::blocking::Connection) -> zbus::Result<HashMap<String, String>> {
+    bus.call_method(
+        Some("org.gnome.Shell"),
+        GNOME_PATH,
+        Some(GNOME_INTERFACE),
+        "Coverage",
+        &(),
+    )?
+    .body()
+    .deserialize()
 }
 
 #[derive(Debug)]
@@ -79,8 +111,24 @@ impl Display {
         }
         state.ready = true;
         state.events.clear();
+        // Without layer-shell the wallpapers are ordinary windows: without
+        // the extension to put them behind the desktop they would cover it.
+        let gnome = if state.layer_shell.is_none() {
+            let bus = zbus::blocking::Connection::session()
+                .map_err(|e| wl_err("session bus")(e.to_string()))?;
+            gnome_coverage(&bus).map_err(|e| {
+                wl_err("Diorama's GNOME Shell extension")(format!(
+                    "{e}: this desktop has no layer-shell, so Diorama needs its GNOME Shell \
+                     extension (gnome-extensions enable diorama@karmanya007.github.io)"
+                ))
+            })?;
+            Some(bus)
+        } else {
+            None
+        };
         Ok(Self {
             inner: RefCell::new(Inner { conn, queue, state }),
+            gnome,
         })
     }
 
@@ -106,7 +154,8 @@ impl Display {
     }
 
     /// A layer surface covering `output` on the background layer (below
-    /// every window, including the compositor's own wallpaper client).
+    /// every window, including the compositor's own wallpaper client); or,
+    /// without layer-shell, a window the GNOME Shell extension puts there.
     pub fn create_wallpaper(&self, output: &OutputInfo) -> Result<WallpaperWindow> {
         let mut inner = self.inner.borrow_mut();
         let Inner { conn, queue, state } = &mut *inner;
@@ -122,19 +171,35 @@ impl Display {
             .map_or(1, |i| i.scale_factor.max(1));
         let surface = state.compositor.create_surface(&qh);
         surface.set_buffer_scale(scale);
-        let layer = state.layer_shell.create_layer_surface(
-            &qh,
-            surface,
-            Layer::Background,
-            Some(NAMESPACE),
-            Some(&wl_output),
-        );
-        layer.set_anchor(Anchor::all());
-        layer.set_exclusive_zone(-1);
-        layer.set_keyboard_interactivity(KeyboardInteractivity::None);
-        layer.set_size(0, 0);
-        layer.commit();
-        let id = layer.wl_surface().id();
+        let role = if let Some(layer_shell) = &state.layer_shell {
+            let layer = layer_shell.create_layer_surface(
+                &qh,
+                surface,
+                Layer::Background,
+                Some(NAMESPACE),
+                Some(&wl_output),
+            );
+            layer.set_anchor(Anchor::all());
+            layer.set_exclusive_zone(-1);
+            layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+            layer.set_size(0, 0);
+            layer.commit();
+            Role::Layer(layer)
+        } else if let Some(xdg_shell) = &state.xdg_shell {
+            let window = xdg_shell.create_window(surface, WindowDecorations::None, &qh);
+            window.set_app_id(WINDOW_APP_ID);
+            window.set_title(format!("Diorama wallpaper|{}", output.device));
+            let scale = scale as u32;
+            let logical = (output.width / scale, output.height / scale);
+            window.set_min_size(Some(logical));
+            window.set_max_size(Some(logical));
+            state.requested.insert(window.wl_surface().id(), logical);
+            window.commit();
+            Role::Window(window)
+        } else {
+            return Err(Error::Unsupported);
+        };
+        let id = role.wl_surface().id();
         state.configured.insert(id.clone(), None);
         // Nothing may be drawn before the first configure.
         while matches!(state.configured.get(&id), Some(None)) {
@@ -160,7 +225,7 @@ impl Display {
         Ok(WallpaperWindow {
             size: (w * scale as u32, h * scale as u32),
             display,
-            layer,
+            role,
             state_ref: Rc::clone(&state.closed),
             origins: Rc::clone(&state.origins),
         })
@@ -178,8 +243,23 @@ impl Display {
     }
 
     /// What covers each output: windows the compositor reports fullscreen or
-    /// maximized on it. Without `wlr-foreign-toplevel` (GNOME), nothing does.
+    /// maximized on it (`wlr-foreign-toplevel`; on GNOME, Diorama's
+    /// extension). Compositors with neither never pause on windows.
     pub fn coverage(&self, outputs: &[OutputInfo]) -> Vec<Coverage> {
+        if let Some(bus) = &self.gnome {
+            let states = gnome_coverage(bus).unwrap_or_else(|e| {
+                tracing::debug!("GNOME coverage: {e}");
+                HashMap::new()
+            });
+            return outputs
+                .iter()
+                .map(|o| match states.get(&o.device).map(String::as_str) {
+                    Some("fullscreen") => Coverage::Fullscreen,
+                    Some("maximized") => Coverage::Maximized,
+                    _ => Coverage::Visible,
+                })
+                .collect();
+        }
         let inner = self.inner.borrow();
         let state = &inner.state;
         outputs
@@ -271,11 +351,28 @@ fn dispatch(
     Ok(())
 }
 
+/// What a wallpaper surface is to the compositor.
+#[derive(Debug)]
+enum Role {
+    Layer(LayerSurface),
+    /// For the GNOME Shell extension.
+    Window(Window),
+}
+
+impl Role {
+    fn wl_surface(&self) -> &wl_surface::WlSurface {
+        match self {
+            Self::Layer(l) => l.wl_surface(),
+            Self::Window(w) => w.wl_surface(),
+        }
+    }
+}
+
 /// A layer surface behind every window, covering one output. Destroyed on
 /// drop; drop GPU surfaces created from [`WallpaperWindow::handles`] first.
 #[derive(Debug)]
 pub struct WallpaperWindow {
-    layer: LayerSurface,
+    role: Role,
     display: NonNull<std::ffi::c_void>,
     /// Buffer size: the configured (logical) size times the output's scale.
     size: (u32, u32),
@@ -289,8 +386,8 @@ impl WallpaperWindow {
     pub fn raise(&self) {}
 
     pub fn handles(&self) -> SurfaceHandles {
-        let surface = self.layer.wl_surface().id().as_ptr();
-        // SAFETY: the surface pointer stays valid while `self.layer` lives;
+        let surface = self.role.wl_surface().id().as_ptr();
+        // SAFETY: the surface pointer stays valid while `self.role` lives;
         // a null pointer is impossible for a live proxy.
         let window = WaylandWindowHandle::new(unsafe { NonNull::new_unchecked(surface.cast()) });
         SurfaceHandles {
@@ -311,7 +408,7 @@ impl WallpaperWindow {
 
 impl Drop for WallpaperWindow {
     fn drop(&mut self) {
-        let id = self.layer.wl_surface().id();
+        let id = self.role.wl_surface().id();
         self.state_ref.borrow_mut().retain(|c| *c != id);
         self.origins.borrow_mut().remove(&id);
     }
@@ -355,7 +452,11 @@ struct State {
     registry: RegistryState,
     output_state: OutputState,
     compositor: CompositorState,
-    layer_shell: LayerShell,
+    /// Background layer surfaces; without it (GNOME), xdg-shell windows.
+    layer_shell: Option<LayerShell>,
+    xdg_shell: Option<XdgShell>,
+    /// Logical size asked for each xdg window.
+    requested: HashMap<ObjectId, (u32, u32)>,
     seat_state: SeatState,
     /// For cursor images on compositors without `cursor-shape`.
     shm: Shm,
@@ -380,11 +481,20 @@ impl State {
     fn new(globals: &GlobalList, qh: &QueueHandle<Self>) -> Result<Self> {
         let compositor = CompositorState::bind(globals, qh)
             .map_err(|e| wl_err("bind wl_compositor")(e.to_string()))?;
-        let layer_shell = LayerShell::bind(globals, qh).map_err(|e| {
-            wl_err("bind zwlr_layer_shell_v1")(format!(
-                "{e} (this compositor has no layer-shell; GNOME needs Diorama's extension)"
-            ))
-        })?;
+        let layer_shell = LayerShell::bind(globals, qh).ok();
+        let xdg_shell = match layer_shell {
+            Some(_) => None,
+            None => {
+                tracing::info!(
+                    "no layer-shell: wallpapers are windows that Diorama's GNOME Shell extension \
+                     puts behind the desktop"
+                );
+                Some(
+                    XdgShell::bind(globals, qh)
+                        .map_err(|e| wl_err("bind xdg_wm_base")(e.to_string()))?,
+                )
+            }
+        };
         let shm = Shm::bind(globals, qh).map_err(|e| wl_err("bind wl_shm")(e.to_string()))?;
         // Optional: without it nothing ever counts as covering an output.
         if globals
@@ -398,6 +508,8 @@ impl State {
             output_state: OutputState::new(globals, qh),
             compositor,
             layer_shell,
+            xdg_shell,
+            requested: HashMap::new(),
             seat_state: SeatState::new(globals, qh),
             shm,
             pointers: Vec::new(),
@@ -534,6 +646,37 @@ impl LayerShellHandler for State {
         if matches!(previous, Some(Some(old)) if Some(old) != size) {
             self.outputs_changed();
         }
+    }
+}
+
+impl WindowHandler for State {
+    /// The compositor (or the user) asked to close a wallpaper window:
+    /// every wallpaper is rebuilt, as for a closed layer surface.
+    fn request_close(&mut self, _: &Connection, _: &QueueHandle<Self>, window: &Window) {
+        let id = window.wl_surface().id();
+        self.configured.remove(&id);
+        self.closed.borrow_mut().push(id);
+        if !self.events.contains(&DesktopEvent::DesktopReset) {
+            self.events.push(DesktopEvent::DesktopReset);
+        }
+    }
+
+    fn configure(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        window: &Window,
+        configure: WindowConfigure,
+        _: u32,
+    ) {
+        let id = window.wl_surface().id();
+        let asked = self.requested.get(&id).copied().unwrap_or((1, 1));
+        let (w, h) = configure.new_size;
+        let size = (
+            w.map_or(asked.0, std::num::NonZeroU32::get),
+            h.map_or(asked.1, std::num::NonZeroU32::get),
+        );
+        self.configured.insert(id, Some(size));
     }
 }
 
