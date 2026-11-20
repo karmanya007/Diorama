@@ -1036,7 +1036,7 @@ dependencies = [
 
 [[package]]
 name = "diorama-cli"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1049,11 +1049,11 @@ dependencies = [
 
 [[package]]
 name = "diorama-core"
-version = "1.0.0"
+version = "1.1.0"
 
 [[package]]
 name = "diorama-gpu"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "naga",
  "pollster",
@@ -1065,7 +1065,7 @@ dependencies = [
 
 [[package]]
 name = "diorama-ipc"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "interprocess",
  "serde",
@@ -1075,7 +1075,7 @@ dependencies = [
 
 [[package]]
 name = "diorama-library"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1084,7 +1084,7 @@ dependencies = [
 
 [[package]]
 name = "diorama-media"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "cpal",
  "gstreamer",
@@ -1099,14 +1099,14 @@ dependencies = [
 
 [[package]]
 name = "diorama-particles"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "diorama-scene",
 ]
 
 [[package]]
 name = "diorama-platform"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "libc",
  "raw-window-handle",
@@ -1124,7 +1124,7 @@ dependencies = [
 
 [[package]]
 name = "diorama-render"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "bytemuck",
  "diorama-gpu",
@@ -1139,11 +1139,11 @@ dependencies = [
 
 [[package]]
 name = "diorama-scene"
-version = "1.0.0"
+version = "1.1.0"
 
 [[package]]
 name = "diorama-script"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "diorama-scene",
  "rquickjs",
@@ -1154,7 +1154,7 @@ dependencies = [
 
 [[package]]
 name = "diorama-text"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "harfrust",
  "swash",
@@ -1163,7 +1163,7 @@ dependencies = [
 
 [[package]]
 name = "diorama-ui"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "diorama-ipc",
  "diorama-library",
@@ -1180,7 +1180,7 @@ dependencies = [
 
 [[package]]
 name = "diorama-we"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "diorama-core",
  "diorama-scene",
@@ -1193,7 +1193,7 @@ dependencies = [
 
 [[package]]
 name = "diorama-webhost"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "cairo-rs",
@@ -1215,7 +1215,7 @@ dependencies = [
 
 [[package]]
 name = "dioramad"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2673,7 +2673,7 @@ dependencies = [
 
 [[package]]
 name = "imgdiff"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -6922,7 +6922,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "wpdump"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "clap",

@@ -2,7 +2,9 @@
 
 All notable changes to Diorama are listed here. Versions follow [Semantic Versioning](https://semver.org); before 1.0, minor versions may change behaviour.
 
-## Unreleased
+## 1.1.0 (2026-11-20)
+
+Diorama comes to Linux as a preview, and Wallpaper Engine scenes work again when Steam is not installed on `C:`.
 
 ### Linux (preview)
 
