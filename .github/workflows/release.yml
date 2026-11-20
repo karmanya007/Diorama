@@ -112,9 +112,10 @@ jobs:
           dist = pathlib.Path("dist")
           tag = os.environ["GITHUB_REF_NAME"]
           base = f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/download/{tag}"
+          # Artifacts keep their folders (deb/, appimage/…): search them all.
           def entry(pattern):
-              file = next(dist.glob(pattern))
-              sig = (dist / (file.name + ".sig")).read_text().strip()
+              file = next(dist.rglob(pattern))
+              sig = file.with_name(file.name + ".sig").read_text().strip()
               return {"signature": sig, "url": f"{base}/{file.name}"}
           latest = {
               "version": tag.removeprefix("v"),
@@ -134,5 +135,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-            --title "Diorama $GITHUB_REF_NAME" --generate-notes dist/*
+          find dist -type f -print0 | xargs -0 gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" --title "Diorama $GITHUB_REF_NAME" --generate-notes
