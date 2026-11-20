@@ -178,6 +178,16 @@ impl Wallpaper {
             // Import now so a broken scene is reported by `diorama set`.
             MediaKind::Web => unreachable!("handled above"),
             MediaKind::Scene => {
+                // Without them every layer is skipped and only the clear
+                // colour shows: refuse instead, so the previous wallpaper
+                // stays and the reason reaches the UI.
+                anyhow::ensure!(
+                    we_assets.is_some(),
+                    "Wallpaper Engine scenes need Wallpaper Engine's own files (its built-in \
+                     shaders and effects), and Diorama did not find Wallpaper Engine in any Steam \
+                     library. Install it through Steam, or start dioramad with \
+                     --we-assets <its assets folder>"
+                );
                 let choices = crate::properties::choices(we_config, path, overrides);
                 let scene = crate::headless::load_scene(path, we_assets, &choices)?;
                 Content::Scene(SceneSource {

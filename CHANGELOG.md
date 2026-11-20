@@ -16,6 +16,7 @@ Diorama runs on Linux: a `.deb` and an AppImage come with each release.
 
 ### Fixes
 
+- Wallpaper Engine scenes showed only a grey (or single-colour) screen when Steam or Wallpaper Engine is installed somewhere other than `C:\Program Files (x86)\Steam` ([#2](https://github.com/karmanya007/Diorama/issues/2)): Diorama now finds Wallpaper Engine in any of Steam's library folders, and if it cannot find it, refuses the scene with a message saying so instead of showing an empty one.
 - Audio playback and capture no longer reopen the system's audio connection every few seconds to check for a changed default device.
 
 ## 1.0.0 (2026-10-30)
