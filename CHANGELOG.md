@@ -7,6 +7,7 @@ All notable changes to Diorama are listed here. Versions follow [Semantic Versio
 ### Fixes
 
 - Scenes on Windows whose shaders add values up in a loop drew them wrong: the loop's running values were updated in the wrong order (a bug in the shader translator Diorama's DirectX 12 path uses). Neon Sunset's mountains came out at half their height; they now match Wallpaper Engine's.
+- Web wallpapers on Windows that load scripts, data or images over `http://` (often older ones) now get them when their network access is on, as in Wallpaper Engine; they were blocked as mixed content and could stay blank (#2).
 
 ## 1.1.0 (2026-11-20)
 

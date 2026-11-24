@@ -262,7 +262,11 @@ fn platform_options(
     let mut args = String::from(
         "--autoplay-policy=no-user-gesture-required          --disable-features=CalculateNativeWinOcclusion          --disable-backgrounding-occluded-windows --disable-renderer-backgrounding",
     );
-    if !allow_network {
+    if allow_network {
+        // Pages come from an https origin here but from `file:` in WE, where
+        // `http:` scripts and requests load; as mixed content they would not.
+        args.push_str(" --allow-running-insecure-content");
+    } else {
         // Every request goes through a proxy that is not there, loopback
         // included; the wallpaper's files never reach the network stack.
         args.push_str(
