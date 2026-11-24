@@ -97,6 +97,13 @@ pub fn autostart() -> Result<Option<String>> {
 
 pub fn detach_console() {}
 
+/// Replaces this process with a fresh one given `args`. Only Linux's
+/// `DisplayLost` asks for it.
+#[cfg(not(target_os = "linux"))]
+pub fn restart(_args: &[std::ffi::OsString]) -> Error {
+    Error::Unsupported
+}
+
 pub fn set_os_wallpaper(_image: &std::path::Path, _span: bool) -> Result<()> {
     Err(Error::Unsupported)
 }

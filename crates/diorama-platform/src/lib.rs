@@ -17,7 +17,7 @@ mod windows;
 #[cfg(windows)]
 pub use windows::{
     MediaWatcher, Platform, ProcessMonitor, SystemMonitor, Waker, WallpaperWindow, autostart,
-    cache_dir, config_dir, day_fraction, detach_console, legacy_config_dir, no_console,
+    cache_dir, config_dir, day_fraction, detach_console, legacy_config_dir, no_console, restart,
     set_autostart, set_os_wallpaper, steam_dir, ui_language,
 };
 
@@ -27,7 +27,7 @@ mod linux;
 #[cfg(target_os = "linux")]
 pub use linux::{
     MediaWatcher, Platform, ProcessMonitor, SystemMonitor, Waker, WallpaperWindow, autostart,
-    day_fraction, set_autostart, steam_dir,
+    day_fraction, restart, set_autostart, steam_dir,
 };
 
 #[cfg(not(windows))]
@@ -36,7 +36,7 @@ mod unsupported;
 #[cfg(not(any(windows, target_os = "linux")))]
 pub use unsupported::{
     MediaWatcher, Platform, ProcessMonitor, SystemMonitor, Waker, WallpaperWindow, autostart,
-    day_fraction, set_autostart, steam_dir,
+    day_fraction, restart, set_autostart, steam_dir,
 };
 
 #[cfg(not(windows))]
@@ -183,6 +183,11 @@ pub enum DesktopEvent {
     /// The user session was locked (lock screen shown).
     SessionLocked,
     SessionUnlocked,
+    /// The machine woke from sleep (video memory may not have survived it).
+    Resumed,
+    /// The desktop went away (the compositor or X server exited): nothing of
+    /// ours is on screen any more and the `Platform` is of no further use.
+    DisplayLost,
     /// Chosen from the notification-area icon.
     Tray(TrayCommand),
 }

@@ -39,10 +39,10 @@ use smithay_client_toolkit::shell::xdg::window::{
 };
 use smithay_client_toolkit::shm::{Shm, ShmHandler};
 use smithay_client_toolkit::{delegate_dispatch2, delegate_registry, registry_handlers};
-use wayland_client::backend::{ObjectData, ObjectId};
+use wayland_client::backend::{ObjectData, ObjectId, WaylandError};
 use wayland_client::globals::{GlobalList, registry_queue_init};
 use wayland_client::protocol::{wl_output, wl_pointer, wl_seat, wl_surface};
-use wayland_client::{Connection, EventQueue, Proxy, QueueHandle};
+use wayland_client::{Connection, DispatchError, EventQueue, Proxy, QueueHandle};
 use wayland_protocols_wlr::foreign_toplevel::v1::client::{
     zwlr_foreign_toplevel_handle_v1::{self, ZwlrForeignToplevelHandleV1},
     zwlr_foreign_toplevel_manager_v1::{self, ZwlrForeignToplevelManagerV1},
@@ -237,7 +237,8 @@ impl Display {
         let mut inner = self.inner.borrow_mut();
         let Inner { queue, state, .. } = &mut *inner;
         if let Err(e) = dispatch(queue, state, wake, timeout) {
-            tracing::warn!("Wayland connection: {e}");
+            tracing::warn!("Wayland connection lost: {e}");
+            state.events.push(DesktopEvent::DisplayLost);
         }
         std::mem::take(&mut state.events)
     }
@@ -316,22 +317,33 @@ impl Display {
     }
 }
 
+/// An error of the connection that passes: the socket's buffer is full, or
+/// another reader (Vulkan's, on its own queue) was first.
+fn transient(e: &WaylandError) -> bool {
+    use std::io::ErrorKind::{Interrupted, WouldBlock};
+    matches!(e, WaylandError::Io(e) if matches!(e.kind(), WouldBlock | Interrupted))
+}
+
 /// Flushes requests, then waits up to `timeout` for the connection or the
-/// waker, and dispatches what arrived.
+/// waker, and dispatches what arrived. An error means the connection is gone.
 fn dispatch(
     queue: &mut EventQueue<State>,
     state: &mut State,
     wake: &UnixStream,
     timeout: Duration,
-) -> std::result::Result<(), String> {
-    queue.flush().map_err(|e| e.to_string())?;
-    queue.dispatch_pending(state).map_err(|e| e.to_string())?;
+) -> std::result::Result<(), DispatchError> {
+    let passes = |r: std::result::Result<(), WaylandError>| match r {
+        Err(e) if !transient(&e) => Err(DispatchError::Backend(e)),
+        _ => Ok(()),
+    };
+    passes(queue.flush())?;
+    queue.dispatch_pending(state)?;
     if !state.events.is_empty() {
         return Ok(());
     }
     let Some(guard) = queue.prepare_read() else {
         // Events were queued meanwhile.
-        queue.dispatch_pending(state).map_err(|e| e.to_string())?;
+        queue.dispatch_pending(state)?;
         return Ok(());
     };
     let (conn_fd, wake_fd) = (guard.connection_fd(), wake.as_fd());
@@ -340,14 +352,19 @@ fn dispatch(
         rustix::event::PollFd::new(&wake_fd, rustix::event::PollFlags::IN),
     ];
     let timeout = rustix::event::Timespec::try_from(timeout).ok();
+    use rustix::event::PollFlags;
     match rustix::event::poll(&mut fds, timeout.as_ref()) {
-        Ok(_) if fds[0].revents().contains(rustix::event::PollFlags::IN) => {
-            guard.read().map_err(|e| e.to_string())?;
+        Ok(_)
+            if fds[0]
+                .revents()
+                .intersects(PollFlags::IN | PollFlags::HUP | PollFlags::ERR) =>
+        {
+            passes(guard.read().map(|_| ()))?;
         }
         Ok(_) | Err(rustix::io::Errno::INTR) => drop(guard),
-        Err(e) => return Err(e.to_string()),
+        Err(e) => return Err(DispatchError::Backend(WaylandError::Io(e.into()))),
     }
-    queue.dispatch_pending(state).map_err(|e| e.to_string())?;
+    queue.dispatch_pending(state)?;
     Ok(())
 }
 

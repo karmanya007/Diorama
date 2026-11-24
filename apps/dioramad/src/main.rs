@@ -104,6 +104,10 @@ struct Args {
     /// wallpaper's own files load).
     #[arg(long)]
     web_network: bool,
+    /// Carry on after the desktop went away: wait for it to come back, then
+    /// play the saved wallpapers instead of the ones named here.
+    #[arg(long, hide = true)]
+    reconnect: bool,
     /// Exit after this many seconds (for testing).
     #[arg(long)]
     duration: Option<u64>,
@@ -250,6 +254,11 @@ const REBUILD_RETRY: Duration = Duration::from_secs(1);
 /// another one: during a TDR the discrete GPU disappears for a moment and the
 /// integrated one would otherwise take over for good.
 const SAME_ADAPTER_GRACE: Duration = Duration::from_secs(10);
+/// How long a compositor that went away gets to come back, how often to look,
+/// and how long a run must have lasted to try at all.
+const RECONNECT_WAIT: Duration = Duration::from_secs(10);
+const RECONNECT_INTERVAL: Duration = Duration::from_millis(250);
+const MIN_RUN_TO_RECONNECT: Duration = Duration::from_secs(5);
 const AUDIO_CHECK_INTERVAL: Duration = Duration::from_secs(2);
 
 type Job = (Request, SyncSender<Response>);
@@ -311,7 +320,12 @@ fn main() -> Result<()> {
     }
 
     // Offscreen frames above need no desktop (CI, no compositor).
-    let platform = Platform::new().context("platform init")?;
+    let platform = if args.reconnect {
+        wait_for_desktop()?
+    } else {
+        Platform::new().context("platform init")?
+    };
+    let started = Instant::now();
     if args.list_outputs {
         for o in platform.outputs()? {
             println!(
@@ -395,6 +409,7 @@ fn main() -> Result<()> {
         reset_gpu: false,
         lost_adapter: None,
         quit: false,
+        display_lost: false,
         costs: costs::Costs::load(diorama_platform::cache_dir().as_deref()),
         conversions: convert::Conversions::default(),
     };
@@ -404,7 +419,8 @@ fn main() -> Result<()> {
         .as_ref()
         .or(args.video.as_ref())
         .or(args.scene.as_ref())
-        .or(args.web.as_ref());
+        .or(args.web.as_ref())
+        .filter(|_| !args.reconnect);
     let look = Look {
         fit: match args.fit {
             Some(FitArg::Fill) => Fit::Fill,
@@ -503,9 +519,40 @@ fn main() -> Result<()> {
         daemon.tick(&jobs)?;
     }
     daemon.costs.save();
+    let display_lost = daemon.display_lost;
     drop(daemon);
+    if display_lost {
+        // A display that keeps failing is not worth coming back to.
+        anyhow::ensure!(
+            started.elapsed() >= MIN_RUN_TO_RECONNECT,
+            "the desktop went away right after Diorama started"
+        );
+        drop(platform);
+        tracing::info!("the desktop went away; starting afresh");
+        let mut args: Vec<_> = std::env::args_os().skip(1).collect();
+        if !args.iter().any(|a| a == "--reconnect") {
+            args.push("--reconnect".into());
+        }
+        return Err(diorama_platform::restart(&args)).context("restarting");
+    }
     tracing::info!("exiting");
     Ok(())
+}
+
+/// The desktop, once it is there again. Fails when it stays away: the user
+/// logged out (the next sign-in starts its own daemon) or the compositor
+/// came back under another name.
+fn wait_for_desktop() -> Result<Platform> {
+    let deadline = Instant::now() + RECONNECT_WAIT;
+    loop {
+        match Platform::new() {
+            Ok(platform) => return Ok(platform),
+            Err(e) if Instant::now() >= deadline => {
+                return Err(e).context("the desktop did not come back");
+            }
+            Err(_) => std::thread::sleep(RECONNECT_INTERVAL),
+        }
+    }
 }
 
 fn set_fallback(image: &std::path::Path, span: bool) {
@@ -1012,6 +1059,8 @@ struct Daemon<'p> {
     web_allowed: Vec<PathBuf>,
     /// Property values set in Diorama, per wallpaper path.
     overrides: Vec<(PathBuf, properties::Values)>,
+    /// The desktop went away; the daemon restarts itself.
+    display_lost: bool,
     /// Named playlists.
     playlists: Vec<Playlist>,
     rng: playlist::Rng,
@@ -1052,6 +1101,15 @@ impl Daemon<'_> {
             match e {
                 DesktopEvent::SessionLocked => self.conditions.locked = true,
                 DesktopEvent::SessionUnlocked => self.conditions.locked = false,
+                DesktopEvent::Resumed => {
+                    tracing::info!("awake again; setting up the GPU afresh");
+                    self.reset_gpu = true;
+                }
+                DesktopEvent::DisplayLost => {
+                    self.display_lost = true;
+                    self.quit = true;
+                    return Ok(());
+                }
                 DesktopEvent::Tray(command) => self.on_tray(*command),
                 _ => {}
             }

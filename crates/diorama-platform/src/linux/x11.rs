@@ -430,8 +430,8 @@ impl Display {
                 Ok(Some(event)) => event,
                 Ok(None) => return any,
                 Err(e) => {
-                    tracing::warn!("X connection: {e}");
-                    push(DesktopEvent::DesktopReset, events);
+                    tracing::warn!("X connection lost: {e}");
+                    push(DesktopEvent::DisplayLost, events);
                     return true;
                 }
             };

@@ -25,9 +25,12 @@ use std::time::Duration;
 
 pub use media::MediaWatcher;
 pub use metrics::{ProcessMonitor, SystemMonitor};
-pub use system::{autostart, day_fraction, set_autostart, steam_dir};
+pub use system::{autostart, day_fraction, restart, set_autostart, steam_dir};
 
 use crate::{Coverage, DesktopEvent, DesktopPointer, Error, OutputInfo, Result, SurfaceHandles};
+
+/// Nice value of a lowered process (0 is normal, 19 the lowest).
+const NICE: i32 = 5;
 
 /// The desktop session Diorama draws into.
 #[derive(Debug)]
@@ -89,7 +92,7 @@ impl Platform {
             .map_err(io_err("socketpair"))?;
         let wake_tx = Arc::new(wake_tx);
         let shared = Arc::new(Mutex::new(Vec::new()));
-        session::watch_lock(Arc::clone(&shared), Waker(Arc::clone(&wake_tx)));
+        session::watch(Arc::clone(&shared), Waker(Arc::clone(&wake_tx)));
         Ok(Self {
             display,
             wake_rx,
@@ -161,7 +164,14 @@ impl Platform {
         on_display!(&self.display, d => d.desktop_pointer())
     }
 
-    pub fn lower_priority(&self) {}
+    /// A higher nice value for this thread and the threads and processes it
+    /// starts from now on (Linux keeps it per thread), about what Windows'
+    /// below-normal class does.
+    pub fn lower_priority(&self) {
+        if let Err(e) = rustix::process::setpriority_process(None, NICE) {
+            tracing::warn!("could not lower process priority: {e}");
+        }
+    }
 
     /// Panels scale the pixmap to their size; 64 stays sharp on HiDPI.
     pub fn tray_icon_size(&self) -> u32 {

@@ -452,6 +452,10 @@ fn run(args: Args) -> Result<()> {
     }
     loop {
         for event in platform.poll_events(Duration::from_millis(500)) {
+            anyhow::ensure!(
+                event != diorama_platform::DesktopEvent::DisplayLost,
+                "the desktop went away"
+            );
             if event.needs_rebuild() {
                 tracing::info!(?event, "rebuilding web wallpaper windows");
                 screens.clear();

@@ -14,3 +14,8 @@ Wallpaper returns within seconds in both cases.
 
 ## Last run
 2026-10-15: first run failed — the device-lost callback fired mid-frame and the failed present (`surface lost and could not be reconfigured`) ended the daemon. Fixed (frame errors trigger a GPU reset; re-init failures retry). Rerun passed: wallpaper back 1.6 s after `dxcap -forcetdr`; sleep/resume also passed. That run re-created the device on the integrated GPU. Cause: the lost device was still alive during re-init, and D3D12 returns the existing (removed) device for an adapter, so the RTX 4060 looked unusable. The old device is now dropped first; rerun: back on the RTX 4060, wallpaper shown 2.2 s after the reset.
+
+## Linux: waking from sleep
+`PrepareForSleep(false)` from logind sets up the GPU afresh and rebuilds the wallpapers.
+
+2026-11-24: passed with a fake logind (shown again 55 ms after the signal on llvmpipe). Real sleep on real hardware not tested.

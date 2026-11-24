@@ -1,5 +1,5 @@
 //! Power and session state: battery from the kernel's power supplies (what
-//! UPower reads), lock and unlock from logind over D-Bus.
+//! UPower reads), lock, unlock and waking from sleep from logind over D-Bus.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -13,6 +13,7 @@ use super::Waker;
 use crate::DesktopEvent;
 
 const LOGIN1: &str = "org.freedesktop.login1";
+const MANAGER: &str = "org.freedesktop.login1.Manager";
 const SESSION: &str = "org.freedesktop.login1.Session";
 
 /// Running on battery: no mains or USB supply is online and a battery is
@@ -38,23 +39,61 @@ pub(super) fn on_battery(power_supplies: &Path) -> bool {
     discharging
 }
 
-/// Watches the logind session Diorama runs in on a thread of its own and
-/// queues `SessionLocked`/`SessionUnlocked` into `events`. Without logind
-/// (or a session) it logs why and nothing is queued.
-pub(super) fn watch_lock(events: Arc<Mutex<Vec<DesktopEvent>>>, waker: Waker) {
+/// Watches logind on threads of their own: the session Diorama runs in
+/// (queues `SessionLocked`/`SessionUnlocked` into `events`) and sleep
+/// (`Resumed`). Without logind (or a session) it logs why and nothing is
+/// queued.
+pub(super) fn watch(events: Arc<Mutex<Vec<DesktopEvent>>>, waker: Waker) {
+    spawn("logind", Arc::clone(&events), waker.clone(), watch_lock);
+    spawn("logind-sleep", events, waker, watch_sleep);
+}
+
+fn spawn(
+    name: &'static str,
+    events: Arc<Mutex<Vec<DesktopEvent>>>,
+    waker: Waker,
+    watch: fn(&Mutex<Vec<DesktopEvent>>, &Waker) -> zbus::Result<()>,
+) {
     let spawned = std::thread::Builder::new()
-        .name("logind".into())
+        .name(name.into())
         .spawn(move || {
             if let Err(e) = watch(&events, &waker) {
-                tracing::info!("no lock events from logind: {e}");
+                tracing::info!("no events from {name}: {e}");
             }
         });
     if let Err(e) = spawned {
-        tracing::warn!("logind thread: {e}");
+        tracing::warn!("{name} thread: {e}");
     }
 }
 
-fn watch(events: &Mutex<Vec<DesktopEvent>>, waker: &Waker) -> zbus::Result<()> {
+fn queue(events: &Mutex<Vec<DesktopEvent>>, waker: &Waker, event: DesktopEvent) {
+    if let Ok(mut events) = events.lock() {
+        events.push(event);
+    }
+    waker.wake();
+}
+
+/// logind says `PrepareForSleep(true)` before the machine sleeps and
+/// `PrepareForSleep(false)` once it is awake again.
+fn watch_sleep(events: &Mutex<Vec<DesktopEvent>>, waker: &Waker) -> zbus::Result<()> {
+    let conn = Connection::system()?;
+    let rule = zbus::MatchRule::builder()
+        .msg_type(zbus::message::Type::Signal)
+        .sender(LOGIN1)?
+        .interface(MANAGER)?
+        .member("PrepareForSleep")?
+        .build();
+    for msg in MessageIterator::for_match_rule(rule, &conn, None)? {
+        match msg?.body().deserialize::<bool>() {
+            Ok(true) => tracing::info!("going to sleep"),
+            Ok(false) => queue(events, waker, DesktopEvent::Resumed),
+            Err(e) => tracing::debug!("PrepareForSleep: {e}"),
+        }
+    }
+    Ok(())
+}
+
+fn watch_lock(events: &Mutex<Vec<DesktopEvent>>, waker: &Waker) -> zbus::Result<()> {
     let conn = Connection::system()?;
     let path = session_path(&conn)?;
     tracing::debug!("lock events from logind session {}", path.as_str());
@@ -64,10 +103,7 @@ fn watch(events: &Mutex<Vec<DesktopEvent>>, waker: &Waker) -> zbus::Result<()> {
         } else {
             DesktopEvent::SessionUnlocked
         };
-        if let Ok(mut events) = events.lock() {
-            events.push(e);
-        }
-        waker.wake();
+        queue(events, waker, e);
     };
     // Subscribe before reading the current state, so no change falls between.
     let rule = zbus::MatchRule::builder()
@@ -112,11 +148,7 @@ fn watch(events: &Mutex<Vec<DesktopEvent>>, waker: &Waker) -> zbus::Result<()> {
 /// the user's graphical session, else the user's first one. A daemon
 /// started by a systemd user unit belongs to no session.
 fn session_path(conn: &Connection) -> zbus::Result<OwnedObjectPath> {
-    let manager = proxy(
-        conn,
-        "/org/freedesktop/login1",
-        "org.freedesktop.login1.Manager",
-    )?;
+    let manager = proxy(conn, "/org/freedesktop/login1", MANAGER)?;
     if let Ok(id) = std::env::var("XDG_SESSION_ID")
         && let Ok(path) = manager.call::<_, _, OwnedObjectPath>("GetSession", &(id,))
     {

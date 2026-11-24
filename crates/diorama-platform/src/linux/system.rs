@@ -1,6 +1,7 @@
 //! Session integration: autostart through the XDG autostart folder and the
 //! local time of day.
 
+use std::ffi::OsString;
 use std::path::PathBuf;
 
 use crate::{Error, Result};
@@ -75,6 +76,17 @@ fn exec(entry: &str) -> Option<String> {
         }
     }
     command
+}
+
+/// Replaces this process with a fresh one given `args`: every connection to
+/// the lost desktop goes with it. Returns only if that failed.
+pub fn restart(args: &[OsString]) -> Error {
+    use std::os::unix::process::CommandExt;
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(e) => return io_err("current_exe")(e),
+    };
+    io_err("exec")(std::process::Command::new(exe).args(args).exec())
 }
 
 /// Steam's install folder: native (`~/.local/share/Steam`, `~/.steam/steam`)

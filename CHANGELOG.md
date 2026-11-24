@@ -2,6 +2,16 @@
 
 All notable changes to Diorama are listed here. Versions follow [Semantic Versioning](https://semver.org); before 1.0, minor versions may change behaviour.
 
+## Unreleased
+
+### Linux
+
+- Security: the control socket moved from the abstract namespace, where any user of the same machine could connect to it and control Diorama, to the user's own runtime folder. Affects 1.1.0 and 1.1.1 on Linux. A running older daemon is asked to quit when the new one starts.
+- When the desktop goes away (logging out, a compositor or X server crash), `dioramad` no longer stays behind using a whole processor core and filling its log. It waits up to 10 seconds for the desktop, brings the wallpapers back if it returns, and quits otherwise, so the next sign-in can start it.
+- The tray icon appears when the panel starts after Diorama, and again when the panel restarts.
+- After sleep the GPU is set up afresh, since some drivers lose video memory.
+- `dioramad` runs at a lower priority than other programs, as on Windows.
+
 ## 1.1.1 (2026-11-24)
 
 ### Fixes

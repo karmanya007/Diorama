@@ -186,6 +186,12 @@ pub fn detach_console() {
     }
 }
 
+/// Replaces this process with a fresh one given `args`. Only Linux's
+/// `DisplayLost` asks for it.
+pub fn restart(_args: &[std::ffi::OsString]) -> Error {
+    Error::Unsupported
+}
+
 /// Sets the Windows desktop background (all monitors) to `image`: shown when
 /// Diorama is not running, on the lock screen transition and at sign-in (P14).
 pub fn set_os_wallpaper(image: &Path, span: bool) -> Result<()> {

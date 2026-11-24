@@ -8,13 +8,14 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use zbus::blocking::Connection;
+use zbus::blocking::{Connection, MessageIterator};
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
 use super::Waker;
 use crate::{DesktopEvent, Error, Result, TrayCommand, TrayState};
 
 const ITEM_PATH: &str = "/StatusNotifierItem";
+const WATCHER: &str = "org.kde.StatusNotifierWatcher";
 const MENU_PATH: &str = "/MenuBar";
 const MENU_INTERFACE: &str = "com.canonical.dbusmenu";
 
@@ -57,7 +58,8 @@ pub(super) struct Tray {
 
 impl Tray {
     /// Publishes the icon (`rgba`: `size`×`size`, straight alpha) and asks
-    /// the panel's StatusNotifierWatcher to show it.
+    /// the panel's StatusNotifierWatcher to show it, now or once there is one
+    /// (panels start after autostarted programs, and restart).
     pub(super) fn show(
         rgba: &[u8],
         size: u32,
@@ -93,17 +95,7 @@ impl Tray {
             .map_err(bus_err("serve dbusmenu"))?
             .build()
             .map_err(bus_err("session bus"))?;
-        conn.call_method(
-            Some("org.kde.StatusNotifierWatcher"),
-            "/StatusNotifierWatcher",
-            Some("org.kde.StatusNotifierWatcher"),
-            "RegisterStatusNotifierItem",
-            &(name.as_str(),),
-        )
-        .map_err(|e| Error::Os {
-            call: "RegisterStatusNotifierItem",
-            message: format!("{e} (no tray: the panel has no StatusNotifierItem host)"),
-        })?;
+        watch_panel(conn.clone(), name)?;
         Ok(Self { conn, shared })
     }
 
@@ -128,6 +120,64 @@ impl Tray {
             tracing::debug!("tray menu update: {e}");
         }
     }
+}
+
+impl Drop for Tray {
+    fn drop(&mut self) {
+        // The panel's watch thread holds the connection too; closing it ends
+        // that thread and takes the icon away.
+        let _ = self.conn.clone().close();
+    }
+}
+
+/// Registers the item `name` with each panel that comes up, on a thread of
+/// its own until the connection closes.
+fn watch_panel(conn: Connection, name: String) -> Result<()> {
+    // Subscribe before asking, so no panel starts in between.
+    let rule = zbus::MatchRule::builder()
+        .msg_type(zbus::message::Type::Signal)
+        .sender("org.freedesktop.DBus")
+        .and_then(|b| b.interface("org.freedesktop.DBus"))
+        .and_then(|b| b.member("NameOwnerChanged"))
+        .and_then(|b| b.arg(0, WATCHER))
+        .map_err(bus_err("match rule"))?
+        .build();
+    let changes =
+        MessageIterator::for_match_rule(rule, &conn, None).map_err(bus_err("NameOwnerChanged"))?;
+    if let Err(e) = register(&conn, &name) {
+        tracing::info!("no tray icon until a panel hosts one: {e}");
+    }
+    std::thread::Builder::new()
+        .name("tray".into())
+        .spawn(move || {
+            for msg in changes {
+                let Ok(msg) = msg else { return };
+                let body = msg.body();
+                match body.deserialize::<(&str, &str, &str)>() {
+                    Ok((_, _, owner)) if !owner.is_empty() => match register(&conn, &name) {
+                        Ok(()) => tracing::info!("tray icon shown"),
+                        Err(e) => tracing::info!("tray icon: {e}"),
+                    },
+                    _ => {}
+                }
+            }
+        })
+        .map(|_| ())
+        .map_err(|e| Error::Os {
+            call: "tray thread",
+            message: e.to_string(),
+        })
+}
+
+fn register(conn: &Connection, name: &str) -> zbus::Result<()> {
+    conn.call_method(
+        Some(WATCHER),
+        "/StatusNotifierWatcher",
+        Some(WATCHER),
+        "RegisterStatusNotifierItem",
+        &(name,),
+    )
+    .map(|_| ())
 }
 
 /// Images as StatusNotifierItem carries them: width, height, ARGB32

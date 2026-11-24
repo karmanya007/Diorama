@@ -40,6 +40,19 @@ implement `wlr-layer-shell`, GNOME does not, and X11 sessions remain.
   wallpaper sets the default arrow (`cursor-shape`, else the cursor theme).
 - **Event loop**: the Wayland connection and a socket-pair waker are polled
   together, so other threads wake `poll_events` as on Windows.
+- **When the desktop goes away** (its connection fails for good) the daemon
+  replaces itself with a fresh process, which waits up to 10 s for a
+  compositor under the same name and plays the saved wallpapers, or quits.
+  Starting over leaves no GPU or toolkit state tied to the dead connection
+  to repair. A run shorter than 5 s does not try.
+- **After sleep** (logind's `PrepareForSleep(false)`) the GPU is set up
+  afresh: some drivers lose video memory without reporting a lost device.
+- **Priority** is nice 5, inherited by threads and processes started later.
+  Vulkan's global priority is not reachable through wgpu.
+- **The control socket** is `$XDG_RUNTIME_DIR/diorama.sock` (without it,
+  `~/.cache/diorama`), where other users cannot connect; a file lock beside
+  it keeps a second daemon out and tells a live socket from one a killed
+  daemon left. The abstract socket used before had no access control.
 - **Battery** from `/sys/class/power_supply` (what UPower reads): on battery
   when no mains or USB supply is online and a system battery discharges;
   device batteries (mice, headsets) do not count. Polled like on Windows.
@@ -87,7 +100,8 @@ implement `wlr-layer-shell`, GNOME does not, and X11 sessions remain.
   menu, served by zbus (the `ksni` crate's licence is outside the allowed
   list). KDE, waybar and most panels host it; GNOME needs the AppIndicator
   extension; without a host the icon is skipped with a log line, as on
-  Windows without a notification area.
+  Windows without a notification area, and the icon is registered whenever
+  a host's bus name appears.
 - **Scenes** use the same DXC release (`scripts/fetch-dxc.sh`) and the
   Wallpaper Engine install Steam keeps for Proton, found through Steam's
   library folders. WE's `config.json` names wallpapers by Windows or Wine
