@@ -1,15 +1,19 @@
 //! IPC between `dioramad` and its clients (L1).
 //!
-//! Transport: a per-user local socket (named pipe on Windows, Unix socket
-//! elsewhere) via `interprocess`. Protocol: one JSON request line, one JSON
+//! Transport: a per-user local socket via `interprocess`: a named pipe on
+//! Windows (others may not write to it), elsewhere a Unix socket in a folder
+//! only the user can reach. Protocol: one JSON request line, one JSON
 //! response line, per connection. Every message carries [`PROTOCOL_VERSION`];
 //! mismatches are rejected so CLI/UI and daemon never silently misread each other.
 
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use interprocess::local_socket::prelude::*;
-use interprocess::local_socket::{ConnectOptions, GenericNamespaced, ListenerOptions, Name};
+use interprocess::local_socket::{
+    ConnectOptions, GenericFilePath, GenericNamespaced, ListenerOptions, Name,
+};
 use serde::{Deserialize, Serialize};
 
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -461,6 +465,30 @@ struct Envelope<T> {
 }
 
 fn socket_name() -> std::io::Result<Name<'static>> {
+    match socket_dir() {
+        Some(dir) => dir.join("diorama.sock").to_fs_name::<GenericFilePath>(),
+        None => pipe_name(),
+    }
+}
+
+/// Where Unix systems keep the socket: `$XDG_RUNTIME_DIR` (private to the
+/// user), else the cache folder. `None` on Windows.
+fn socket_dir() -> Option<PathBuf> {
+    if std::env::consts::FAMILY != "unix" {
+        return None;
+    }
+    let absolute = |var: &str| {
+        std::env::var_os(var)
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+    };
+    absolute("XDG_RUNTIME_DIR")
+        .or_else(|| absolute("HOME").map(|h| h.join(".cache").join("diorama")))
+}
+
+/// The pipe on Windows. On Linux, the abstract socket used up to 1.1.1, which
+/// any local user could connect to.
+fn pipe_name() -> std::io::Result<Name<'static>> {
     let user = std::env::var("USERNAME")
         .or_else(|_| std::env::var("USER"))
         .unwrap_or_default();
@@ -521,6 +549,45 @@ pub fn call(request: &Request) -> Result<Response> {
 /// The daemon's listening end.
 pub struct Server {
     listener: interprocess::local_socket::Listener,
+    /// Held while the socket file is ours (Unix).
+    _lock: Option<std::fs::File>,
+}
+
+/// How long a daemon of an older version gets to quit.
+const RETIRE_WAIT: Duration = Duration::from_secs(3);
+
+/// Asks a daemon from before the socket moved into the user's own folder to
+/// quit, so an update does not leave two running. Its answer does not matter.
+fn retire_old_daemon() -> std::io::Result<()> {
+    let connect = || ConnectOptions::new().name(pipe_name()?).connect_sync();
+    let Ok(mut stream) = connect() else {
+        return Ok(());
+    };
+    if let Ok(request) = encode(Request::Quit) {
+        stream.write_all(&request)?;
+    }
+    drop(stream);
+    let deadline = Instant::now() + RETIRE_WAIT;
+    while Instant::now() < deadline && connect().is_ok() {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Ok(())
+}
+
+/// The lock that says whose the socket file in `dir` is. A socket file
+/// outlives a killed daemon; its lock does not.
+fn lock(dir: &Path) -> Result<std::fs::File> {
+    std::fs::create_dir_all(dir)?;
+    let file = std::fs::File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join("diorama.lock"))?;
+    match file.try_lock() {
+        Ok(()) => Ok(file),
+        Err(std::fs::TryLockError::WouldBlock) => Err(Error::AlreadyRunning),
+        Err(std::fs::TryLockError::Error(e)) => Err(Error::Io(e)),
+    }
 }
 
 impl std::fmt::Debug for Server {
@@ -532,6 +599,18 @@ impl std::fmt::Debug for Server {
 impl Server {
     /// Binds the per-user socket. Fails with [`Error::AlreadyRunning`] if another daemon answers.
     pub fn bind() -> Result<Self> {
+        let lock = match socket_dir() {
+            Some(dir) => {
+                let lock = lock(&dir)?;
+                let _ = retire_old_daemon();
+                // Left behind by a daemon that was killed.
+                match std::fs::remove_file(dir.join("diorama.sock")) {
+                    Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+                    _ => Some(lock),
+                }
+            }
+            None => None,
+        };
         // Named pipes allow several server instances per name, so probe first.
         if ConnectOptions::new()
             .name(socket_name()?)
@@ -547,7 +626,10 @@ impl Server {
                 std::io::ErrorKind::AddrInUse => Error::AlreadyRunning,
                 _ => Error::Io(e),
             })?;
-        Ok(Self { listener })
+        Ok(Self {
+            listener,
+            _lock: lock,
+        })
     }
 
     /// Serves requests forever (run on a dedicated thread). `handler` returns
@@ -629,6 +711,16 @@ mod tests {
     }
 
     #[test]
+    fn one_daemon_at_a_time() {
+        let dir = std::env::temp_dir().join(format!("diorama-lock-{}", std::process::id()));
+        let first = lock(&dir).unwrap();
+        assert!(matches!(lock(&dir), Err(Error::AlreadyRunning)));
+        drop(first);
+        assert!(lock(&dir).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn oversized_lines_are_rejected() {
         let big = "x".repeat(MAX_LINE + 10);
         let mut reader = BufReader::new(big.as_bytes());
@@ -689,7 +781,10 @@ mod tests {
             .name(name.clone().to_ns_name::<GenericNamespaced>().unwrap())
             .create_sync()
             .unwrap();
-        let server = Server { listener };
+        let server = Server {
+            listener,
+            _lock: None,
+        };
         std::thread::spawn(move || {
             server.serve(|req| match req {
                 Request::Pause => Response::Ok,
