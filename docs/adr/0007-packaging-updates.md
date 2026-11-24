@@ -52,7 +52,11 @@ No code-signing certificate yet.
   folder `/usr/lib/Diorama/dxc`, where the shader compiler looks. The
   `.deb` depends on the distribution's WebKitGTK, gtk-layer-shell and
   GStreamer (libav and VA-API plugins recommended); the AppImage carries
-  GTK, WebKitGTK and GStreamer itself (185 MB). CI builds both as
+  GTK, WebKitGTK and GStreamer itself (186 MB), with the plugins installed
+  where it is built and no others: `bundle.sh` refuses to build one without
+  the decoders (1.1.0 and 1.1.1 came without them). Ubuntu's FFmpeg is GPL,
+  so `appimage-sources.sh` writes the list of bundled packages with their
+  exact sources, released beside it. CI builds both as
   artifacts on every push to `main`; releases publish them. The AppImage
   is signed for the updater and listed in `latest.json` as
   `linux-x86_64-appimage`, a key only AppImage installs look up; the

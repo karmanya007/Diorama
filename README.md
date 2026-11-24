@@ -58,7 +58,7 @@ Diorama is an independent project. It is not affiliated with or endorsed by Wall
 Download from the [latest release](https://github.com/karmanya007/Diorama/releases/latest):
 
 - `Diorama_<version>_amd64.deb` for Debian, Ubuntu and their derivatives: `sudo apt install ./Diorama_<version>_amd64.deb`. It uses your system's WebKitGTK and GStreamer.
-- `Diorama_<version>_amd64.AppImage` for any other distribution: make it executable and run it. It carries its own libraries and updates itself from Settings → Updates.
+- `Diorama_<version>_amd64.AppImage` for any other distribution: make it executable and run it. It carries its own libraries, some of them GPL (listed with their sources in `Diorama_AppImage_sources.txt` of the same release), and updates itself from Settings → Updates.
 
 It works on Wayland desktops with layer-shell (Sway, Hyprland, KDE Plasma, niri, COSMIC), on GNOME with Diorama's GNOME Shell extension, and on X11 (most window managers, i3 included).
 
@@ -67,7 +67,7 @@ On GNOME (46 or newer), enable the extension, then log out and back in: the `.de
 ```sh
 gnome-extensions install diorama@karmanya007.github.io.shell-extension.zip   # AppImage only
 gnome-extensions enable diorama@karmanya007.github.io
-``` This build has been tested on virtual desktops only; reports from real ones are welcome. For hardware video decoding install your GPU's GStreamer plugin (`gstreamer1.0-vaapi`, or NVIDIA's `nvcodec` from `gstreamer1.0-plugins-bad`). Wallpaper Engine scenes use Wallpaper Engine's files from your Steam library (installed through Proton).
+``` This build has been tested on virtual desktops only; reports from real ones are welcome. For hardware video decoding with the `.deb`, install your GPU's GStreamer plugin (`gstreamer1.0-vaapi`, or NVIDIA's `nvcodec` from `gstreamer1.0-plugins-bad`). Wallpaper Engine scenes use Wallpaper Engine's files from your Steam library (installed through Proton).
 
 ## Using Diorama
 
