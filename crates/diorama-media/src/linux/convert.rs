@@ -48,7 +48,8 @@ pub(crate) fn convert(
     if size.0 >= info.width && !gpu_decodes_h264() {
         return Err(Error::Os {
             call: "convert",
-            message: "GStreamer has no H.264 decoder for the graphics card here (VA-API or                       NVDEC), so a copy would cost as much to play"
+            message: "GStreamer has no H.264 decoder for the graphics card here (VA-API or \
+                      NVDEC), so a copy would cost as much to play"
                 .into(),
         });
     }
