@@ -11,6 +11,7 @@ All notable changes to Diorama are listed here. Versions follow [Semantic Versio
 - When the desktop goes away (logging out, a compositor or X server crash), `dioramad` no longer stays behind using a whole processor core and filling its log. It waits up to 10 seconds for the desktop, brings the wallpapers back if it returns, and quits otherwise, so the next sign-in can start it.
 - Videos the graphics card cannot decode can be converted on Linux too, with the graphics card's encoder (VA-API, NVENC) when GStreamer has it, else x264 or OpenH264.
 - The tray icon appears when the panel starts after Diorama, and again when the panel restarts.
+- The `.deb` names the libraries it needs (ALSA, D-Bus, OpenSSL, Vulkan, XCB) and recommends the plugins for converting videos.
 - GNOME: the overview's workspaces show the wallpaper, not GNOME's own picture.
 - After sleep the GPU is set up afresh, since some drivers lose video memory.
 - `dioramad` runs at a lower priority than other programs, as on Windows.

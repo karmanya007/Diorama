@@ -61,6 +61,10 @@ No code-signing certificate yet.
   is signed for the updater and listed in `latest.json` as
   `linux-x86_64-appimage`, a key only AppImage installs look up; the
   `.deb` updates through the system's package tools.
+- **AUR**: `scripts/aur-pkgbuild.sh [version]` writes `diorama-bin`, which
+  repackages a release's `.deb` against Arch's libraries; the maintainer
+  pushes it. Flatpak is out: its sandbox hides the desktop's layer-shell,
+  other processes and Steam's folders that Diorama is about.
 
 ## Consequences
 
