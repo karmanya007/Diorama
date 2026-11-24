@@ -160,7 +160,9 @@ implement `wlr-layer-shell`, GNOME does not, and X11 sessions remain.
   windows, so the extension answers `Coverage()` on GNOME Shell's bus name
   (`/io/github/karmanya007/Diorama`), per connector; dioramad refuses to
   start without it rather than open windows that would cover the desktop.
-  The overview still shows GNOME's own wallpaper behind workspaces.
+  Behind the overview's workspaces it draws a clone of the window over
+  GNOME's own picture, cut to the same rounded rectangle. A Shell whose
+  workspace backgrounds work differently keeps GNOME's picture there.
 
 ## Consequences
 

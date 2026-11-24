@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 use zbus::blocking::{Connection, MessageIterator};
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
@@ -95,7 +95,7 @@ impl Tray {
             .map_err(bus_err("serve dbusmenu"))?
             .build()
             .map_err(bus_err("session bus"))?;
-        watch_panel(conn.clone(), name)?;
+        watch_panel(name, Arc::downgrade(&shared))?;
         Ok(Self { conn, shared })
     }
 
@@ -122,17 +122,10 @@ impl Tray {
     }
 }
 
-impl Drop for Tray {
-    fn drop(&mut self) {
-        // The panel's watch thread holds the connection too; closing it ends
-        // that thread and takes the icon away.
-        let _ = self.conn.clone().close();
-    }
-}
-
-/// Registers the item `name` with each panel that comes up, on a thread of
-/// its own until the connection closes.
-fn watch_panel(conn: Connection, name: String) -> Result<()> {
+/// Registers the item `name` with each panel that comes up, on a thread and
+/// connection of its own, while `icon` is there.
+fn watch_panel(name: String, icon: Weak<Shared>) -> Result<()> {
+    let conn = Connection::session().map_err(bus_err("session bus"))?;
     // Subscribe before asking, so no panel starts in between.
     let rule = zbus::MatchRule::builder()
         .msg_type(zbus::message::Type::Signal)
@@ -152,6 +145,9 @@ fn watch_panel(conn: Connection, name: String) -> Result<()> {
         .spawn(move || {
             for msg in changes {
                 let Ok(msg) = msg else { return };
+                if icon.strong_count() == 0 {
+                    return;
+                }
                 let body = msg.body();
                 match body.deserialize::<(&str, &str, &str)>() {
                     Ok((_, _, owner)) if !owner.is_empty() => match register(&conn, &name) {
