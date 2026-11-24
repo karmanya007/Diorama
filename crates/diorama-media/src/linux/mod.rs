@@ -16,6 +16,7 @@ use gstreamer_video::prelude::*;
 use crate::{Error, MediaSource, Nv12Frame, Result, VideoDecoder, VideoInfo, VideoProbe};
 
 pub(crate) mod audio;
+pub(crate) mod convert;
 
 /// How long opening may take before the file counts as undecodable, and how
 /// long one frame may take (4K on a slow CPU stays well below).
@@ -320,13 +321,17 @@ pub(super) fn bus_error(pipeline: &gst::Pipeline) -> Option<Error> {
     let gst::MessageView::Error(err) = msg.view() else {
         return None;
     };
-    Some(Error::Os {
+    Some(error(err))
+}
+
+pub(super) fn error(err: &gst::message::Error) -> Error {
+    Error::Os {
         call: "GStreamer",
         message: match err.debug() {
             Some(debug) => format!("{} ({debug})", err.error()),
             None => err.error().to_string(),
         },
-    })
+    }
 }
 
 /// Copies a decoded NV12 sample into one buffer with a common row stride.

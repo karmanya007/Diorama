@@ -15,3 +15,8 @@
 2026-10-14: 1080p24 0.53%, 4K30 1.0% machine CPU. UI warning/transcode offer: Phase 6.
 2026-10-27: DXVA probe per codec/profile/size; `diorama convert` made an H.264 copy (60 s 1080p → 640×360 in 2.5 s, sound kept) that dioramad swapped in. All 21 corpus videos and this GPU decode in hardware, so the UI offer has only been seen in the mock UI.
 2026-10-30 live (installed 0.2.0, RTX 4060, user clicking in the UI): ffmpeg-made test videos (not committed). MPEG-4 Part 2 1080p30: status "decoded by the CPU" (14.4% of one core), the details panel offered Convert, the copy was made in 2.4 s and swapped in without a flash (7.1% of one core after). 10-bit H.264: Windows has no decoder for it, yet the player was shown (blank, status "playing") and Convert failed with `ReadSample failed: CopyDecodedFrame failed`. Fixed the same day: the probe decodes the first frame when the GPU cannot, so `set` and `convert` refuse such videos with a plain reason and the previous wallpaper stays (checked live with the dev daemon; `--test convert` covers both files via `DIORAMA_TEST_VIDEO` / `DIORAMA_TEST_UNDECODABLE_VIDEO`).
+
+## Linux
+`diorama convert` on a 10-bit H.264 and an MPEG-4 video (1080p30, 30 s), headless Sway.
+
+2026-11-24: passed in WSL. NVENC (`nvcudah264enc`) took 4.7 s at 1080p; with no CUDA device OpenH264 took over. Copies have all 900 frames, decode on the GPU (NVDEC) and play in place of the original. VA-API encoders not tested (no such hardware).

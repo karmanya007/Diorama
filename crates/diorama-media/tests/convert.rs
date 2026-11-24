@@ -28,10 +28,9 @@ fn converts_to_h264_that_decodes_on_the_gpu() {
     assert!((last - 1.0).abs() < 1e-6);
     let after = diorama_media::probe(&dst).unwrap();
     println!("copy: {after:?}");
-    assert_eq!(
-        (after.codec.as_str(), after.width, after.height),
-        ("H.264", size.0, size.1)
-    );
+    // Linux names the profile too.
+    assert!(after.codec.starts_with("H.264"), "{}", after.codec);
+    assert_eq!((after.width, after.height), size);
     let mut decoder = diorama_media::open(&dst).unwrap();
     let mut frame = decoder.next_frame().unwrap().expect("a frame");
     for _ in 0..90 {

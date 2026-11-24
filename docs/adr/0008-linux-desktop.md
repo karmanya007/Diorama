@@ -70,8 +70,10 @@ implement `wlr-layer-shell`, GNOME does not, and X11 sessions remain.
   Videos inside packages come through a seekable `appsrc`. Looping rebuilds
   the pipeline, like the Windows decoder reopens its reader. The probe
   reports the chosen decoder (hardware from its class) and names streams
-  no plugin decodes. Converting (P4) waits: the encoders a distribution
-  ships vary, and CPU decoding of every codec is the common case there.
+  no plugin decodes. Converting (P4) tries the H.264 encoders GStreamer has,
+  the GPU's first, each until one works (a plugin can be there without its
+  hardware); the copy has no soundtrack, since the original's plays. Where
+  the GPU decodes no H.264 either, a copy of the same size is refused.
 - **Sound through cpal's PulseAudio host** (the protocol in pure Rust, so
   no client library; PipeWire's `pipewire-pulse` serves it on current
   desktops; plain ALSA otherwise). The player (playlists, gaps, ring

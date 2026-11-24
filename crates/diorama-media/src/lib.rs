@@ -266,8 +266,9 @@ pub fn probe(path: &Path) -> Result<VideoProbe> {
     }
 }
 
-/// Converts `src` to H.264 + AAC in an MP4 (`dst`, ending in `.mp4`) at
-/// `size`, which decodes on any GPU (P4). `progress` gets the fraction done
+/// Converts `src` to H.264 in an MP4 (`dst`, ending in `.mp4`) at `size`,
+/// which decodes on any GPU (P4); on Windows with the soundtrack, which plays
+/// from the original either way. `progress` gets the fraction done
 /// and returns `false` to stop ([`Error::Cancelled`]).
 pub fn convert(
     src: &Path,
@@ -279,7 +280,11 @@ pub fn convert(
     {
         windows::convert::convert(src, dst, size, progress)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        linux::convert::convert(src, dst, size, progress)
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = (src, dst, size, progress);
         Err(Error::Os {
