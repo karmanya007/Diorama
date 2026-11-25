@@ -2,7 +2,7 @@
 
 All notable changes to Diorama are listed here. Versions follow [Semantic Versioning](https://semver.org); before 1.0, minor versions may change behaviour.
 
-## Unreleased
+## 1.2.0 (2026-11-25)
 
 - Presets (Monitors page, `diorama preset`): save what every monitor shows, playlists included, under a number from 1 to 9 and bring it back. Wallpapers that already show where the preset wants them keep running. Global hotkeys (Ctrl+Alt and the number by default; off until turned on) work on Windows and X11; on Wayland, bind keys to `diorama preset 1` and so on in the desktop's settings. Asked for in #2.
 - A time-of-day playlist shows what is due when Diorama starts; it kept the wallpaper from last time until the next change.
