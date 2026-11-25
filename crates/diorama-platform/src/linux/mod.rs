@@ -27,7 +27,10 @@ pub use media::MediaWatcher;
 pub use metrics::{ProcessMonitor, SystemMonitor};
 pub use system::{autostart, day_fraction, restart, set_autostart, steam_dir};
 
-use crate::{Coverage, DesktopEvent, DesktopPointer, Error, OutputInfo, Result, SurfaceHandles};
+use crate::{
+    Coverage, DesktopEvent, DesktopPointer, Error, HotkeyModifiers, OutputInfo, Result,
+    SurfaceHandles,
+};
 
 /// Nice value of a lowered process (0 is normal, 19 the lowest).
 const NICE: i32 = 5;
@@ -36,7 +39,7 @@ const NICE: i32 = 5;
 #[derive(Debug)]
 enum Display {
     Wayland(Box<wayland::Display>),
-    X11(x11::Display),
+    X11(Box<x11::Display>),
 }
 
 /// Calls `$call` on whichever display is in use.
@@ -61,6 +64,12 @@ pub struct Platform {
     tray: RefCell<Option<tray::Tray>>,
 }
 
+/// The session is Wayland's: an X server here is Xwayland.
+fn under_wayland() -> bool {
+    std::env::var_os("WAYLAND_DISPLAY").is_some()
+        || std::env::var_os("XDG_SESSION_TYPE").is_some_and(|t| t == "wayland")
+}
+
 fn io_err(call: &'static str) -> impl FnOnce(std::io::Error) -> Error {
     move |e| Error::Os {
         call,
@@ -81,7 +90,7 @@ impl Platform {
         let display = if wayland {
             Display::Wayland(Box::new(wayland::Display::new()?))
         } else {
-            Display::X11(x11::Display::new()?)
+            Display::X11(Box::new(x11::Display::new()?))
         };
         let (wake_rx, wake_tx) = UnixStream::pair().map_err(io_err("socketpair"))?;
         wake_rx
@@ -190,6 +199,25 @@ impl Platform {
     pub fn set_tray_state(&self, state: crate::TrayState) {
         if let Some(tray) = self.tray.borrow().as_ref() {
             tray.set_state(state);
+        }
+    }
+
+    /// Whether programs can set global hotkeys here: on X11 only. Wayland
+    /// has no such thing, and Xwayland sees no keys meant for Wayland windows.
+    pub fn hotkeys_supported(&self) -> bool {
+        match &self.display {
+            Display::Wayland(_) => false,
+            Display::X11(_) => !under_wayland(),
+        }
+    }
+
+    /// From now on `modifiers` with one of `digits` (1-9) raises
+    /// [`DesktopEvent::Hotkey`], and no others do. Returns the digits whose
+    /// hotkey another program has.
+    pub fn set_hotkeys(&self, modifiers: HotkeyModifiers, digits: &[u8]) -> Vec<u8> {
+        match &self.display {
+            Display::X11(d) if self.hotkeys_supported() => d.set_hotkeys(modifiers, digits),
+            _ => Vec::new(),
         }
     }
 

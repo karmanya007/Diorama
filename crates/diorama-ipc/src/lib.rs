@@ -258,6 +258,86 @@ pub struct Playlist {
     pub schedule: Schedule,
 }
 
+/// A wallpaper and where it shows, as remembered.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SavedWallpaper {
+    pub path: PathBuf,
+    pub kind: MediaKind,
+    pub fit: Fit,
+    pub layout: Layout,
+    /// Output ids it shows on; empty: every monitor no other wallpaper has.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outputs: Vec<String>,
+    /// The playlist it came from and its position there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub playlist: Option<SavedRun>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SavedRun {
+    pub name: String,
+    pub index: usize,
+}
+
+/// What the monitors showed when it was saved, to bring back by number (or
+/// its hotkey).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Preset {
+    /// One of [`Preset::NUMBERS`].
+    pub number: u8,
+    /// May be empty.
+    #[serde(default)]
+    pub name: String,
+    pub wallpapers: Vec<SavedWallpaper>,
+}
+
+impl Preset {
+    /// One per digit key, without 0.
+    pub const NUMBERS: std::ops::RangeInclusive<u8> = 1..=9;
+}
+
+/// The keys held for a preset's hotkey, beside its digit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Modifiers {
+    #[default]
+    CtrlAlt,
+    CtrlShift,
+    AltShift,
+    CtrlAltShift,
+}
+
+impl std::fmt::Display for Modifiers {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::CtrlAlt => "Ctrl+Alt",
+            Self::CtrlShift => "Ctrl+Shift",
+            Self::AltShift => "Alt+Shift",
+            Self::CtrlAltShift => "Ctrl+Alt+Shift",
+        })
+    }
+}
+
+/// Global hotkeys for the presets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct Hotkeys {
+    pub enabled: bool,
+    #[serde(default)]
+    pub modifiers: Modifiers,
+}
+
+/// The hotkeys and how they fare on this desktop.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct HotkeyStatus {
+    #[serde(flatten)]
+    pub hotkeys: Hotkeys,
+    /// The desktop lets programs set global hotkeys (Wayland does not).
+    pub supported: bool,
+    /// Presets whose hotkey another program has.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub taken: Vec<u8>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "kebab-case")]
 pub enum Request {
@@ -316,6 +396,33 @@ pub enum Request {
     Next {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         outputs: Option<Vec<String>>,
+    },
+    /// Save what every monitor shows now as preset `number`, replacing that
+    /// preset's wallpapers (remembered). Without `name` it keeps its name.
+    SavePreset {
+        number: u8,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
+    RenamePreset {
+        number: u8,
+        name: String,
+    },
+    DeletePreset {
+        number: u8,
+    },
+    /// The saved presets, by number.
+    Presets,
+    /// Show what preset `number` holds.
+    UsePreset {
+        number: u8,
+    },
+    /// Hotkeys for the presets (remembered); absent keeps what is.
+    SetHotkeys {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        enabled: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        modifiers: Option<Modifiers>,
     },
     /// Folders the library also lists (remembered).
     SetFolders {
@@ -398,6 +505,8 @@ pub struct Status {
     #[serde(default)]
     pub folders: Vec<PathBuf>,
     pub outputs: Vec<OutputStatus>,
+    #[serde(default)]
+    pub hotkeys: HotkeyStatus,
     /// Videos being converted for hardware decoding, and failed conversions.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub conversions: Vec<Conversion>,
@@ -448,6 +557,9 @@ pub enum Response {
     },
     Playlists {
         playlists: Vec<Playlist>,
+    },
+    Presets {
+        presets: Vec<Preset>,
     },
     Costs {
         costs: Vec<Cost>,
@@ -699,6 +811,37 @@ mod tests {
         assert!(line.contains(r#""outputs":["DEL-1234"]"#), "{line}");
         assert!(!line.contains("fit"), "absent options are omitted: {line}");
         assert_eq!(decode::<Request>(&line).unwrap(), req);
+    }
+
+    #[test]
+    fn hotkeys_as_the_ui_sees_them() {
+        let status = HotkeyStatus {
+            hotkeys: Hotkeys {
+                enabled: true,
+                modifiers: Modifiers::CtrlAltShift,
+            },
+            supported: true,
+            taken: vec![3],
+        };
+        let json = serde_json::to_value(&status).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "enabled": true, "modifiers": "ctrl-alt-shift", "supported": true, "taken": [3]
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<HotkeyStatus>(json).unwrap(),
+            status
+        );
+        let line = r#"{"version":1,"cmd":"set-hotkeys","modifiers":"alt-shift"}"#;
+        assert_eq!(
+            decode::<Request>(line).unwrap(),
+            Request::SetHotkeys {
+                enabled: None,
+                modifiers: Some(Modifiers::AltShift)
+            }
+        );
     }
 
     #[test]

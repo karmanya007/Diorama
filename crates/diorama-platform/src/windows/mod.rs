@@ -52,16 +52,19 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{PCWSTR, w};
 
 use crate::{
-    Coverage, DesktopEvent, DesktopPointer, Error, OutputInfo, Result, SurfaceHandles, TrayState,
-    classify,
+    Coverage, DesktopEvent, DesktopPointer, Error, HotkeyModifiers, OutputInfo, Result,
+    SurfaceHandles, TrayState, classify,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetAsyncKeyState, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, RegisterHotKey,
+    UnregisterHotKey, VK_LBUTTON,
+};
 use windows::Win32::UI::Input::{
     GetRawInputData, HRAWINPUT, RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER, RID_INPUT,
     RIDEV_INPUTSINK, RIM_TYPEMOUSE, RegisterRawInputDevices,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    RI_MOUSE_LEFT_BUTTON_DOWN, RI_MOUSE_LEFT_BUTTON_UP, WM_INPUT, WindowFromPoint,
+    RI_MOUSE_LEFT_BUTTON_DOWN, RI_MOUSE_LEFT_BUTTON_UP, WM_HOTKEY, WM_INPUT, WindowFromPoint,
 };
 
 const CONTROL_CLASS: PCWSTR = w!("DioramaControl");
@@ -102,6 +105,8 @@ fn os_err(call: &'static str, e: &windows::core::Error) -> Error {
 pub struct Platform {
     hinstance: HINSTANCE,
     control: HWND,
+    /// Digits of the hotkeys registered now (their ids).
+    hotkeys: RefCell<Vec<u8>>,
 }
 
 impl Platform {
@@ -150,7 +155,11 @@ impl Platform {
                 tracing::warn!("raw mouse input unavailable: {}", e.message());
             }
 
-            Ok(Self { hinstance, control })
+            Ok(Self {
+                hinstance,
+                control,
+                hotkeys: RefCell::new(Vec::new()),
+            })
         }
     }
 
@@ -317,6 +326,47 @@ impl Platform {
                 height,
             })
         }
+    }
+
+    /// Whether programs can set global hotkeys here.
+    pub fn hotkeys_supported(&self) -> bool {
+        true
+    }
+
+    /// From now on `modifiers` with one of `digits` (1-9) raises
+    /// [`DesktopEvent::Hotkey`], and no others do. Returns the digits whose
+    /// hotkey another program has.
+    pub fn set_hotkeys(&self, modifiers: HotkeyModifiers, digits: &[u8]) -> Vec<u8> {
+        let mut held = MOD_NOREPEAT;
+        for (on, flag) in [
+            (modifiers.ctrl, MOD_CONTROL),
+            (modifiers.alt, MOD_ALT),
+            (modifiers.shift, MOD_SHIFT),
+        ] {
+            if on {
+                held |= flag;
+            }
+        }
+        let mut registered = self.hotkeys.borrow_mut();
+        let mut taken = Vec::new();
+        // SAFETY: hotkeys of our own window, on the thread that made it.
+        unsafe {
+            for digit in registered.drain(..) {
+                let _ = UnregisterHotKey(Some(self.control), i32::from(digit));
+            }
+            for &digit in digits {
+                // The virtual keys of the digit row are their ASCII codes.
+                let key = u32::from(b'0' + digit);
+                match RegisterHotKey(Some(self.control), i32::from(digit), held, key) {
+                    Ok(()) => registered.push(digit),
+                    Err(e) => {
+                        tracing::info!(digit, "hotkey not available: {}", e.message());
+                        taken.push(digit);
+                    }
+                }
+            }
+        }
+        taken
     }
 
     /// Side in pixels of the icon [`Platform::show_tray`] wants.
@@ -524,6 +574,12 @@ unsafe extern "system" fn control_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
         tray::on_message(wp, lp);
         return LRESULT(0);
     }
+    if msg == WM_HOTKEY {
+        if let Ok(digit) = u8::try_from(wp.0) {
+            push_event(DesktopEvent::Hotkey(digit));
+        }
+        return LRESULT(0);
+    }
     if msg == WM_INPUT {
         // SAFETY: lp is the HRAWINPUT of this WM_INPUT message.
         unsafe { raw_mouse_button(HRAWINPUT(lp.0 as *mut _)) };
@@ -599,5 +655,33 @@ unsafe extern "system" fn wallpaper_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: L
         }
         // SAFETY: default handling for our own window.
         _ => unsafe { DefWindowProcW(hwnd, msg, wp, lp) },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::Win32::UI::WindowsAndMessaging::SendMessageW;
+
+    #[test]
+    #[ignore = "registers global hotkeys for a moment"]
+    fn hotkeys_register_once_and_raise_events() {
+        let (a, b) = (Platform::new().unwrap(), Platform::new().unwrap());
+        let all = HotkeyModifiers {
+            ctrl: true,
+            alt: true,
+            shift: true,
+        };
+        assert!(a.set_hotkeys(all, &[8, 9]).is_empty());
+        // Taken while the other has them, and only those.
+        assert_eq!(b.set_hotkeys(all, &[7, 8]), [8]);
+        assert!(a.set_hotkeys(all, &[9]).is_empty());
+        assert!(b.set_hotkeys(all, &[8]).is_empty());
+        // SAFETY: a message to our own window.
+        unsafe { SendMessageW(a.control, WM_HOTKEY, Some(WPARAM(9)), Some(LPARAM(0))) };
+        assert_eq!(a.poll_events(Duration::ZERO), [DesktopEvent::Hotkey(9)]);
+        assert!(a.set_hotkeys(all, &[]).is_empty());
+        assert!(b.set_hotkeys(all, &[9]).is_empty());
+        b.set_hotkeys(all, &[]);
     }
 }

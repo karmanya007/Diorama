@@ -190,6 +190,16 @@ pub enum DesktopEvent {
     DisplayLost,
     /// Chosen from the notification-area icon.
     Tray(TrayCommand),
+    /// The hotkey with this digit was pressed (see `Platform::set_hotkeys`).
+    Hotkey(u8),
+}
+
+/// The keys held for a global hotkey, beside its digit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HotkeyModifiers {
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
 }
 
 /// A choice from the notification-area icon (its menu, or a click on it:

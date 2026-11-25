@@ -21,6 +21,7 @@ Diorama is an independent project. It is not affiliated with or endorsed by Wall
 - **Per-monitor or spanning**: a different wallpaper per monitor, or one stretched across all of them, with fill / fit / stretch.
 - **Wallpaper settings**: each wallpaper's own options (colours, sliders, text, files…), starting from the choices you made in Wallpaper Engine.
 - **Playlists**: rotate wallpapers on a timer or by time of day, per monitor.
+- **Presets**: save what every monitor shows and bring it back with a click, a command or a global hotkey.
 - **Library**: search by title, tag or Workshop id; filter by type, source and tag; questionable and mature items are hidden until you ask for them; sort by how heavy a wallpaper is.
 - **Cost report**: Diorama measures the CPU, GPU and memory each wallpaper really uses and shows it in the library.
 - **Light on your PC**:
@@ -74,6 +75,7 @@ gnome-extensions enable diorama@karmanya007.github.io
 - **Library**: lists your Workshop items, Wallpaper Engine's projects and any folders you add (Settings → Library folders). Select a wallpaper to see its details, preview and settings, then choose the monitors and press **Show**.
 - **Monitors**: what each monitor shows, and whether it is paused and why.
 - **Playlists**: build a list, pick the order and when it changes (every N minutes, or at set times of day), and the monitors it runs on.
+- **Presets** (under *Monitors*): save what the monitors show under a number from 1 to 9. Hotkeys (Ctrl+Alt and the number, or other keys you choose) are off until you turn them on; Wayland desktops have none, so bind keys to `diorama preset 1` there.
 - **Settings**: pause rules and presets, volume, library folders, start Diorama when you sign in, updates.
 
 Closing the window leaves your wallpapers running in the background (`dioramad`). Quit from the notification-area icon to stop everything.
@@ -85,6 +87,7 @@ The installer puts `diorama.exe` next to the app (`%LOCALAPPDATA%\Diorama`):
 ```sh
 diorama set <image | video | scene or web folder> [--fit fill|fit|stretch] [--layout per-output|span]
 diorama set <web folder> --allow-network     # let a web wallpaper use the internet
+diorama preset save 1 work                   # what every monitor shows now; `diorama preset 1` brings it back
 diorama status                               # what plays on each monitor, and why something paused
 diorama volume 0-100                         # video soundtrack (0 = muted, the default)
 diorama pause | resume | quit

@@ -14,6 +14,7 @@ mod headless;
 mod media;
 mod playlist;
 mod policy;
+mod presets;
 mod properties;
 mod scripts;
 mod session;
@@ -33,8 +34,10 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use diorama_gpu::{Backend, Gpu, GpuOptions};
-use diorama_ipc::MediaKind;
-use diorama_ipc::{ContentStatus, Fit, Layout, OutputStatus, Request, Response, Status};
+use diorama_ipc::{
+    ContentStatus, Fit, Hotkeys, Layout, MediaKind, OutputStatus, Request, Response, SavedRun,
+    SavedWallpaper, Status,
+};
 use diorama_media::AudioPlayer;
 use diorama_platform::{Coverage, DesktopEvent, Platform, TrayCommand, TrayState};
 
@@ -399,6 +402,9 @@ fn main() -> Result<()> {
         playlists: Vec::new(),
         rng: playlist::Rng::from_time(),
         folders: Vec::new(),
+        presets: presets::Presets::default(),
+        hotkeys: Hotkeys::default(),
+        hotkeys_taken: Vec::new(),
         retiring: Vec::new(),
         fps: Policy::default().fps,
         we_config: we_config_path(&args),
@@ -453,6 +459,9 @@ fn main() -> Result<()> {
     daemon.fps = daemon.policy.fps;
     daemon.playlists = saved_state.playlists.clone();
     daemon.folders = saved_state.folders.clone();
+    daemon.presets = presets::Presets::new(saved_state.presets.clone());
+    daemon.hotkeys = saved_state.hotkeys;
+    daemon.register_hotkeys();
     daemon.overrides = saved_state
         .properties
         .iter()
@@ -473,24 +482,9 @@ fn main() -> Result<()> {
         // Last time's wallpapers, each on its monitors.
         let mut slots = Vec::new();
         for s in saved_state.wallpapers {
-            let look = Look {
-                fit: s.fit,
-                layout: s.layout,
-            };
-            match daemon.load(&s.path, Some(s.kind), look) {
-                Ok(w) => {
-                    let mut slot = Slot::new(w, s.outputs, daemon.fps);
-                    // Playlists carry on from where they were.
-                    slot.run = s.playlist.and_then(|r| {
-                        let list = daemon.playlists.iter().find(|p| p.name == r.name)?;
-                        Some(Run::new(
-                            list,
-                            r.index.min(list.items.len().saturating_sub(1)),
-                        ))
-                    });
-                    slots.push(slot);
-                }
-                Err(e) => tracing::error!("start-up wallpaper {}: {e:#}", s.path.display()),
+            match daemon.saved_slot(s) {
+                Ok(slot) => slots.push(slot),
+                Err(e) => tracing::error!("start-up wallpaper {e:#}"),
             }
         }
         daemon.slots = slots;
@@ -769,14 +763,31 @@ impl Slot {
         }
     }
 
-    fn saved(&self) -> state::SavedWallpaper {
-        state::SavedWallpaper {
+    /// A new wallpaper has its monitors: the OS fallback and the sound
+    /// depend on whether it got the primary one.
+    fn placed(&mut self, os_fallback: bool, volume: u8) {
+        if os_fallback && self.primary && self.wallpaper.kind == MediaKind::Image {
+            // Images are their own snapshot.
+            self.fallback_pending = false;
+            set_fallback(
+                &self.wallpaper.path,
+                self.wallpaper.look.layout == Layout::Span,
+            );
+        }
+        if !self.primary {
+            self.fallback_pending = false;
+        }
+        self.start_audio(volume);
+    }
+
+    fn saved(&self) -> SavedWallpaper {
+        SavedWallpaper {
             path: self.wallpaper.path.clone(),
             kind: self.wallpaper.kind,
             fit: self.wallpaper.look.fit,
             layout: self.wallpaper.look.layout,
             outputs: self.claim.clone(),
-            playlist: self.run.as_ref().map(|r| state::SavedRun {
+            playlist: self.run.as_ref().map(|r| SavedRun {
                 name: r.name.clone(),
                 index: r.index,
             }),
@@ -1066,6 +1077,11 @@ struct Daemon<'p> {
     rng: playlist::Rng,
     /// Folders the library also lists (kept for the UI).
     folders: Vec<PathBuf>,
+    /// Saved wallpapers of the monitors, and their hotkeys.
+    presets: presets::Presets,
+    hotkeys: Hotkeys,
+    /// Presets whose hotkey another program has.
+    hotkeys_taken: Vec<u8>,
     /// Replaced wallpapers still on screen until their successors have drawn
     /// (no black gap when switching), each with a deadline.
     retiring: Vec<(Session, Instant)>,
@@ -1111,6 +1127,7 @@ impl Daemon<'_> {
                     return Ok(());
                 }
                 DesktopEvent::Tray(command) => self.on_tray(*command),
+                DesktopEvent::Hotkey(number) => self.on_hotkey(*number),
                 _ => {}
             }
         }
@@ -1404,6 +1421,19 @@ impl Daemon<'_> {
         Err(last_error.unwrap_or_else(|| anyhow::anyhow!("playlist {name} is empty")))
     }
 
+    /// A remembered playlist carries on from where it was, if it still exists.
+    fn resume(&self, run: &SavedRun) -> Option<Run> {
+        let list = self.playlists.iter().find(|p| p.name == run.name)?;
+        let index = run.index.min(list.items.len().saturating_sub(1));
+        let mut run = Run::new(list, index);
+        if matches!(list.schedule, Schedule::TimeOfDay { .. }) {
+            // It may be time for another item by now.
+            run.scheduled = Some(index);
+            run.next = Instant::now();
+        }
+        Some(run)
+    }
+
     /// Output ids for what the user typed (`None`: all monitors).
     fn claim(&self, outputs: Option<Vec<String>>) -> std::result::Result<Vec<String>, String> {
         match outputs {
@@ -1553,6 +1583,8 @@ impl Daemon<'_> {
             web_network: self.web_allowed.clone(),
             playlists: self.playlists.clone(),
             folders: self.folders.clone(),
+            presets: self.presets.list().to_vec(),
+            hotkeys: self.hotkeys,
             policy: Some(self.policy),
             properties: self
                 .overrides
@@ -1735,18 +1767,7 @@ impl Daemon<'_> {
         self.persist();
         self.rebuild(false);
         let new = self.slots.last_mut().context("wallpaper just added")?;
-        if self.os_fallback && new.primary && new.wallpaper.kind == MediaKind::Image {
-            // Images are their own snapshot.
-            new.fallback_pending = false;
-            set_fallback(
-                &new.wallpaper.path,
-                new.wallpaper.look.layout == Layout::Span,
-            );
-        }
-        if !new.primary {
-            new.fallback_pending = false;
-        }
-        new.start_audio(self.volume);
+        new.placed(self.os_fallback, self.volume);
         if let Some(error) = new.error.clone() {
             // Its monitors show nothing rather than keep a wallpaper that cannot show.
             self.slots.pop();
@@ -1952,6 +1973,24 @@ impl Daemon<'_> {
                 }
                 Err(message) => Response::Error { message },
             },
+            Request::SavePreset { number, name } => ok_or_error(self.save_preset(number, name)),
+            Request::RenamePreset { number, name } => {
+                ok_or_error(self.rename_preset(number, &name))
+            }
+            Request::DeletePreset { number } => ok_or_error(self.delete_preset(number)),
+            Request::Presets => Response::Presets {
+                presets: self.presets.list().to_vec(),
+            },
+            Request::UsePreset { number } => ok_or_error(self.use_preset(number)),
+            Request::SetHotkeys { enabled, modifiers } => {
+                self.hotkeys = Hotkeys {
+                    enabled: enabled.unwrap_or(self.hotkeys.enabled),
+                    modifiers: modifiers.unwrap_or(self.hotkeys.modifiers),
+                };
+                self.register_hotkeys();
+                self.persist();
+                Response::Ok
+            }
             Request::SetFolders { folders } => {
                 self.folders = folders;
                 self.persist();
@@ -2027,6 +2066,7 @@ impl Daemon<'_> {
             policy: self.policy,
             folders: self.folders.clone(),
             outputs,
+            hotkeys: self.hotkey_status(),
             conversions: self.conversions.status(),
         }
     }

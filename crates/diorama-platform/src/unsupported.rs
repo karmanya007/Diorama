@@ -67,6 +67,14 @@ impl Platform {
 
     pub fn set_tray_state(&self, _state: crate::TrayState) {}
 
+    pub fn hotkeys_supported(&self) -> bool {
+        false
+    }
+
+    pub fn set_hotkeys(&self, _modifiers: crate::HotkeyModifiers, _digits: &[u8]) -> Vec<u8> {
+        Vec::new()
+    }
+
     pub fn waker(&self) -> Waker {
         Waker
     }

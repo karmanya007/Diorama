@@ -87,6 +87,23 @@ export function next(outputs) {
   return call(request);
 }
 
+export async function monitorPresets() {
+  return (await call({ cmd: 'presets' })).presets;
+}
+
+/** Save what the monitors show as preset `number`; without `name` it keeps its own. */
+export function savePreset(number, name) {
+  const request = { cmd: 'save-preset', number };
+  if (name !== undefined) request.name = name;
+  return call(request);
+}
+
+export const renamePreset = (number, name) => call({ cmd: 'rename-preset', number, name });
+export const deletePreset = (number) => call({ cmd: 'delete-preset', number });
+export const usePreset = (number) => call({ cmd: 'use-preset', number });
+/** `{ enabled, modifiers }`; what is left out stays. */
+export const setHotkeys = (change) => call({ cmd: 'set-hotkeys', ...change });
+
 export const setPolicy = (policy) => call({ cmd: 'set-policy', policy });
 export const setFolders = (folders) => call({ cmd: 'set-folders', folders });
 export const setVolume = (percent) => call({ cmd: 'volume', percent });

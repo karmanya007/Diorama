@@ -1,6 +1,7 @@
 <script>
   import { app, attempt, refreshStatus, itemFor, monitorName } from './state.svelte.js';
   import * as api from './api.js';
+  import Presets from './Presets.svelte';
   import Preview from './Preview.svelte';
 
   let { onopen } = $props();
@@ -82,6 +83,8 @@
         </div>
       {/each}
     </div>
+
+    <Presets />
   {:else}
     <p class="muted">Waiting for dioramad…</p>
   {/if}

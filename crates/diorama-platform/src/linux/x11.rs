@@ -25,15 +25,15 @@ use x11rb::protocol::Event;
 use x11rb::protocol::randr::{self, ConnectionExt as _};
 use x11rb::protocol::xinput::{self, ConnectionExt as _};
 use x11rb::protocol::xproto::{
-    AtomEnum, ConfigureWindowAux, ConnectionExt as _, CreateWindowAux, EventMask, KeyButMask,
-    PropMode, StackMode, Window, WindowClass,
+    AtomEnum, ConfigureWindowAux, ConnectionExt as _, CreateWindowAux, EventMask, GrabMode,
+    KeyButMask, Keycode, Keysym, ModMask, PropMode, StackMode, Window, WindowClass,
 };
 use x11rb::wrapper::ConnectionExt as _;
 use x11rb::xcb_ffi::XCBConnection;
 
 use crate::{
-    Coverage, DesktopEvent, DesktopPointer, Error, OutputId, OutputInfo, Result, SurfaceHandles,
-    WindowRect,
+    Coverage, DesktopEvent, DesktopPointer, Error, HotkeyModifiers, OutputId, OutputInfo, Result,
+    SurfaceHandles, WindowRect,
 };
 
 x11rb::atom_manager! {
@@ -96,6 +96,50 @@ pub struct Display {
     pointer: RefCell<Pointer>,
     /// The window manager supports EWMH desktop windows.
     managed: bool,
+    hotkeys: RefCell<Hotkeys>,
+}
+
+/// The global hotkeys wanted, and the keys grabbed for them.
+#[derive(Debug, Clone, Default)]
+struct Hotkeys {
+    modifiers: HotkeyModifiers,
+    digits: Vec<u8>,
+    keys: Vec<(Keycode, u8)>,
+}
+
+/// The modifier states a hotkey is grabbed with: `modifiers`, whatever Caps
+/// Lock and Num Lock (Mod2 in every common setup) are at.
+fn grab_masks(modifiers: HotkeyModifiers) -> [ModMask; 4] {
+    let mut held = ModMask::default();
+    for (on, mask) in [
+        (modifiers.ctrl, ModMask::CONTROL),
+        (modifiers.alt, ModMask::M1),
+        (modifiers.shift, ModMask::SHIFT),
+    ] {
+        if on {
+            held |= mask;
+        }
+    }
+    [
+        held,
+        held | ModMask::LOCK,
+        held | ModMask::M2,
+        held | ModMask::LOCK | ModMask::M2,
+    ]
+}
+
+/// The key that types `digit` in a keyboard mapping that starts at key
+/// `first` and has `per_key` symbols for each: without Shift if there is
+/// one, else with it (AZERTY).
+fn digit_key(map: &[Keysym], per_key: usize, first: Keycode, digit: u8) -> Option<Keycode> {
+    // Keysyms of digits are their ASCII codes.
+    let symbol = Keysym::from(b'0' + digit);
+    (0..per_key.min(2)).find_map(|level| {
+        let key = map
+            .chunks(per_key)
+            .position(|symbols| symbols.get(level) == Some(&symbol))?;
+        first.checked_add(u8::try_from(key).ok()?)
+    })
 }
 
 impl std::fmt::Debug for Display {
@@ -178,7 +222,67 @@ impl Display {
             ours: Rc::new(RefCell::new(HashSet::new())),
             pointer: RefCell::new(Pointer::default()),
             managed,
+            hotkeys: RefCell::default(),
         })
+    }
+
+    /// Grabs `modifiers` with each of `digits` instead of what was grabbed
+    /// before; returns the digits another program has.
+    pub fn set_hotkeys(&self, modifiers: HotkeyModifiers, digits: &[u8]) -> Vec<u8> {
+        let conn = &*self.conn;
+        let mut hotkeys = self.hotkeys.borrow_mut();
+        let ungrab = |key, modifiers| {
+            for mask in grab_masks(modifiers) {
+                let _ = conn.ungrab_key(key, self.root, mask);
+            }
+        };
+        for (key, _) in &hotkeys.keys {
+            ungrab(*key, hotkeys.modifiers);
+        }
+        *hotkeys = Hotkeys {
+            modifiers,
+            digits: digits.to_vec(),
+            keys: Vec::new(),
+        };
+        let mut taken = Vec::new();
+        for &digit in digits {
+            let Some(key) = self.digit_key(digit) else {
+                tracing::warn!(digit, "the keyboard has no key for this hotkey");
+                continue;
+            };
+            let free = grab_masks(modifiers).iter().all(|&mask| {
+                conn.grab_key(
+                    false,
+                    self.root,
+                    mask,
+                    key,
+                    GrabMode::ASYNC,
+                    GrabMode::ASYNC,
+                )
+                .is_ok_and(|c| c.check().is_ok())
+            });
+            if free {
+                hotkeys.keys.push((key, digit));
+            } else {
+                tracing::info!(digit, "another program has this hotkey");
+                ungrab(key, modifiers);
+                taken.push(digit);
+            }
+        }
+        let _ = conn.flush();
+        taken
+    }
+
+    fn digit_key(&self, digit: u8) -> Option<Keycode> {
+        let setup = self.conn.setup();
+        let (first, last) = (setup.min_keycode, setup.max_keycode);
+        let map = self
+            .conn
+            .get_keyboard_mapping(first, last - first + 1)
+            .ok()?
+            .reply()
+            .ok()?;
+        digit_key(&map.keysyms, map.keysyms_per_keycode.into(), first, digit)
     }
 
     /// Connected monitors that show part of the screen.
@@ -443,6 +547,21 @@ impl Display {
                 // Destroyed by someone else (we forget ours before destroying).
                 Event::DestroyNotify(e) if self.ours.borrow().contains(&e.window) => {
                     push(DesktopEvent::DesktopReset, events);
+                }
+                Event::KeyPress(e) => {
+                    let hotkeys = self.hotkeys.borrow();
+                    if let Some((_, digit)) = hotkeys.keys.iter().find(|(k, _)| *k == e.detail) {
+                        push(DesktopEvent::Hotkey(*digit), events);
+                    }
+                }
+                // Another keyboard layout may have the digits elsewhere.
+                Event::MappingNotify(_) => {
+                    let Hotkeys {
+                        modifiers, digits, ..
+                    } = self.hotkeys.borrow().clone();
+                    if !digits.is_empty() {
+                        self.set_hotkeys(modifiers, &digits);
+                    }
                 }
                 Event::XinputRawButtonPress(e) if e.detail == BUTTON_LEFT => {
                     if self.over_desktop() {
@@ -789,6 +908,19 @@ mod tests {
         // A normal window.
         let small = as_window_manager_says(rect(100, 100, 700, 500), false, &outputs);
         assert_eq!(crate::classify(&outputs, &[small]), [Coverage::Visible]);
+    }
+
+    #[test]
+    fn digit_keys_with_and_without_shift() {
+        let (a, one, two, amp) = (0x61, 0x31, 0x32, 0x26);
+        // Digits unshifted on keys 9 and 10; key 8 types 1 with Shift.
+        let map = [a, one, one, 0x21, two, 0x40];
+        assert_eq!(digit_key(&map, 2, 8, 1), Some(9));
+        assert_eq!(digit_key(&map, 2, 8, 2), Some(10));
+        assert_eq!(digit_key(&map, 2, 8, 3), None);
+        // AZERTY: & unshifted, 1 shifted.
+        assert_eq!(digit_key(&[a, 0x41, amp, one], 2, 8, 1), Some(9));
+        assert_eq!(digit_key(&[], 0, 8, 1), None);
     }
 
     #[test]

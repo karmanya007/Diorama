@@ -6,7 +6,8 @@ use std::process::ExitCode;
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use diorama_ipc::{
-    Action, Fit, Layout, MediaKind, Order, Playlist, Policy, Request, Response, Schedule,
+    Action, Fit, Layout, MediaKind, Modifiers, Order, Playlist, Policy, Preset, Request, Response,
+    SavedWallpaper, Schedule,
 };
 
 #[derive(Debug, Parser)]
@@ -81,6 +82,14 @@ enum Command {
         #[arg(long = "output", value_name = "MONITOR")]
         outputs: Vec<String>,
     },
+    /// Show preset NUMBER, or manage presets: what every monitor shows, saved
+    /// under a number from 1 to 9. Without arguments: list them.
+    Preset {
+        #[arg(value_parser = clap::value_parser!(u8).range(1..=9))]
+        number: Option<u8>,
+        #[command(subcommand)]
+        action: Option<PresetAction>,
+    },
     /// Show or change when wallpapers pause and how fast scenes run
     /// (remembered). Presets: balanced, quality, gaming, battery.
     Policy {
@@ -129,6 +138,104 @@ enum Command {
         #[arg(value_enum)]
         action: AutostartAction,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum PresetAction {
+    /// List the saved presets.
+    List,
+    /// Save what every monitor shows now (replacing that preset's wallpapers).
+    Save {
+        #[arg(value_parser = clap::value_parser!(u8).range(1..=9))]
+        number: u8,
+        /// Its name. Default: the one it had.
+        name: Option<String>,
+    },
+    /// Give a preset another name.
+    Rename {
+        #[arg(value_parser = clap::value_parser!(u8).range(1..=9))]
+        number: u8,
+        name: String,
+    },
+    Delete {
+        #[arg(value_parser = clap::value_parser!(u8).range(1..=9))]
+        number: u8,
+    },
+    /// Global hotkeys that show the presets: the modifiers and the preset's
+    /// digit (remembered; off until turned on).
+    Hotkeys {
+        #[arg(value_enum)]
+        state: OnOff,
+        /// The keys held with the digit. Default: those set before (Ctrl+Alt at first).
+        #[arg(long, value_enum)]
+        modifiers: Option<ModifiersArg>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum OnOff {
+    On,
+    Off,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ModifiersArg {
+    CtrlAlt,
+    CtrlShift,
+    AltShift,
+    CtrlAltShift,
+}
+
+impl From<ModifiersArg> for Modifiers {
+    fn from(m: ModifiersArg) -> Self {
+        match m {
+            ModifiersArg::CtrlAlt => Self::CtrlAlt,
+            ModifiersArg::CtrlShift => Self::CtrlShift,
+            ModifiersArg::AltShift => Self::AltShift,
+            ModifiersArg::CtrlAltShift => Self::CtrlAltShift,
+        }
+    }
+}
+
+/// The request for `diorama preset …`.
+fn preset_request(number: Option<u8>, action: Option<PresetAction>) -> Request {
+    match (number, action) {
+        (Some(number), None) => Request::UsePreset { number },
+        (_, None | Some(PresetAction::List)) => Request::Presets,
+        (_, Some(PresetAction::Save { number, name })) => Request::SavePreset { number, name },
+        (_, Some(PresetAction::Rename { number, name })) => Request::RenamePreset { number, name },
+        (_, Some(PresetAction::Delete { number })) => Request::DeletePreset { number },
+        (_, Some(PresetAction::Hotkeys { state, modifiers })) => Request::SetHotkeys {
+            enabled: Some(state == OnOff::On),
+            modifiers: modifiers.map(Modifiers::from),
+        },
+    }
+}
+
+fn print_presets(presets: &[Preset]) {
+    if presets.is_empty() {
+        println!("no presets (`diorama preset save 1` saves what the monitors show)");
+    }
+    for p in presets {
+        println!("{}  {}", p.number, p.name);
+        for SavedWallpaper {
+            path,
+            outputs,
+            playlist,
+            ..
+        } in &p.wallpapers
+        {
+            let on = if outputs.is_empty() {
+                String::new()
+            } else {
+                format!("  on {}", outputs.join(", "))
+            };
+            match playlist {
+                Some(run) => println!("    playlist {}{on}", run.name),
+                None => println!("    {}{on}", path.display()),
+            }
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -407,6 +514,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::Next { outputs } => Request::Next {
             outputs: (!outputs.is_empty()).then_some(outputs),
         },
+        Command::Preset { number, action } => preset_request(number, action),
         Command::Policy {
             preset,
             on_fullscreen,
@@ -446,8 +554,20 @@ fn run(cli: Cli) -> Result<()> {
         }
     };
 
+    let hotkeys_on = matches!(
+        request,
+        Request::SetHotkeys {
+            enabled: Some(true),
+            ..
+        }
+    );
     match diorama_ipc::call(&request)? {
+        Response::Ok if hotkeys_on => hotkeys_result(),
         Response::Ok => Ok(()),
+        Response::Presets { presets } => {
+            print_presets(&presets);
+            Ok(())
+        }
         Response::Error { message } => bail!("{message}"),
         Response::Playlists { playlists } => {
             if playlists.is_empty() {
@@ -590,9 +710,60 @@ fn run(cli: Cli) -> Result<()> {
     }
 }
 
+/// Says what came of turning the hotkeys on.
+fn hotkeys_result() -> Result<()> {
+    let Response::Status(status) = diorama_ipc::call(&Request::Status)? else {
+        return Ok(());
+    };
+    let h = &status.hotkeys;
+    if !h.supported {
+        bail!(
+            "this desktop does not let programs set global hotkeys (Wayland); bind keys to \
+             `diorama preset 1` and so on in its settings"
+        );
+    }
+    println!(
+        "hotkeys  {}+1 … 9 show the saved presets",
+        h.hotkeys.modifiers
+    );
+    for n in &h.taken {
+        println!("         another program has {}+{n}", h.hotkeys.modifiers);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preset_arguments() {
+        let request = |args: &[&str]| {
+            let cli = Cli::try_parse_from(["diorama", "preset"].iter().chain(args)).ok()?;
+            match cli.command {
+                Command::Preset { number, action } => Some(preset_request(number, action)),
+                _ => None,
+            }
+        };
+        assert_eq!(request(&["3"]), Some(Request::UsePreset { number: 3 }));
+        assert_eq!(request(&[]), Some(Request::Presets));
+        assert_eq!(
+            request(&["save", "2", "work"]),
+            Some(Request::SavePreset {
+                number: 2,
+                name: Some("work".into())
+            })
+        );
+        assert_eq!(
+            request(&["hotkeys", "on", "--modifiers", "ctrl-shift"]),
+            Some(Request::SetHotkeys {
+                enabled: Some(true),
+                modifiers: Some(Modifiers::CtrlShift)
+            })
+        );
+        assert_eq!(request(&["0"]), None);
+        assert_eq!(request(&["save", "10"]), None);
+    }
 
     #[test]
     fn property_changes_parse_json_or_text() {

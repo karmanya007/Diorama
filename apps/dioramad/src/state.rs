@@ -4,7 +4,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use diorama_ipc::{Fit, Layout, MediaKind};
+use diorama_ipc::{Hotkeys, Preset, SavedWallpaper};
 use serde::{Deserialize, Serialize};
 
 const FILE: &str = "state.json";
@@ -32,6 +32,11 @@ pub struct State {
     /// Named playlists.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub playlists: Vec<diorama_ipc::Playlist>,
+    /// Saved wallpapers of the monitors, and their hotkeys.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub presets: Vec<Preset>,
+    #[serde(default)]
+    pub hotkeys: Hotkeys,
     /// When to pause and how fast scenes run.
     #[serde(default)]
     pub policy: Option<diorama_ipc::Policy>,
@@ -57,30 +62,12 @@ impl Default for State {
             web_network: Vec::new(),
             folders: Vec::new(),
             playlists: Vec::new(),
+            presets: Vec::new(),
+            hotkeys: Hotkeys::default(),
             policy: None,
             properties: Vec::new(),
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SavedWallpaper {
-    pub path: PathBuf,
-    pub kind: MediaKind,
-    pub fit: Fit,
-    pub layout: Layout,
-    /// Output ids it shows on; empty: every monitor no other wallpaper has.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub outputs: Vec<String>,
-    /// The playlist it came from and its position there.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub playlist: Option<SavedRun>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SavedRun {
-    pub name: String,
-    pub index: usize,
 }
 
 /// Missing or unreadable state is not fatal: start empty and say why.
@@ -122,6 +109,7 @@ pub fn save(dir: &Path, state: &State) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use diorama_ipc::{Fit, Layout, MediaKind, SavedRun};
 
     #[test]
     fn round_trips_and_tolerates_garbage() {
@@ -151,6 +139,22 @@ mod tests {
                     }),
                 },
             ],
+            presets: vec![Preset {
+                number: 3,
+                name: "work".into(),
+                wallpapers: vec![SavedWallpaper {
+                    path: PathBuf::from("C:/walls/c.png"),
+                    kind: MediaKind::Image,
+                    fit: Fit::Fill,
+                    layout: Layout::PerOutput,
+                    outputs: Vec::new(),
+                    playlist: None,
+                }],
+            }],
+            hotkeys: Hotkeys {
+                enabled: true,
+                modifiers: diorama_ipc::Modifiers::CtrlShift,
+            },
             volume: 40,
             web_network: vec![PathBuf::from("C:/web/clock")],
             properties: vec![SavedProperties {
@@ -172,6 +176,7 @@ mod tests {
         assert_eq!(old.wallpapers.len(), 1);
         assert_eq!(old.wallpapers[0].path, PathBuf::from("C:/w.png"));
         assert_eq!(old.volume, 5);
+        assert!(!old.hotkeys.enabled && old.presets.is_empty());
 
         std::fs::write(dir.join(FILE), b"{not json").unwrap();
         assert_eq!(load(&dir), State::default());
