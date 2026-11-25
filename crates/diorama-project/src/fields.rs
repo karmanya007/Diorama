@@ -131,7 +131,7 @@ fn pair(v: &Value) -> Option<[f32; 2]> {
 
 /// `#rgb`, `#rrggbb`, `#rrggbbaa`, `[r, g, b]` and `[r, g, b, a]` (0..1), and
 /// what the properties form stores: `"r g b"` (0..1).
-fn color(v: &Value) -> Option<[f32; 4]> {
+pub(crate) fn color(v: &Value) -> Option<[f32; 4]> {
     let parts: Vec<f32> = match v {
         Value::Array(a) => a.iter().map(number).collect::<Option<_>>()?,
         Value::String(s) => match s.trim().strip_prefix('#') {

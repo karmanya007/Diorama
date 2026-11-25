@@ -1,0 +1,174 @@
+[
+  {
+    "name": "blur",
+    "label": "Blur",
+    "group": "blur",
+    "about": "Softens the layer.",
+    "build": "blur",
+    "spread": { "setting": "radius", "times": 1.5, "unless": ["edges", "hard"] },
+    "settings": [
+      { "key": "radius", "label": "Radius", "type": "number", "default": 12, "min": 0, "max": 200, "step": 1, "unit": "px" },
+      { "key": "edges", "label": "Edges", "type": "choice", "default": "soft", "choices": [["soft", "Soft: spread outwards"], ["hard", "Hard: keep the outline"]] }
+    ]
+  },
+  {
+    "name": "glow",
+    "label": "Glow",
+    "group": "blur",
+    "about": "Bright parts shine over their surroundings.",
+    "build": "blur",
+    "spread": { "setting": "radius", "times": 1.5 },
+    "settings": [
+      { "key": "radius", "label": "Radius", "type": "number", "default": 40, "min": 0, "max": 200, "step": 1, "unit": "px" },
+      { "key": "strength", "label": "Strength", "type": "number", "default": 1, "min": 0, "max": 5, "step": 0.05 },
+      { "key": "threshold", "label": "From brightness", "type": "number", "default": 0.5, "min": 0, "max": 0.99, "step": 0.01 },
+      { "key": "color", "label": "Colour", "type": "color", "default": "#ffffff" }
+    ]
+  },
+  {
+    "name": "tint",
+    "label": "Tint",
+    "group": "color",
+    "about": "Colours the layer in shades of one colour.",
+    "settings": [
+      { "key": "color", "label": "Colour", "type": "color", "default": "#ffb060" },
+      { "key": "amount", "label": "Amount", "type": "number", "default": 0.5, "min": 0, "max": 1, "step": 0.01 }
+    ]
+  },
+  {
+    "name": "adjust",
+    "label": "Adjust colours",
+    "group": "color",
+    "about": "Brightness, contrast, saturation and hue.",
+    "settings": [
+      { "key": "brightness", "label": "Brightness", "type": "number", "default": 0, "min": -1, "max": 1, "step": 0.01 },
+      { "key": "contrast", "label": "Contrast", "type": "number", "default": 0, "min": -1, "max": 1, "step": 0.01 },
+      { "key": "saturation", "label": "Saturation", "type": "number", "default": 0, "min": -1, "max": 1, "step": 0.01 },
+      { "key": "hue", "label": "Hue", "type": "number", "default": 0, "min": -180, "max": 180, "step": 1, "unit": "°" }
+    ]
+  },
+  {
+    "name": "vignette",
+    "label": "Vignette",
+    "group": "color",
+    "about": "Darkens (or colours) towards the corners.",
+    "settings": [
+      { "key": "color", "label": "Colour", "type": "color", "default": "#000000" },
+      { "key": "amount", "label": "Amount", "type": "number", "default": 0.6, "min": 0, "max": 1, "step": 0.01 },
+      { "key": "size", "label": "Clear middle", "type": "number", "default": 0.4, "min": 0, "max": 1, "step": 0.01 },
+      { "key": "softness", "label": "Softness", "type": "number", "default": 0.6, "min": 0.01, "max": 1, "step": 0.01 }
+    ]
+  },
+  {
+    "name": "grain",
+    "label": "Film grain",
+    "group": "style",
+    "about": "Fine noise, as on film.",
+    "animated": "speed",
+    "settings": [
+      { "key": "amount", "label": "Amount", "type": "number", "default": 0.08, "min": 0, "max": 1, "step": 0.01 },
+      { "key": "size", "label": "Grain size", "type": "number", "default": 2, "min": 1, "max": 50, "step": 1, "unit": "px" },
+      { "key": "speed", "label": "Changes per second", "type": "number", "default": 12, "min": 0, "max": 60, "step": 1 }
+    ]
+  },
+  {
+    "name": "shift",
+    "label": "Colour shift",
+    "group": "style",
+    "about": "Red and blue drift apart, as through a cheap lens.",
+    "settings": [
+      { "key": "amount", "label": "Amount", "type": "number", "default": 4, "min": 0, "max": 100, "step": 0.5, "unit": "px" },
+      { "key": "direction", "label": "Direction", "type": "number", "default": 0, "min": -180, "max": 180, "step": 1, "unit": "°" }
+    ]
+  },
+  {
+    "name": "pixelate",
+    "label": "Pixelate",
+    "group": "style",
+    "about": "Large square pixels.",
+    "settings": [
+      { "key": "size", "label": "Pixel size", "type": "number", "default": 12, "min": 1, "max": 400, "step": 1, "unit": "px" }
+    ]
+  },
+  {
+    "name": "drift",
+    "label": "Drift",
+    "group": "motion",
+    "about": "Moves the picture across the layer and starts over: clouds, fog, patterns that repeat.",
+    "animated": "speed",
+    "settings": [
+      { "key": "speed", "label": "Speed", "type": "number", "default": 30, "min": -1000, "max": 1000, "step": 1, "unit": "px/s" },
+      { "key": "direction", "label": "Direction", "type": "number", "default": 0, "min": -180, "max": 180, "step": 1, "unit": "°" }
+    ]
+  },
+  {
+    "name": "sway",
+    "label": "Sway",
+    "group": "motion",
+    "about": "Bends to and fro, as plants and hair do in the wind.",
+    "animated": "speed",
+    "settings": [
+      { "key": "amount", "label": "Amount", "type": "number", "default": 12, "min": 0, "max": 300, "step": 1, "unit": "px" },
+      { "key": "speed", "label": "Speed", "type": "number", "default": 0.3, "min": 0, "max": 5, "step": 0.01, "unit": "/s" },
+      { "key": "length", "label": "Wave length", "type": "number", "default": 600, "min": 10, "max": 5000, "step": 10, "unit": "px" },
+      { "key": "anchor", "label": "Held at", "type": "choice", "default": "bottom", "choices": [["bottom", "Bottom"], ["top", "Top"], ["left", "Left"], ["right", "Right"], ["none", "Nowhere"]] }
+    ]
+  },
+  {
+    "name": "ripple",
+    "label": "Ripple",
+    "group": "motion",
+    "about": "Waves, as on water.",
+    "animated": "speed",
+    "settings": [
+      { "key": "amount", "label": "Amount", "type": "number", "default": 4, "min": 0, "max": 100, "step": 0.5, "unit": "px" },
+      { "key": "length", "label": "Wave length", "type": "number", "default": 120, "min": 4, "max": 2000, "step": 1, "unit": "px" },
+      { "key": "speed", "label": "Speed", "type": "number", "default": 0.5, "min": -5, "max": 5, "step": 0.01, "unit": "/s" }
+    ]
+  },
+  {
+    "name": "shake",
+    "label": "Shake",
+    "group": "motion",
+    "about": "Wanders around its place, as from a hand-held camera.",
+    "animated": "speed",
+    "settings": [
+      { "key": "amount", "label": "Amount", "type": "number", "default": 6, "min": 0, "max": 200, "step": 1, "unit": "px" },
+      { "key": "speed", "label": "Speed", "type": "number", "default": 1, "min": 0, "max": 30, "step": 0.1, "unit": "/s" }
+    ]
+  },
+  {
+    "name": "pulse",
+    "label": "Pulse",
+    "group": "motion",
+    "about": "Grows and fades in a steady beat.",
+    "animated": "speed",
+    "settings": [
+      { "key": "what", "label": "What", "type": "choice", "default": "brightness", "choices": [["brightness", "Brightness"], ["opacity", "Opacity"], ["zoom", "Zoom"]] },
+      { "key": "amount", "label": "Amount", "type": "number", "default": 0.3, "min": 0, "max": 1, "step": 0.01 },
+      { "key": "speed", "label": "Speed", "type": "number", "default": 0.5, "min": 0, "max": 10, "step": 0.01, "unit": "/s" }
+    ]
+  },
+  {
+    "name": "mask",
+    "label": "Mask",
+    "group": "shape",
+    "about": "Shows the layer where an image is bright and hides it where it is dark or transparent.",
+    "settings": [
+      { "key": "image", "label": "Image", "type": "image" },
+      { "key": "amount", "label": "Amount", "type": "number", "default": 1, "min": 0, "max": 1, "step": 0.01 },
+      { "key": "invert", "label": "Invert", "type": "flag", "default": false }
+    ]
+  },
+  {
+    "name": "fade",
+    "label": "Fade out",
+    "group": "shape",
+    "about": "The layer fades to nothing towards one side.",
+    "settings": [
+      { "key": "direction", "label": "Towards", "type": "number", "default": 90, "min": -180, "max": 180, "step": 1, "unit": "°" },
+      { "key": "start", "label": "Starts at", "type": "number", "default": 0.5, "min": 0, "max": 1, "step": 0.01 },
+      { "key": "end", "label": "Gone at", "type": "number", "default": 1, "min": 0, "max": 1, "step": 0.01 }
+    ]
+  }
+]

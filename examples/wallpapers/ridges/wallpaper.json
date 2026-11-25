@@ -17,8 +17,9 @@
     {"id": "moon", "name": "Moon", "type": "image", "source": "assets/moon.png", "position": [620, -360], "scale": 0.8, "visible": {"property": "moon"}, "depth": 0.2},
     {"id": "far", "name": "Far ridge", "type": "image", "source": "assets/ridge-far.png", "position": [0, 300], "size": [2880, 680], "depth": 0.35},
     {"id": "middle", "name": "Middle ridge", "type": "image", "source": "assets/ridge-middle.png", "position": [0, 450], "size": [2880, 720], "depth": 0.6},
-    {"id": "words", "name": "Words", "type": "text", "text": {"property": "words"}, "color": {"property": "wordscolor"}, "position": [0, -150], "opacity": 0.85, "depth": 0.5, "font-size": 120, "max-width": 2200},
+    {"id": "words", "name": "Words", "type": "text", "text": {"property": "words"}, "color": {"property": "wordscolor"}, "position": [0, -150], "opacity": 0.85, "depth": 0.5, "effects": [{"type": "glow", "radius": 36, "strength": 0.6, "threshold": 0.2}], "font-size": 120, "max-width": 2200},
     {"id": "near", "name": "Near ridge", "type": "image", "source": "assets/ridge-near.png", "position": [0, 560], "size": [3000, 660], "depth": 1},
-    {"id": "front", "name": "Front ridge", "type": "image", "source": "assets/ridge-front.png", "position": [0, 660], "size": [3120, 520], "depth": 1.6}
+    {"id": "front", "name": "Front ridge", "type": "image", "source": "assets/ridge-front.png", "position": [0, 660], "size": [3120, 520], "depth": 1.6},
+    {"id": "finish", "name": "Vignette and grain", "type": "adjustment", "effects": [{"type": "vignette", "amount": 0.45, "size": 0.45}, {"type": "grain", "amount": {"property": "grain"}}]}
   ]
 }

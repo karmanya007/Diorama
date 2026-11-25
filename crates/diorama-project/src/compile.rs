@@ -5,12 +5,13 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use diorama_core::Limits;
 use diorama_scene::{
-    Attribute, Blend, FontData, IDENTITY_AFFINE, ImageLayer, LayerKind, Node, Parallax, Pass,
-    ProgramId, Scene, ShaderLanguage, ShaderProgram, TextAlign, TextSpec, Texture, TextureBinding,
-    TextureId, VideoData,
+    Attribute, Blend, FontData, IDENTITY_AFFINE, ImageLayer, LayerKind, MeshQuad, Node, Parallax,
+    Pass, ProgramId, Scene, ShaderLanguage, ShaderProgram, TextAlign, TextSpec, Texture,
+    TextureBinding, TextureId, VideoData,
 };
 use serde_json::Value;
 
+use crate::effects::{Frame, List};
 use crate::fields::Fields;
 use crate::{Assets, Error, Host, Result, Values, picture};
 
@@ -25,11 +26,12 @@ const MAX_TEXT: usize = 10_000;
 /// Positions and sizes stay sane for 32-bit floats.
 const FAR: f32 = 100_000.0;
 
-const VERTEX: &str = include_str!("shaders/vertex.wgsl");
+pub(crate) const VERTEX: &str = include_str!("shaders/vertex.wgsl");
 const PLAIN: &str = include_str!("shaders/plain.wgsl");
 const BLENDED: &str = include_str!("shaders/blend.wgsl");
 const IMAGE: &str = include_str!("shaders/image.wgsl");
 const TEXT: &str = include_str!("shaders/text.wgsl");
+const FINISHED: &str = include_str!("shaders/finished.wgsl");
 
 /// How a layer mixes with what is below it.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -112,6 +114,7 @@ pub(crate) fn compile(
         textures: HashMap::new(),
         fonts: HashMap::new(),
         programs: HashMap::new(),
+        effect_programs: HashMap::new(),
         bytes: 0,
     };
     match root.get("layers") {
@@ -145,20 +148,24 @@ fn parallax(fields: &Fields<'_>) -> Option<Parallax> {
 enum Source {
     Image,
     Text,
+    /// A layer after its effects.
+    Finished,
 }
 
-struct Compiler<'a> {
+pub(crate) struct Compiler<'a> {
     assets: &'a dyn Assets,
     values: &'a Values,
     host: &'a dyn Host,
     limits: &'a Limits,
     problems: &'a RefCell<Vec<String>>,
-    scene: Scene,
+    pub(crate) scene: Scene,
     /// By path and whether it is smooth; the empty path is plain white.
     textures: HashMap<(String, bool), TextureId>,
     /// By path; the empty path is the host's font.
     fonts: HashMap<String, usize>,
     programs: HashMap<(Source, bool), ProgramId>,
+    /// By effect and entry point.
+    pub(crate) effect_programs: HashMap<(&'static str, &'static str), ProgramId>,
     /// Decoded pixels so far.
     bytes: u64,
 }
@@ -212,6 +219,8 @@ impl<'a> Compiler<'a> {
         let mut tint = [1.0; 4];
         let mut text = None;
         let mut size = [1, 1];
+        let mut layer_kind = LayerKind::Image;
+        let list = List::read(f);
         let (source, binding) = match kind.as_str() {
             "image" | "video" => {
                 let path = f.text("source").ok_or("no source")?;
@@ -257,21 +266,74 @@ impl<'a> Compiler<'a> {
                 });
                 (Source::Text, TextureBinding::TextAtlas)
             }
+            "adjustment" => {
+                if list.is_empty() {
+                    return Err("no effects".into());
+                }
+                size = [self.scene.width, self.scene.height];
+                layer_kind = LayerKind::Fullscreen;
+                (Source::Image, TextureBinding::FrameBuffer)
+            }
             other => return Err(format!("unknown type {other}")),
         };
-        if f.map
-            .get("effects")
-            .and_then(Value::as_array)
-            .is_some_and(|e| !e.is_empty())
-        {
-            f.problem("effects are not supported yet");
+        let opacity = f.number("opacity", 1.0, [0.0, 1.0]);
+        let mut effects = Vec::new();
+        let mut mesh = None;
+        if !list.is_empty() {
+            let spread = if layer_kind == LayerKind::Fullscreen {
+                0.0
+            } else {
+                list.spread
+            };
+            let mut frame = Frame {
+                size: [0.0, 0.0],
+                spread,
+            };
+            if let Some(spec) = &mut text {
+                let TextSpec { padding, .. } = spec;
+                *padding = padding.map(|p| p + spread);
+            } else {
+                let [w, h] = size.map(|s| s as f32);
+                let room = side[1];
+                frame.spread = spread.min((room - w) / 2.0).min((room - h) / 2.0).floor();
+                let grown = [w + 2.0 * frame.spread, h + 2.0 * frame.spread];
+                frame.size = grown;
+                size = grown.map(|s| s as u32);
+                if layer_kind == LayerKind::Image {
+                    // Drawn as a mesh, so that blending over nothing leaves
+                    // what effects expect: colours premultiplied by alpha.
+                    mesh = Some(vec![MeshQuad {
+                        rect: [-w / 2.0, -h / 2.0, w / 2.0, h / 2.0],
+                        uv: [0.0, 0.0, 1.0, 1.0],
+                    }]);
+                }
+            }
+            effects = self.effects(&list, frame);
         }
+        // Effects come before opacity and blending, which the composite does.
+        let (albedo, composite) = if effects.is_empty() {
+            tint[3] *= opacity;
+            (self.albedo(source, binding, mix), None)
+        } else {
+            let mut composite = self.albedo(Source::Finished, TextureBinding::Previous, mix);
+            composite
+                .constants
+                .insert("opacity".to_owned(), vec![opacity]);
+            let plain = Mix::Gpu(Blend::Translucent);
+            (self.albedo(source, binding, plain), Some(composite))
+        };
 
+        let placed = layer_kind == LayerKind::Image;
         let [x, y] = f.pair("position", [0.0, 0.0], far);
         let [sx, sy] = f.pair("scale", [1.0, 1.0], [-1000.0, 1000.0]);
         // Documents count y down from the middle and turn clockwise; scenes
         // count it up from the bottom left and turn the other way.
         let rotation = f.number("rotation", 0.0, far).rem_euclid(360.0);
+        let (x, y, sx, sy, rotation) = if placed {
+            (x, y, sx, sy, rotation)
+        } else {
+            (0.0, 0.0, 1.0, 1.0, 0.0)
+        };
         let node = Node {
             name: name.clone(),
             id: self.scene.nodes.len() as i64,
@@ -283,9 +345,11 @@ impl<'a> Compiler<'a> {
         };
         let transform = node.local();
         let visible = node.visible;
-        tint[3] *= f.number("opacity", 1.0, [0.0, 1.0]);
-        let depth = f.number("depth", 0.0, [-10.0, 10.0]);
-        let albedo = self.albedo(source, binding, mix);
+        let depth = if placed {
+            f.number("depth", 0.0, [-10.0, 10.0])
+        } else {
+            0.0
+        };
         self.scene.nodes.push(node);
         self.scene.layers.push(ImageLayer {
             name,
@@ -299,7 +363,7 @@ impl<'a> Compiler<'a> {
             world: None,
             transform,
             visible,
-            kind: LayerKind::Image,
+            kind: layer_kind,
             group: None,
             parallax_depth: [depth, depth],
             color: tint,
@@ -308,10 +372,10 @@ impl<'a> Compiler<'a> {
                 Mix::Shader(_) => Blend::Translucent,
             },
             albedo,
-            mesh: None,
+            mesh,
             copy_background: false,
-            composite: None,
-            effects: Vec::new(),
+            composite,
+            effects,
         });
         Ok(())
     }
@@ -339,29 +403,21 @@ impl<'a> Compiler<'a> {
         let (name, color) = match source {
             Source::Image => ("image", IMAGE),
             Source::Text => ("text", TEXT),
+            Source::Finished => ("finished", FINISHED),
         };
         let stage = if blended { BLENDED } else { PLAIN };
-        let attribute = |name: &str, location, components| Attribute {
-            name: name.to_owned(),
-            location,
-            components,
+        let bindings: &[(u32, u32)] = if blended {
+            &[(0, 0), (1, 1)]
+        } else {
+            &[(0, 0)]
         };
         let id = ProgramId(self.scene.programs.len());
-        self.scene.programs.push(ShaderProgram {
-            name: format!("{name}{}", if blended { " blended" } else { "" }),
-            language: ShaderLanguage::Wgsl,
-            vertex_source: VERTEX.to_owned(),
-            fragment_source: format!("{stage}{color}"),
-            vertex_entry: "vs".to_owned(),
-            fragment_entry: "fs".to_owned(),
-            attributes: vec![attribute("a_Position", 0, 3), attribute("a_TexCoord", 1, 2)],
-            texture_bindings: if blended {
-                BTreeMap::from([(0, 0), (1, 1)])
-            } else {
-                BTreeMap::from([(0, 0)])
-            },
-            material_keys: BTreeMap::new(),
-        });
+        self.scene.programs.push(program(
+            &format!("{name}{}", if blended { " blended" } else { "" }),
+            VERTEX,
+            format!("{stage}{color}"),
+            bindings,
+        ));
         self.programs.insert((source, blended), id);
         id
     }
@@ -391,7 +447,7 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    fn image(&mut self, path: &str, smooth: bool) -> Result<TextureId, String> {
+    pub(crate) fn image(&mut self, path: &str, smooth: bool) -> Result<TextureId, String> {
         let key = (path.to_owned(), smooth);
         if let Some(id) = self.textures.get(&key) {
             return Ok(*id);
@@ -466,5 +522,30 @@ fn solid(name: &str, [width, height]: [u32; 2], rgba: [u8; 4]) -> Texture {
         nearest: false,
         frames: Vec::new(),
         video: None,
+    }
+}
+
+/// A WGSL program over quads; `bindings`: texture slots and where they are bound.
+pub(crate) fn program(
+    name: &str,
+    vertex: &str,
+    fragment: String,
+    bindings: &[(u32, u32)],
+) -> ShaderProgram {
+    let attribute = |name: &str, location, components| Attribute {
+        name: name.to_owned(),
+        location,
+        components,
+    };
+    ShaderProgram {
+        name: name.to_owned(),
+        language: ShaderLanguage::Wgsl,
+        vertex_source: vertex.to_owned(),
+        fragment_source: fragment,
+        vertex_entry: "vs".to_owned(),
+        fragment_entry: "fs".to_owned(),
+        attributes: vec![attribute("a_Position", 0, 3), attribute("a_TexCoord", 1, 2)],
+        texture_bindings: bindings.iter().copied().collect(),
+        material_keys: BTreeMap::new(),
     }
 }

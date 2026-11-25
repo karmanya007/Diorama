@@ -1,9 +1,11 @@
 // The fragment stage of a layer blended in a way the GPU has no state for:
 // slot 1 is the picture so far. The result is drawn over it with the layer's
-// alpha. `source` is in image.wgsl or text.wgsl.
+// alpha. `source` is in image.wgsl, text.wgsl or finished.wgsl.
 
 struct Layer {
     g_Color4: vec4<f32>,
+    // Of a layer after its effects.
+    opacity: f32,
     // Which of `mix_colors`.
     mode: f32,
 }

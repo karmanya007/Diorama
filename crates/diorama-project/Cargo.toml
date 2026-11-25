@@ -11,6 +11,7 @@ diorama-core.workspace = true
 diorama-scene.workspace = true
 diorama-text.workspace = true
 image.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 

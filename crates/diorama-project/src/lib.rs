@@ -9,6 +9,7 @@
 
 mod assets;
 mod compile;
+mod effects;
 mod fields;
 mod picture;
 
@@ -22,6 +23,7 @@ use serde_json::Value;
 
 pub use assets::{Assets, Folder, Memory};
 pub use compile::VERSION;
+pub use effects::{Effect, Kind, Setting, effects};
 
 /// The document's file name.
 pub const DOCUMENT: &str = "wallpaper.json";

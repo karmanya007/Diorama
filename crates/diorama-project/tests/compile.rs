@@ -137,7 +137,8 @@ fn unusable_layers_are_left_out_and_named() {
             {"type": "text", "name": "Words", "text": "no font here"},
             {"type": "video", "name": "Film", "source": "assets/red.png"},
             7,
-            {"type": "color", "id": "a", "effects": [{"type": "blur"}]},
+            {"type": "color", "id": "a", "effects": [{"type": "sparkle"}, {"type": "mask"}, 3]},
+            {"type": "adjustment", "name": "Empty"},
             {"type": "color", "id": "a", "opacity": "much"},
         ],
     }));

@@ -161,6 +161,16 @@ Open: video layers convert frames to RGBA on the CPU (fine for a layer, dear
 at 4K); text without a font asset uses the system's, so the editor should add
 one; a wallpaper that does not move is still drawn at the frame rate cap.
 
+## Milestone 2 (2026-11-25)
+
+Fifteen effects (`crates/diorama-project/src/effects`): a manifest for the
+editor (`effects.json`) and a WGSL file each. Layers with effects are drawn
+into their own target with premultiplied colours, so blurs and glows do not
+pick up what is transparent; opacity and blending happen when the finished
+layer is drawn. Blur and glow add room around the layer. `adjustment` layers
+apply effects to everything below. Pixel tests cover every effect, on DX12
+and lavapipe.
+
 ## Alternatives
 
 - **Editing WE's `scene.json` in place.** Reuses the importer fully and the

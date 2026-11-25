@@ -1,8 +1,9 @@
-// The fragment stage of a layer the GPU blends. `source` is in image.wgsl or
-// text.wgsl.
+// The fragment stage of a layer the GPU blends. `source` is in image.wgsl,
+// text.wgsl or finished.wgsl.
 
 struct Layer {
     g_Color4: vec4<f32>,
+    opacity: f32,
 }
 @group(0) @binding(1) var<uniform> layer: Layer;
 @group(1) @binding(0) var image: texture_2d<f32>;

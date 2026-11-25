@@ -3,103 +3,14 @@
 
 #![allow(clippy::unwrap_used, reason = "test")]
 
+mod support;
+
 use std::path::Path;
-use std::sync::Arc;
 
 use diorama_core::Limits;
-use diorama_gpu::shader::ShaderCompiler;
-use diorama_gpu::{Gpu, GpuOptions};
-use diorama_project::{Host, Memory, Values, compile};
-use diorama_render::scene::{FrameInputs, SceneRenderer};
-use serde_json::{Value, json};
-
-struct System;
-
-impl Host for System {
-    fn default_font(&self) -> Option<Arc<[u8]>> {
-        let candidates = [
-            "C:/Windows/Fonts/arial.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        ];
-        let font = candidates.iter().find_map(|f| std::fs::read(f).ok())?;
-        Some(font.into())
-    }
-
-    fn video_size(&self, _file: &Path) -> Option<[u32; 2]> {
-        None
-    }
-}
-
-const SIZE: [usize; 2] = [64, 32];
-
-/// 4×2: red, green, blue and white above their halves in alpha.
-fn swatch() -> Vec<u8> {
-    let colors = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255]];
-    let mut rgba = Vec::new();
-    for alpha in [255, 128] {
-        for [r, g, b] in colors {
-            rgba.extend([r, g, b, alpha]);
-        }
-    }
-    let mut out = std::io::Cursor::new(Vec::new());
-    image::write_buffer_with_format(
-        &mut out,
-        &rgba,
-        4,
-        2,
-        image::ExtendedColorType::Rgba8,
-        image::ImageFormat::Png,
-    )
-    .unwrap();
-    out.into_inner()
-}
-
-struct Picture(Vec<u8>);
-
-impl Picture {
-    /// RGB at (x, y), y down.
-    fn at(&self, x: usize, y: usize) -> [u8; 3] {
-        let i = (y * SIZE[0] + x) * 4;
-        [self.0[i], self.0[i + 1], self.0[i + 2]]
-    }
-
-    fn assert(&self, x: usize, y: usize, rgb: [u8; 3], what: &str) {
-        let got = self.at(x, y);
-        let near = got.iter().zip(&rgb).all(|(a, b)| a.abs_diff(*b) <= 2);
-        assert!(near, "{what} at ({x}, {y}): {got:?}, not {rgb:?}");
-    }
-}
-
-/// `None` without a GPU.
-fn draw(background: &str, layers: Value, pointer: [f32; 2]) -> Option<Picture> {
-    let Ok(gpu) = Gpu::new(GpuOptions::default()) else {
-        eprintln!("no GPU; skipping");
-        return None;
-    };
-    let document = json!({
-        "version": 1, "size": SIZE, "background": background, "layers": layers,
-        "parallax": {"amount": 0.25, "smoothing": 0},
-    });
-    let mut files = Memory::default();
-    files.0.insert(
-        "wallpaper.json".into(),
-        serde_json::to_vec(&document).unwrap(),
-    );
-    files.0.insert("assets/swatch.png".into(), swatch());
-    let scene = compile(&files, &Values::new(), &System, &Limits::default()).unwrap();
-    assert!(scene.skipped.is_empty(), "{:?}", scene.skipped);
-    let compiler = ShaderCompiler::without_dxc();
-    let mut renderer = SceneRenderer::new(&gpu, &scene, &compiler, None).unwrap();
-    let inputs = FrameInputs {
-        pointer,
-        ..FrameInputs::default()
-    };
-    renderer.render(&gpu, &inputs);
-    Some(Picture(renderer.read_output(&gpu).unwrap()))
-}
-
-const MIDDLE: [f32; 2] = [0.5, 0.5];
+use diorama_project::Values;
+use serde_json::json;
+use support::{Host, MIDDLE, System, draw};
 
 #[test]
 fn images_are_upright_placed_and_turned() {
@@ -269,5 +180,5 @@ fn the_example_uses_all_its_layers() {
     assert!(diorama_project::is_project(&dir));
     let scene = diorama_project::load(&dir, &Values::new(), &System, &Limits::default()).unwrap();
     assert!(scene.skipped.is_empty(), "{:?}", scene.skipped);
-    assert_eq!(scene.layers.len(), 8);
+    assert_eq!(scene.layers.len(), 9);
 }
