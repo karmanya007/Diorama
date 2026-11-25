@@ -1,6 +1,6 @@
 # Diorama wallpapers (format 1)
 
-Diorama's own wallpapers ([ADR-009](../adr/0009-editor.md)). They need neither Wallpaper Engine nor a shader compiler. Read by `crates/diorama-project`; [examples/wallpapers/ridges](../../examples/wallpapers/ridges) is one. The format is new and not final until the editor is released. The editor (*New wallpaper* in the library) writes it.
+Diorama's own wallpapers ([ADR-009](../adr/0009-editor.md)). They need neither Wallpaper Engine nor a shader compiler. Read by `crates/diorama-project`; [examples/wallpapers/ridges](../../examples/wallpapers/ridges) is one. Files of version 1 stay readable. The editor (*New wallpaper* in the library) writes it.
 
 ## Folder
 

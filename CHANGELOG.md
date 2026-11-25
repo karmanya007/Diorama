@@ -2,7 +2,7 @@
 
 All notable changes to Diorama are listed here. Versions follow [Semantic Versioning](https://semver.org); before 1.0, minor versions may change behaviour.
 
-## Unreleased
+## 1.3.0 (2026-11-25)
 
 - The editor: make wallpapers of your own from pictures, videos, text and colours, with fifteen effects, blending and parallax (*New wallpaper* in the library, or *Edit* on one you made). Share one as a `.diorama` file and open those of others with *Open file…*. They need neither Wallpaper Engine nor its files. The format is described in `docs/formats/diorama.md`; *Ridges* in the examples is one. *Save* (Ctrl+S) writes a wallpaper and its settings, and monitors that show it change at once; what is not saved is kept for the next time.
 - The colour picker (editor and wallpaper settings) has a dropper that takes a colour from anywhere on the screen.
