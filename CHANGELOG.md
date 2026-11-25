@@ -2,7 +2,7 @@
 
 All notable changes to Diorama are listed here. Versions follow [Semantic Versioning](https://semver.org); before 1.0, minor versions may change behaviour.
 
-## Unreleased
+## 1.1.2 (2026-11-25)
 
 ### Linux
 
