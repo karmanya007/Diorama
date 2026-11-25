@@ -6,7 +6,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use diorama_core::Limits;
-use diorama_project::{Error, Host, Memory, NoHost, Values, compile};
+use diorama_project::{
+    Cache, Error, Folder, Host, Memory, NoHost, Values, compile, compile_document,
+};
 use diorama_scene::{Blend, Scene, ShaderLanguage, TextureBinding, VideoData};
 use serde_json::{Value, json};
 
@@ -285,4 +287,41 @@ fn broken_input_does_not_panic() {
         }
         let _ = compile(&files, &Values::new(), &NoHost, &limits);
     }
+}
+
+#[test]
+fn unchanged_files_are_not_read_again() {
+    let dir = std::env::temp_dir().join(format!("diorama-cache-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("assets")).unwrap();
+    for name in ["a.png", "b.png"] {
+        std::fs::write(dir.join("assets").join(name), png(2, 2, [1, 2, 3, 255])).unwrap();
+    }
+    let folder = Folder::new(&dir);
+    let mut cache = Cache::default();
+    let mut compiled = |layers: Value| {
+        let document = json!({"version": 1, "size": [10, 10], "layers": layers});
+        compile_document(
+            &document,
+            &folder,
+            &Values::new(),
+            &NoHost,
+            &Limits::default(),
+            &mut cache,
+        )
+        .unwrap()
+    };
+    let image = |name: &str| json!({"type": "image", "source": format!("assets/{name}")});
+    let first = compiled(json!([image("a.png"), {"type": "text"}, image("b.png")]));
+    // The text has no font here: layers keep their numbers in the document.
+    let documents: Vec<usize> = first.layers.iter().map(|l| l.document).collect();
+    assert_eq!(documents, [0, 2]);
+    assert_eq!(first.layers[0].size, Some([2.0, 2.0]));
+
+    std::fs::write(dir.join("assets/b.png"), png(5, 2, [9, 9, 9, 255])).unwrap();
+    let second = compiled(json!([image("b.png"), image("a.png")]));
+    let (a, b) = (&first.scene.textures, &second.scene.textures);
+    assert!(Arc::ptr_eq(&a[0], &b[1]), "a.png is the same");
+    assert!(!Arc::ptr_eq(&a[1], &b[0]), "b.png was changed");
+    assert_eq!(second.layers[0].size, Some([5.0, 2.0]));
+    let _ = std::fs::remove_dir_all(&dir);
 }

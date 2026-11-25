@@ -14,6 +14,10 @@ image.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+# Pinned: later 9.x releases come every few days (8.x has advisories about
+# extracting, which is done by hand here). flate2 brings a pure Rust inflate.
+zip = { version = "=9.0.5", default-features = false, features = ["deflate-flate2"] }
+flate2 = "1"
 
 [dev-dependencies]
 diorama-gpu.workspace = true

@@ -14,6 +14,7 @@ pub mod vfs;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
+use std::sync::Arc;
 
 use diorama_core::Limits;
 use diorama_scene::{
@@ -1763,7 +1764,7 @@ impl Importer<'_> {
         let id = match result {
             Ok((t, format, generated)) => {
                 let id = TextureId(self.scene.textures.len());
-                self.scene.textures.push(t);
+                self.scene.textures.push(Arc::new(t));
                 if generated {
                     self.generated_mips.insert(id);
                 }

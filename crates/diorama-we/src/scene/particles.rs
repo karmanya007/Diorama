@@ -5,6 +5,8 @@
 //! (see `docs/re-notes/particles.md`). Systems draw with WE's
 //! `genericparticle` shader through its geometry-shader-free path.
 
+use std::sync::Arc;
+
 use std::collections::BTreeMap;
 
 use diorama_scene::particles::{
@@ -382,7 +384,7 @@ impl Importer<'_> {
                 && self.generated_mips.contains(id)
                 && let Some(t) = self.scene.textures.get_mut(id.0)
             {
-                t.mips.clear();
+                Arc::make_mut(t).mips.clear();
             }
         }
 

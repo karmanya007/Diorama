@@ -15,6 +15,8 @@ pub trait Assets {
     fn read(&self, path: &str, max: u64) -> Result<Vec<u8>>;
     /// The video at `path`, which may stay on disk.
     fn video(&self, path: &str) -> Result<VideoData>;
+    /// Changes when the file at `path` does; `None` if that is not known.
+    fn stamp(&self, path: &str) -> Option<u64>;
 }
 
 fn bad(path: &str, message: impl Into<String>) -> Error {
@@ -35,7 +37,7 @@ impl Folder {
 
     /// The file at `path`, which must be inside the folder also after
     /// following links.
-    fn file(&self, path: &str) -> Result<PathBuf> {
+    pub(crate) fn file(&self, path: &str) -> Result<PathBuf> {
         let relative = Path::new(path);
         let plain = !path.is_empty()
             && !path.contains(['\\', ':', '\0'])
@@ -75,6 +77,14 @@ impl Assets for Folder {
     fn video(&self, path: &str) -> Result<VideoData> {
         Ok(VideoData::File(self.file(path)?))
     }
+
+    fn stamp(&self, path: &str) -> Option<u64> {
+        use std::hash::{DefaultHasher, Hash, Hasher};
+        let meta = std::fs::metadata(self.file(path).ok()?).ok()?;
+        let mut hasher = DefaultHasher::new();
+        (meta.len(), meta.modified().ok()?).hash(&mut hasher);
+        Some(hasher.finish())
+    }
 }
 
 /// Files in memory (tests, fuzzing).
@@ -93,6 +103,10 @@ impl Assets for Memory {
     fn video(&self, path: &str) -> Result<VideoData> {
         let data: Arc<[u8]> = self.read(path, u64::MAX)?.into();
         Ok(VideoData::Memory(data))
+    }
+
+    fn stamp(&self, _path: &str) -> Option<u64> {
+        None
     }
 }
 

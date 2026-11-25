@@ -160,8 +160,8 @@ fn scene() -> Scene {
         clear_color: [0.0, 0.0, 0.0, 1.0],
         layers: vec![layer("left", [16.0, 16.0], 0, 1.0), right],
         textures: vec![
-            solid("red", [255, 0, 0, 255]),
-            solid("green", [0, 255, 0, 255]),
+            solid("red", [255, 0, 0, 255]).into(),
+            solid("green", [0, 255, 0, 255]).into(),
         ],
         programs: vec![
             program("image", IMAGE),
@@ -516,7 +516,7 @@ fn created_layers_draw_with_their_own_resources_and_order() {
         &gpu,
         &compiler,
         blue,
-        &[solid("blue", [0, 0, 255, 255])],
+        &[solid("blue", [0, 0, 255, 255]).into()],
         &[program("image again", IMAGE)],
         Vec::new(),
         None,
@@ -557,4 +557,36 @@ fn system_textures_show_host_images() {
     let blue: Vec<u8> = [0u8, 0, 255, 255].repeat(n * n);
     r.set_system_texture(&gpu, "mediaThumbnail", &blue);
     assert_eq!(px(&frame(&mut r), 64, 16, 16), [0, 0, 255, 255]);
+}
+
+/// A renderer made from the one before draws what a fresh one would.
+#[test]
+fn rebuilt_renderers_draw_the_same() {
+    let Ok(gpu) = Gpu::new(GpuOptions::default()) else {
+        eprintln!("no GPU; skipping");
+        return;
+    };
+    let compiler = ShaderCompiler::without_dxc();
+    let mut before = scene();
+    before.programs = vec![
+        wgsl("image", WGSL_IMAGE),
+        wgsl("invert", WGSL_INVERT),
+        wgsl("copy", WGSL_COPY),
+    ];
+    let first = SceneRenderer::new(&gpu, &before, &compiler, None).unwrap();
+    // Layers swap, a texture and a program go, others are new.
+    let mut after = before.clone();
+    after.textures[0] = solid("blue", [0, 0, 255, 255]).into();
+    after.layers.swap(0, 1);
+    after.layers[0].effects.truncate(1);
+    after.programs.swap_remove(2);
+    let mut rebuilt = first
+        .rebuilt(&before, &gpu, &after, &compiler, Some([32, 16]))
+        .unwrap();
+    let mut fresh = SceneRenderer::new(&gpu, &after, &compiler, Some([32, 16])).unwrap();
+    let frame = |r: &mut SceneRenderer| {
+        r.render(&gpu, &FrameInputs::default());
+        r.read_output(&gpu).unwrap()
+    };
+    assert_eq!(frame(&mut rebuilt), frame(&mut fresh));
 }

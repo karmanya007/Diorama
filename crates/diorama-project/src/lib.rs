@@ -9,8 +9,10 @@
 
 mod assets;
 mod compile;
+pub mod edit;
 mod effects;
 mod fields;
+pub mod package;
 mod picture;
 
 use std::collections::BTreeMap;
@@ -22,7 +24,7 @@ use diorama_scene::Scene;
 use serde_json::Value;
 
 pub use assets::{Assets, Folder, Memory};
-pub use compile::VERSION;
+pub use compile::{Cache, Compiled, LayerInfo, VERSION};
 pub use effects::{Effect, Kind, Setting, effects};
 
 /// The document's file name.
@@ -91,9 +93,23 @@ pub fn compile(
 ) -> Result<Scene> {
     let text = assets.read(DOCUMENT, MAX_JSON)?;
     let document = parse(&text).map_err(|e| Error::Document(e.to_string()))?;
+    let cache = &mut Cache::default();
+    compile_document(&document, assets, choices, host, limits, cache).map(|c| c.scene)
+}
+
+/// Compiles `document`, which need not be saved, with the files it uses in
+/// `assets`. What `cache` holds of them is not read again.
+pub fn compile_document(
+    document: &Value,
+    assets: &dyn Assets,
+    choices: &Values,
+    host: &dyn Host,
+    limits: &Limits,
+    cache: &mut Cache,
+) -> Result<Compiled> {
     let mut values = defaults(project(assets).as_ref());
     values.extend(choices.iter().map(|(k, v)| (k.clone(), v.clone())));
-    compile::compile(&document, assets, &values, host, limits)
+    compile::compile(document, assets, &values, host, limits, cache)
 }
 
 fn parse(text: &[u8]) -> serde_json::Result<Value> {

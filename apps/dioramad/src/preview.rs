@@ -1,6 +1,7 @@
 //! `dioramad --preview <dir>`: draws a wallpaper off-screen for the editor
 //! and writes its frames to standard output (ADR-009, `diorama_ipc::preview`).
-//! Ends when standard input does.
+//! The document may come from the editor, unsaved. Ends when standard input
+//! does.
 
 use std::io::{BufRead, Write};
 use std::path::Path;
@@ -8,14 +9,18 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use diorama_core::Limits;
 use diorama_gpu::shader::ShaderCompiler;
 use diorama_gpu::{Gpu, GpuOptions, wgpu};
-use diorama_ipc::preview::{Command, Event, MAX_SIDE, write_event, write_frame};
+use diorama_ipc::preview::{Command, Event, LayerBox, MAX_SIDE, write_event, write_frame};
+use diorama_project::{Compiled, Folder, LayerInfo};
 use diorama_render::scene::{FrameInputs, SceneRenderer};
 use diorama_render::{FitMode, ImageBlit, Rect, read_rgba8, render_size};
+use diorama_scene::{Scene, VideoData};
 
-use crate::headless::{load_scene, shader_compiler};
+use crate::headless::{ProjectHost, load_scene, shader_compiler};
 use crate::scripts::{SceneScripts, ScriptFrame, day_fraction_at, now_ms};
+use crate::videos::SceneVideos;
 
 /// Until the UI says otherwise.
 const SIZE: [u32; 2] = [960, 540];
@@ -90,24 +95,36 @@ fn draw(
     out: &mut impl Write,
 ) -> Result<()> {
     let choices = crate::properties::choices(we_config, dir, &Default::default());
-    let scene = load_scene(dir, assets, &choices)?;
+    let project = diorama_project::is_project(dir);
+    let folder = Folder::new(dir);
+    let host = ProjectHost::default();
+    let limits = Limits::default();
+    let mut cache = diorama_project::Cache::default();
+    let mut compile = |document: &serde_json::Value| {
+        diorama_project::compile_document(document, &folder, &choices, &host, &limits, &mut cache)
+    };
+    let mut picture = if project {
+        let (document, _) = diorama_project::edit::open(dir)?;
+        compile(&document)?
+    } else {
+        Compiled {
+            scene: load_scene(dir, assets, &choices)?,
+            layers: Vec::new(),
+        }
+    };
     let gpu = Gpu::new(gpu_options)?;
-    let compiler = shader_compiler(&scene)?;
+    let compiler = shader_compiler(&picture.scene)?;
     let mut view = View {
         size: SIZE,
         fps: FPS,
         pointer: [0.5, 0.5],
     };
-    let mut stage = Stage::new(&gpu, &scene, &compiler, view.size)?;
-    let mut scripts = SceneScripts::new(&scene, now_ms(), false, None, None);
-    let mut videos = crate::videos::SceneVideos::start(&scene);
+    let mut stage = Stage::new(&gpu, &picture.scene, &compiler, view.size, None)?;
+    let mut scripts = SceneScripts::new(&picture.scene, now_ms(), false, None, None);
+    let mut videos = SceneVideos::start(&picture.scene);
     let started = Instant::now();
     let mut next = started;
-    let ready = Event::Ready {
-        width: scene.width,
-        height: scene.height,
-    };
-    write_event(out, &ready).context("writing to the UI")?;
+    report(out, &picture, &stage)?;
     loop {
         // Commands until the next frame is due (or any, with none wanted).
         let due = view.interval().map(|_| next);
@@ -115,11 +132,45 @@ fn draw(
             d.saturating_duration_since(Instant::now())
         });
         match commands.recv_timeout(wait) {
-            Ok(command) => {
-                if view.apply(&command) {
-                    stage = Stage::new(&gpu, &scene, &compiler, view.size)?;
+            Ok(first) => {
+                // While dragging, documents come faster than they are drawn:
+                // only the newest counts.
+                let mut resized = false;
+                let mut document = None;
+                for command in std::iter::once(first).chain(commands.try_iter()) {
+                    resized |= view.apply(&command);
+                    document = command.document.or(document);
                 }
-                continue;
+                match document.filter(|_| project).map(|d| compile(&d)) {
+                    Some(Ok(new)) => {
+                        let reuse = Some((&stage, &picture.scene));
+                        let made = Stage::new(&gpu, &new.scene, &compiler, view.size, reuse)?;
+                        if video_files(&new.scene) != video_files(&picture.scene) {
+                            videos = SceneVideos::start(&new.scene);
+                        }
+                        (stage, picture) = (made, new);
+                        report(out, &picture, &stage)?;
+                    }
+                    Some(Err(e)) => {
+                        let event = Event::Document {
+                            width: picture.scene.width,
+                            height: picture.scene.height,
+                            layers: Vec::new(),
+                            problems: Vec::new(),
+                            error: Some(e.to_string()),
+                        };
+                        write_event(out, &event).context("writing to the UI")?;
+                    }
+                    None if resized => {
+                        let reuse = Some((&stage, &picture.scene));
+                        stage = Stage::new(&gpu, &picture.scene, &compiler, view.size, reuse)?;
+                    }
+                    None => {}
+                }
+                // Commands that keep coming must not keep frames from going.
+                if view.interval().is_none() || Instant::now() < next {
+                    continue;
+                }
             }
             Err(RecvTimeoutError::Disconnected) => return Ok(()),
             Err(RecvTimeoutError::Timeout) => {}
@@ -163,6 +214,49 @@ fn draw(
     }
 }
 
+/// The videos of `scene`'s textures, which go on playing while they stay.
+fn video_files(scene: &Scene) -> Vec<(usize, &VideoData)> {
+    let textures = scene.textures.iter().enumerate();
+    textures
+        .filter_map(|(i, t)| Some((i, t.video.as_ref()?)))
+        .collect()
+}
+
+/// Tells the UI where the layers are and what is wrong with them.
+fn report(out: &mut impl Write, picture: &Compiled, stage: &Stage) -> Result<()> {
+    let boxes = picture.layers.iter().enumerate();
+    let event = Event::Document {
+        width: picture.scene.width,
+        height: picture.scene.height,
+        layers: boxes
+            .filter_map(|(i, info)| layer_box(info, stage.renderer.text_box(i)))
+            .collect(),
+        problems: picture.scene.skipped.clone(),
+        error: None,
+    };
+    write_event(out, &event).context("writing to the UI")
+}
+
+/// Where a layer is around its position; `text`: as it was laid out.
+fn layer_box(info: &LayerInfo, text: Option<([u32; 2], [f32; 2])>) -> Option<LayerBox> {
+    let (size, [x, y]) = match (info.size, text) {
+        (Some(size), _) => (size, [0.0, 0.0]),
+        (None, Some((size, [x, y]))) => {
+            let inner = [0, 1].map(|i| (size[i] as f32 - 2.0 * info.padding[i]).max(1.0));
+            // Scenes count y up, documents down.
+            (inner, [x, -y])
+        }
+        (None, None) => return None,
+    };
+    Some(LayerBox {
+        layer: info.document,
+        x,
+        y,
+        width: size[0],
+        height: size[1],
+    })
+}
+
 /// The scene and the picture of it that goes to the UI.
 struct Stage {
     renderer: SceneRenderer,
@@ -172,17 +266,25 @@ struct Stage {
 }
 
 impl Stage {
+    /// `reuse`: the stage before, and its scene.
     fn new(
         gpu: &Gpu,
-        scene: &diorama_scene::Scene,
+        scene: &Scene,
         compiler: &ShaderCompiler,
         size: [u32; 2],
+        reuse: Option<(&Self, &Scene)>,
     ) -> Result<Self> {
         let [w, h] = size;
         let max = gpu.device.limits().max_texture_dimension_2d;
         let fit = FitMode::Fit;
         let (rw, rh) = render_size(fit, (scene.width, scene.height), &[(w, h)], max);
-        let renderer = SceneRenderer::new(gpu, scene, compiler, Some([rw, rh]))?;
+        let output = Some([rw, rh]);
+        let renderer = match reuse {
+            Some((stage, before)) => stage
+                .renderer
+                .rebuilt(before, gpu, scene, compiler, output)?,
+            None => SceneRenderer::new(gpu, scene, compiler, output)?,
+        };
         let format = wgpu::TextureFormat::Rgba8Unorm;
         let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("preview frame"),
@@ -251,5 +353,18 @@ mod tests {
         }));
         assert_eq!(view.size, [1, MAX_SIDE]);
         assert_eq!(view.interval(), Some(Duration::from_millis(20)));
+    }
+
+    #[test]
+    fn boxes_leave_out_padding() {
+        let info = LayerInfo {
+            document: 3,
+            size: None,
+            padding: [8.0, 10.0],
+        };
+        let b = layer_box(&info, Some(([116, 60], [5.0, 7.0]))).unwrap();
+        assert_eq!((b.layer, b.width, b.height), (3, 100.0, 40.0));
+        assert_eq!((b.x, b.y), (5.0, -7.0));
+        assert_eq!(layer_box(&info, None), None);
     }
 }

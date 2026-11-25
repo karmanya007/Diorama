@@ -64,7 +64,8 @@ pub struct Scene {
     pub tube_lights: Vec<TubeLight>,
     /// Back to front.
     pub layers: Vec<ImageLayer>,
-    pub textures: Vec<Texture>,
+    /// Shared, so that a scene made again can tell what is still the same.
+    pub textures: Vec<Arc<Texture>>,
     pub programs: Vec<ShaderProgram>,
     /// Every scene object's own placement (layers and invisible helpers),
     /// so scripts can move objects at runtime.
@@ -357,6 +358,20 @@ pub struct Texture {
     pub video: Option<VideoData>,
 }
 
+impl Texture {
+    /// This texture without its pixels (or video).
+    pub fn without_pixels(&self) -> Self {
+        Self {
+            name: self.name.clone(),
+            frames: self.frames.clone(),
+            rgba: Vec::new(),
+            mips: Vec::new(),
+            video: None,
+            ..*self
+        }
+    }
+}
+
 /// One frame of an animated texture: the frame's parallelogram in UV
 /// (`uv = origin + u · x_axis + v · y_axis`) and how long it shows.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -574,7 +589,7 @@ pub enum ShaderLanguage {
 }
 
 /// A vertex + fragment shader with the metadata the renderer needs to feed it.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ShaderProgram {
     /// Human-readable origin (e.g. `effects/waterripple`).
     pub name: String,

@@ -8,6 +8,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
+use std::sync::Arc;
 
 use diorama_core::Limits;
 use diorama_scene::{FontData, ImageLayer, Node, Scene, ShaderProgram, Texture};
@@ -23,7 +24,7 @@ use crate::shader;
 pub struct CreatedLayer {
     pub layer: ImageLayer,
     /// New textures, in id order after the existing ones.
-    pub textures: Vec<Texture>,
+    pub textures: Vec<Arc<Texture>>,
     pub programs: Vec<ShaderProgram>,
     pub fonts: Vec<FontData>,
 }
@@ -56,9 +57,7 @@ impl std::fmt::Debug for LayerFactory {
 fn light(scene: &Scene) -> Scene {
     let mut light = scene.clone();
     for t in &mut light.textures {
-        t.rgba = Vec::new();
-        t.mips = Vec::new();
-        t.video = None;
+        *t = Arc::new(t.without_pixels());
     }
     for p in &mut light.programs {
         p.vertex_source = String::new();

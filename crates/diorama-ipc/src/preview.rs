@@ -30,20 +30,40 @@ pub struct Command {
     /// Cursor over the frame, 0..1, y down.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pointer: Option<[f32; 2]>,
+    /// The wallpaper's document as it is being edited (Diorama's own only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document: Option<serde_json::Value>,
 }
 
 /// What the preview reports beside frames.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "kebab-case")]
 pub enum Event {
-    /// The wallpaper is up; its own size.
-    Ready {
+    /// A document has been read: the wallpaper's size, where its layers are
+    /// and what is wrong with them. With `error` it could not be used, and
+    /// the picture stays what it was.
+    Document {
         width: u32,
         height: u32,
+        layers: Vec<LayerBox>,
+        problems: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
     },
-    Error {
-        message: String,
-    },
+    /// The preview ends.
+    Error { message: String },
+}
+
+/// Where a layer is around its position, before scaling and turning it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct LayerBox {
+    /// Which of the document's layers.
+    pub layer: usize,
+    /// Its middle from its position; y down.
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -141,9 +161,18 @@ mod tests {
     #[test]
     fn messages_round_trip() {
         let rgba: Vec<u8> = (0..24).collect();
-        let ready = Event::Ready {
+        let ready = Event::Document {
             width: 1920,
             height: 1080,
+            layers: vec![LayerBox {
+                layer: 0,
+                x: 0.5,
+                y: -2.0,
+                width: 10.0,
+                height: 20.0,
+            }],
+            problems: vec!["layer a: no source; left out".into()],
+            error: None,
         };
         let mut pipe = Vec::new();
         write_event(&mut pipe, &ready).unwrap();

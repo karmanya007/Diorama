@@ -2,6 +2,7 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::Arc;
 
 use diorama_core::Limits;
 use diorama_scene::{
@@ -19,8 +20,8 @@ use crate::{Assets, Error, Host, Result, Values, picture};
 pub const VERSION: u64 = 1;
 
 const MAX_LAYERS: usize = 1000;
-const MAX_IMAGE: u64 = 256 << 20;
-const MAX_FONT: u64 = 64 << 20;
+pub(crate) const MAX_IMAGE: u64 = 256 << 20;
+pub(crate) const MAX_FONT: u64 = 64 << 20;
 /// Longest text of a layer, in characters.
 const MAX_TEXT: usize = 10_000;
 /// Positions and sizes stay sane for 32-bit floats.
@@ -72,7 +73,8 @@ pub(crate) fn compile(
     values: &Values,
     host: &dyn Host,
     limits: &Limits,
-) -> Result<Scene> {
+    cache: &mut Cache,
+) -> Result<Compiled> {
     let root = document
         .as_object()
         .ok_or_else(|| Error::Document("not an object".into()))?;
@@ -116,15 +118,65 @@ pub(crate) fn compile(
         programs: HashMap::new(),
         effect_programs: HashMap::new(),
         bytes: 0,
+        cache,
+        infos: Vec::new(),
     };
     match root.get("layers") {
         Some(Value::Array(layers)) => compiler.layers(layers),
         Some(_) => fields.problem("layers is not a list"),
         None => {}
     }
-    let mut scene = compiler.scene;
+    let Compiler {
+        mut scene,
+        infos: layers,
+        ..
+    } = compiler;
+    cache.forget_unused(&scene);
     scene.skipped = problems.into_inner();
-    Ok(scene)
+    Ok(Compiled { scene, layers })
+}
+
+/// A compiled document.
+#[derive(Debug)]
+pub struct Compiled {
+    pub scene: Scene,
+    /// One for each of the scene's layers.
+    pub layers: Vec<LayerInfo>,
+}
+
+/// What an editor wants to know of a scene's layer.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LayerInfo {
+    /// Which of the document's layers it is.
+    pub document: usize,
+    /// Its size before scaling, without the room its effects need. A text's
+    /// is only known when it is laid out: then `None`.
+    pub size: Option<[f32; 2]>,
+    /// The room around a text on each side.
+    pub padding: [f32; 2],
+}
+
+/// What was read and decoded for a document, for the next time it is compiled.
+#[derive(Debug, Default)]
+pub struct Cache {
+    /// Images and videos by path and whether they are smooth.
+    textures: HashMap<(String, bool), (u64, Arc<Texture>)>,
+    fonts: HashMap<String, (u64, Arc<[u8]>)>,
+    white: Option<Arc<Texture>>,
+}
+
+impl Cache {
+    fn forget_unused(&mut self, scene: &Scene) {
+        self.textures
+            .retain(|_, (_, t)| scene.textures.iter().any(|s| Arc::ptr_eq(s, t)));
+        self.fonts
+            .retain(|_, (_, f)| scene.fonts.iter().any(|s| Arc::ptr_eq(&s.data, f)));
+    }
+
+    fn texture(&self, key: &(String, bool), stamp: Option<u64>) -> Option<Arc<Texture>> {
+        let (at, texture) = self.textures.get(key)?;
+        (stamp == Some(*at)).then(|| Arc::clone(texture))
+    }
 }
 
 /// `{"amount", "smoothing"}`: a layer of depth 1 moves by `amount` of the
@@ -168,6 +220,8 @@ pub(crate) struct Compiler<'a> {
     pub(crate) effect_programs: HashMap<(&'static str, &'static str, bool), ProgramId>,
     /// Decoded pixels so far.
     bytes: u64,
+    cache: &'a mut Cache,
+    infos: Vec<LayerInfo>,
 }
 
 impl<'a> Compiler<'a> {
@@ -204,13 +258,13 @@ impl<'a> Compiler<'a> {
             {
                 fields.problem("another layer has its id");
             }
-            if let Err(message) = self.layer(&fields, name) {
+            if let Err(message) = self.layer(&fields, name, i) {
                 fields.problem(&format!("{message}; left out"));
             }
         }
     }
 
-    fn layer(&mut self, f: &Fields<'_>, name: String) -> Result<(), String> {
+    fn layer(&mut self, f: &Fields<'_>, name: String, document: usize) -> Result<(), String> {
         let kind = f.text("type").ok_or("no type")?;
         let mix = f.choice("blend", &MIXES, MIXES[0].1);
         let [w, h] = [self.scene.width as f32, self.scene.height as f32];
@@ -276,6 +330,7 @@ impl<'a> Compiler<'a> {
             }
             other => return Err(format!("unknown type {other}")),
         };
+        let own_size = text.is_none().then(|| size.map(|s| s as f32));
         let opacity = f.number("opacity", 1.0, [0.0, 1.0]);
         let mut effects = Vec::new();
         let mut mesh = None;
@@ -350,6 +405,11 @@ impl<'a> Compiler<'a> {
         } else {
             0.0
         };
+        self.infos.push(LayerInfo {
+            document,
+            size: own_size,
+            padding: text.as_ref().map_or([0.0; 2], |t| t.padding),
+        });
         self.scene.nodes.push(node);
         self.scene.layers.push(ImageLayer {
             name,
@@ -422,7 +482,7 @@ impl<'a> Compiler<'a> {
         id
     }
 
-    fn push_texture(&mut self, key: (String, bool), texture: Texture) -> TextureId {
+    fn push_texture(&mut self, key: (String, bool), texture: Arc<Texture>) -> TextureId {
         let id = TextureId(self.scene.textures.len());
         self.scene.textures.push(texture);
         self.textures.insert(key, id);
@@ -441,10 +501,15 @@ impl<'a> Compiler<'a> {
 
     fn white(&mut self) -> TextureId {
         let key = (String::new(), true);
-        match self.textures.get(&key) {
-            Some(id) => *id,
-            None => self.push_texture(key, solid("white", [1, 1], [255; 4])),
+        if let Some(id) = self.textures.get(&key) {
+            return *id;
         }
+        let white = self
+            .cache
+            .white
+            .get_or_insert_with(|| Arc::new(solid("white", [1, 1], [255; 4])));
+        let white = Arc::clone(white);
+        self.push_texture(key, white)
     }
 
     pub(crate) fn image(&mut self, path: &str, smooth: bool) -> Result<TextureId, String> {
@@ -452,20 +517,46 @@ impl<'a> Compiler<'a> {
         if let Some(id) = self.textures.get(&key) {
             return Ok(*id);
         }
-        let data = self
-            .assets
-            .read(path, MAX_IMAGE)
-            .map_err(|e| e.to_string())?;
-        let texture = picture::decode(path, &data, smooth, self.limits)
-            .map_err(|e| format!("{path}: {e}"))?;
+        let stamp = self.assets.stamp(path);
+        let texture = match self.cache.texture(&key, stamp) {
+            Some(texture) => texture,
+            None => {
+                let data = self
+                    .assets
+                    .read(path, MAX_IMAGE)
+                    .map_err(|e| e.to_string())?;
+                let texture = picture::decode(path, &data, smooth, self.limits)
+                    .map_err(|e| format!("{path}: {e}"))?;
+                Arc::new(texture)
+            }
+        };
         self.hold(texture.width, texture.height)?;
-        Ok(self.push_texture(key, texture))
+        Ok(self.keep(key, stamp, texture))
+    }
+
+    /// Adds a texture that has just been read or found in the cache.
+    fn keep(
+        &mut self,
+        key: (String, bool),
+        stamp: Option<u64>,
+        texture: Arc<Texture>,
+    ) -> TextureId {
+        if let Some(stamp) = stamp {
+            let kept = (stamp, Arc::clone(&texture));
+            self.cache.textures.insert(key.clone(), kept);
+        }
+        self.push_texture(key, texture)
     }
 
     fn video(&mut self, path: &str) -> Result<TextureId, String> {
         let key = (path.to_owned(), true);
         if let Some(id) = self.textures.get(&key) {
             return Ok(*id);
+        }
+        let stamp = self.assets.stamp(path);
+        if let Some(texture) = self.cache.texture(&key, stamp) {
+            self.hold(texture.width, texture.height)?;
+            return Ok(self.keep(key, stamp, texture));
         }
         let video = self.assets.video(path).map_err(|e| e.to_string())?;
         let size = match &video {
@@ -480,7 +571,7 @@ impl<'a> Compiler<'a> {
         self.hold(width, height)?;
         let mut texture = solid(path, [width, height], [0, 0, 0, 255]);
         texture.video = Some(video);
-        Ok(self.push_texture(key, texture))
+        Ok(self.keep(key, stamp, Arc::new(texture)))
     }
 
     /// The font at `path`, or the host's.
@@ -489,16 +580,34 @@ impl<'a> Compiler<'a> {
         if let Some(index) = self.fonts.get(&key) {
             return Ok(*index);
         }
-        let data = if key.is_empty() {
-            self.host.default_font().ok_or("no font")?
+        // The host's does not change while this runs.
+        let stamp = if key.is_empty() {
+            Some(0)
         } else {
-            let data = self
-                .assets
-                .read(&key, MAX_FONT)
-                .map_err(|e| e.to_string())?;
-            data.into()
+            self.assets.stamp(&key)
         };
-        diorama_text::Font::new(data.clone(), 0).map_err(|e| format!("{key}: {e}"))?;
+        let known = self.cache.fonts.get(&key);
+        let data = match known.filter(|(at, _)| stamp == Some(*at)) {
+            Some((_, data)) => Arc::clone(data),
+            None => {
+                let data: Arc<[u8]> = if key.is_empty() {
+                    self.host.default_font().ok_or("no font")?
+                } else {
+                    let data = self
+                        .assets
+                        .read(&key, MAX_FONT)
+                        .map_err(|e| e.to_string())?;
+                    data.into()
+                };
+                diorama_text::Font::new(Arc::clone(&data), 0).map_err(|e| format!("{key}: {e}"))?;
+                if let Some(stamp) = stamp {
+                    self.cache
+                        .fonts
+                        .insert(key.clone(), (stamp, Arc::clone(&data)));
+                }
+                data
+            }
+        };
         let index = self.scene.fonts.len();
         self.scene.fonts.push(FontData {
             name: key.clone(),

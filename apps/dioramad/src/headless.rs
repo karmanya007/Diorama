@@ -1,8 +1,9 @@
 //! `dioramad --scene <dir> --frame-out <png>`: render one scene frame offscreen
 //! at a fixed time and save it (golden tests, RenderDoc comparisons).
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 use anyhow::{Context, Result};
 use diorama_core::Limits;
@@ -60,7 +61,12 @@ pub fn layer_factory(
 }
 
 /// What Diorama's own wallpapers need from the system.
-struct ProjectHost;
+#[derive(Default)]
+pub struct ProjectHost {
+    /// Sizes of videos looked at, with when each file was last changed
+    /// (looking again at every edit would take long).
+    videos: std::cell::RefCell<HashMap<PathBuf, (SystemTime, [u32; 2])>>,
+}
 
 impl diorama_project::Host for ProjectHost {
     fn default_font(&self) -> Option<std::sync::Arc<[u8]>> {
@@ -72,10 +78,20 @@ impl diorama_project::Host for ProjectHost {
     }
 
     fn video_size(&self, file: &Path) -> Option<[u32; 2]> {
+        let changed = std::fs::metadata(file).ok()?.modified().ok()?;
+        if let Some((at, size)) = self.videos.borrow().get(file)
+            && *at == changed
+        {
+            return Some(*size);
+        }
         let probe = diorama_media::probe(file)
             .inspect_err(|e| tracing::warn!("{}: {e}", file.display()))
             .ok()?;
-        probe.decodable.then_some([probe.width, probe.height])
+        let size = probe.decodable.then_some([probe.width, probe.height])?;
+        self.videos
+            .borrow_mut()
+            .insert(file.to_path_buf(), (changed, size));
+        Some(size)
     }
 }
 
@@ -95,7 +111,7 @@ pub fn load_scene(
     }
     let limits = Limits::default();
     let mut scene = if diorama_project::is_project(dir) {
-        diorama_project::load(dir, choices, &ProjectHost, &limits)
+        diorama_project::load(dir, choices, &ProjectHost::default(), &limits)
             .with_context(|| format!("loading {}", dir.display()))?
     } else {
         diorama_we::scene::import_with_choices(dir, assets, &limits, choices)

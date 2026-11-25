@@ -81,7 +81,7 @@ impl Reacts {
             })
         };
         let layer_moves = |l: &ir::ImageLayer| l.particles.is_some() || l.puppet.is_some();
-        let sprite = |t: &ir::Texture| !t.frames.is_empty() || t.video.is_some();
+        let sprite = |t: &Arc<ir::Texture>| !t.frames.is_empty() || t.video.is_some();
         Self {
             time: uses(&["g_Time", "g_Daytime", "g_Frametime"])
                 || scene.shake.is_some()
@@ -147,6 +147,7 @@ struct Target {
     size: [u32; 2],
 }
 
+#[derive(Clone)]
 struct AssetTexture {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
@@ -155,6 +156,7 @@ struct AssetTexture {
     sampler: usize,
 }
 
+#[derive(Clone)]
 struct Program {
     name: String,
     vs: wgpu::ShaderModule,
@@ -520,6 +522,33 @@ impl SceneRenderer {
         compiler: &ShaderCompiler,
         output: Option<[u32; 2]>,
     ) -> Result<Self, SceneError> {
+        Self::build(gpu, scene, compiler, output, None)
+    }
+
+    /// A renderer for `scene`, with what this one (made for `before`) has
+    /// that is the same: textures, programs, the cursor's smoothing. For
+    /// scenes that change while they are edited.
+    pub fn rebuilt(
+        &self,
+        before: &ir::Scene,
+        gpu: &Gpu,
+        scene: &ir::Scene,
+        compiler: &ShaderCompiler,
+        output: Option<[u32; 2]>,
+    ) -> Result<Self, SceneError> {
+        let mut made = Self::build(gpu, scene, compiler, output, Some((self, before)))?;
+        made.parallax_pointer = self.parallax_pointer;
+        made.last_time = self.last_time;
+        Ok(made)
+    }
+
+    fn build(
+        gpu: &Gpu,
+        scene: &ir::Scene,
+        compiler: &ShaderCompiler,
+        output: Option<[u32; 2]>,
+        reuse: Option<(&Self, &ir::Scene)>,
+    ) -> Result<Self, SceneError> {
         if scene.width == 0 || scene.height == 0 {
             return Err(SceneError::Empty);
         }
@@ -547,7 +576,16 @@ impl SceneRenderer {
             })
             .collect();
 
-        let assets: Vec<AssetTexture> = scene.textures.iter().map(|t| upload(gpu, t)).collect();
+        let known = |t: &Arc<ir::Texture>| {
+            let (old, before) = reuse?;
+            let i = before.textures.iter().position(|o| Arc::ptr_eq(o, t))?;
+            old.shared.assets.get(i).cloned()
+        };
+        let assets: Vec<AssetTexture> = scene
+            .textures
+            .iter()
+            .map(|t| known(t).unwrap_or_else(|| upload(gpu, t)))
+            .collect();
         let placeholder = upload(
             gpu,
             &ir::Texture {
@@ -589,22 +627,36 @@ impl SceneRenderer {
                 .or_insert_with(|| system_texture(gpu, &name));
         }
 
-        let uniforms_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("we uniforms"),
-            entries: &[0, 1].map(|binding| wgpu::BindGroupLayoutEntry {
-                binding,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }),
-        });
+        let reuse = reuse.filter(|(old, _)| old.format == format);
+        let new_layout = || {
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("we uniforms"),
+                entries: &[0, 1].map(|binding| wgpu::BindGroupLayoutEntry {
+                    binding,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }),
+            })
+        };
 
+        // Programs are tied to the layout they were made with.
+        let uniforms_layout =
+            reuse.map_or_else(new_layout, |(old, _)| old.shared.uniforms_layout.clone());
         let mut programs = Vec::with_capacity(scene.programs.len());
         for p in &scene.programs {
+            let known = reuse.and_then(|(old, before)| {
+                let i = before.programs.iter().position(|o| o == p)?;
+                old.programs.get(i)?.clone()
+            });
+            if known.is_some() {
+                programs.push(known);
+                continue;
+            }
             match build_program(gpu, compiler, p, &uniforms_layout, format) {
                 Ok(program) => programs.push(Some(program)),
                 Err(e) => {
@@ -614,7 +666,10 @@ impl SceneRenderer {
             }
         }
 
-        let composite = CompositeShared::new(device, format);
+        let composite = reuse.map_or_else(
+            || CompositeShared::new(device, format),
+            |(old, _)| old.composite(),
+        );
         let shared = Arc::new(Shared {
             frames: scene.textures.iter().map(|t| t.frames.clone()).collect(),
             assets,
@@ -859,7 +914,7 @@ impl SceneRenderer {
         gpu: &Gpu,
         compiler: &ShaderCompiler,
         layer: ir::ImageLayer,
-        textures: &[ir::Texture],
+        textures: &[Arc<ir::Texture>],
         programs: &[ir::ShaderProgram],
         fonts: Vec<ir::FontData>,
         below: Option<usize>,
@@ -2161,6 +2216,22 @@ impl SceneRenderer {
         self.reacts.audio || self.ir.layers.iter().any(|l| l.particles.is_some())
     }
 
+    fn composite(&self) -> CompositeShared {
+        CompositeShared {
+            layout: self.shared.composite_layout.clone(),
+            pipelines: self.composite_pipelines.clone(),
+            background: self.background_pipeline.clone(),
+        }
+    }
+
+    /// The box of text layer `index` (IR order) as laid out: its size, with
+    /// padding, and where its middle is from the layer's anchor (y up).
+    pub fn text_box(&self, index: usize) -> Option<([u32; 2], [f32; 2])> {
+        let text = self.texts.get(&index)?;
+        let layer = self.layers.iter().find(|l| l.index == index)?;
+        Some((layer.size, text.centre))
+    }
+
     /// Draws the next frame even if nothing changed.
     pub fn invalidate(&mut self) {
         self.drawn = None;
@@ -3377,6 +3448,7 @@ fn create_pipeline(
     })
 }
 
+#[derive(Clone)]
 struct CompositeShared {
     layout: wgpu::BindGroupLayout,
     pipelines: HashMap<Blend, wgpu::RenderPipeline>,

@@ -497,7 +497,7 @@ fn scripts_drive_texture_animations() {
         y_axis: [0.0, 1.0],
         duration: 0.1,
     };
-    s.textures.push(diorama_scene::Texture {
+    s.textures.push(std::sync::Arc::new(diorama_scene::Texture {
         name: "sheet".into(),
         width: 4,
         height: 1,
@@ -509,7 +509,7 @@ fn scripts_drive_texture_animations() {
         nearest: true,
         frames: vec![frame; 4],
         video: None,
-    });
+    }));
     s.layers[1].albedo.textures.insert(
         0,
         diorama_scene::TextureBinding::Asset(diorama_scene::TextureId(0)),
