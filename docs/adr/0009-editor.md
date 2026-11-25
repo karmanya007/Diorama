@@ -199,6 +199,27 @@ manifests, undo, saving by itself, *Show on desktop*, *Share…* to a
 Checked in the real app on Linux (Xvfb, WebKitGTK), driven by mouse and
 keyboard. Not yet on Windows.
 
+## Milestone 4 (2026-11-25)
+
+Values move between keys or with the sound (`docs/formats/diorama.md`), and
+viewers' settings are made in the editor.
+
+- Motion is part of the scene IR (`diorama_scene::motion`) and played by the
+  renderer, without the script engine. Values are compared with what the layer
+  has, so a wallpaper whose values rest is not drawn.
+- The editor evaluates keys itself for its handles and fields
+  (`editor/motion.js`); both sides are tested with the same cases
+  (`crates/diorama-project/tests/motion.json`).
+- An effect's speed does not move: its phase is time × speed and would jump.
+- A blur whose radius moves keeps the passes its largest radius needs and shows
+  the layer itself as it nears nothing.
+- The preview has a clock the editor sets and stops, and listens to the sound
+  while something follows it.
+- Changing a value that has keys adds or changes the key at the time shown.
+  Any value's button makes it fixed, keyed, follow the sound, or a setting.
+
+`examples/wallpapers/lanterns` uses each.
+
 ## Alternatives
 
 - **Editing WE's `scene.json` in place.** Reuses the importer fully and the

@@ -7,7 +7,8 @@ use std::fmt::Write;
 use std::sync::OnceLock;
 
 use diorama_scene::{
-    Blend, Effect as SceneEffect, Fbo, Pass, ProgramId, TextureBinding, TextureId,
+    Blend, Effect as SceneEffect, Fbo, MotionTarget, Pass, ProgramId, TextureBinding, TextureId,
+    Track,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -138,6 +139,12 @@ impl Effect {
         self.animated.as_deref().is_some_and(at_all) && at_all("amount")
     }
 
+    /// Whether the setting `key` can move: all but the speed it moves with
+    /// (the time times a speed that changes would jump about).
+    fn can_move(&self, key: &str) -> bool {
+        self.animated.as_deref() != Some(key)
+    }
+
     /// Its fragment stage. One that does not move has no use for the time,
     /// so a picture that never changes is not drawn again and again.
     fn module(&self, moves: bool) -> Option<String> {
@@ -172,7 +179,8 @@ impl Effect {
         Some(module.replace("g_Time", time))
     }
 
-    fn number(&self, f: &Fields<'_>, key: &str) -> f32 {
+    /// The setting `key`; of one that moves, the value it starts with.
+    fn start(&self, f: &Fields<'_>, key: &str) -> f32 {
         self.settings
             .iter()
             .find(|s| s.key == key)
@@ -182,6 +190,69 @@ impl Effect {
                 } => f.number(key, default, [min, max]),
                 _ => 0.0,
             })
+    }
+
+    /// The setting `key`; of one that moves, the value furthest from zero.
+    fn number(&self, f: &Fields<'_>, key: &str) -> f32 {
+        self.settings
+            .iter()
+            .find(|s| s.key == key)
+            .map_or(0.0, |s| match s.kind {
+                Kind::Number {
+                    default, min, max, ..
+                } if self.can_move(key) => f.extreme(key, default, [min, max]),
+                Kind::Number {
+                    default, min, max, ..
+                } => f.number(key, default, [min, max]),
+                _ => 0.0,
+            })
+    }
+
+    /// How its settings move; it is effect `index` of its layer, `built`.
+    fn motions(
+        &self,
+        f: &Fields<'_>,
+        index: usize,
+        built: &SceneEffect,
+    ) -> Vec<(MotionTarget, Track)> {
+        let target = |uniform: &str, numbers| MotionTarget::Setting {
+            effect: index,
+            uniform: uniform.to_owned(),
+            numbers,
+        };
+        let mut tracks = Vec::new();
+        for s in self.settings.iter().filter(|s| self.can_move(&s.key)) {
+            let key = s.key.as_str();
+            match &s.kind {
+                &Kind::Number {
+                    default, min, max, ..
+                } => {
+                    let read = |f: &Fields<'_>, key: &str| {
+                        [f.number(key, default, [min, max]), 0.0, 0.0, 0.0]
+                    };
+                    let Some(track) = f.motion(key, read) else {
+                        continue;
+                    };
+                    let divisor = built.passes.first().and_then(|p| {
+                        let d = p.constants.get("u_Divisor")?;
+                        d.first().copied()
+                    });
+                    if let Some(d) = divisor.filter(|_| key == "radius") {
+                        let sigma = track.map(|[r, ..]| [sigma(r) / d, 0.0, 0.0, 0.0]);
+                        tracks.push((target("u_Sigma", 1), sigma));
+                    }
+                    tracks.push((target(key, 1), track));
+                }
+                Kind::Color { default } => {
+                    let default = crate::fields::color(&Value::from(default.as_str()));
+                    let read =
+                        |f: &Fields<'_>, key: &str| f.color(key, default.unwrap_or([1.0; 4]));
+                    tracks.extend(f.motion(key, read).map(|t| (target(key, 4), t)));
+                }
+                Kind::Choice { .. } | Kind::Flag { .. } | Kind::Image => {}
+            }
+        }
+        tracks
     }
 
     fn spread(&self, f: &Fields<'_>) -> f32 {
@@ -254,6 +325,11 @@ impl<'a> List<'a> {
     }
 }
 
+/// The blur of a radius, in standard deviations.
+fn sigma(radius: f32) -> f32 {
+    radius / 2.0
+}
+
 fn effects_by_name(name: &str) -> Option<&'static Effect> {
     effects().iter().find(|e| e.name == name)
 }
@@ -290,11 +366,20 @@ impl Frame {
 
 impl Compiler<'_> {
     /// Builds `list`; an effect that cannot be used is left out and named.
-    pub(crate) fn effects(&mut self, list: &List<'_>, frame: Frame) -> Vec<SceneEffect> {
+    /// Settings that move go to `tracks`.
+    pub(crate) fn effects(
+        &mut self,
+        list: &List<'_>,
+        frame: Frame,
+        tracks: &mut Vec<(MotionTarget, Track)>,
+    ) -> Vec<SceneEffect> {
         let mut built = Vec::new();
         for (effect, f) in &list.effects {
             match self.effect(effect, f, frame) {
-                Ok(e) => built.push(e),
+                Ok(e) => {
+                    tracks.extend(effect.motions(f, built.len(), &e));
+                    built.push(e);
+                }
                 Err(message) => f.problem(&format!("{message}; left out")),
             }
         }
@@ -382,10 +467,11 @@ impl Compiler<'_> {
         constants: &BTreeMap<String, Vec<f32>>,
         out: &mut SceneEffect,
     ) -> Result<(), String> {
-        let sigma = effect.number(f, "radius") / 2.0;
+        let most = sigma(effect.number(f, "radius"));
+        let sigma = sigma(effect.start(f, "radius"));
         // Small enough that the passes' reach (10 pixels) is three sigmas.
         let mut divisor: u8 = 1;
-        while sigma / f32::from(divisor) > 3.2 && divisor < 32 {
+        while most / f32::from(divisor) > 3.2 && divisor < 32 {
             divisor *= 2;
         }
         let mut constants = constants.clone();

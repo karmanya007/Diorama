@@ -1,0 +1,42 @@
+[
+  {
+    "name": "once",
+    "motion": { "keys": [{ "t": 2, "v": 10, "ease": "linear" }, { "t": 0, "v": 0, "ease": "linear" }], "repeat": "once" },
+    "at": [[0, 0], [0.5, 2.5], [2, 10], [9, 10]]
+  },
+  {
+    "name": "loop with room, easing in and out",
+    "motion": { "keys": [{ "t": 1, "v": 0 }, { "t": 2, "v": 10, "ease": "linear" }], "length": 5 },
+    "at": [[1, 0], [1.25, 1.5625], [2, 10], [4, 5], [5.5, 1.25], [0.5, 1.25], [11, 0]]
+  },
+  {
+    "name": "loop without room",
+    "motion": { "keys": [{ "t": 0, "v": 0, "ease": "in" }, { "t": 2, "v": 8 }] },
+    "at": [[1, 2], [3, 2], [2, 0]]
+  },
+  {
+    "name": "a length before the last key counts as that key",
+    "motion": { "keys": [{ "t": 0, "v": 0, "ease": "out" }, { "t": 2, "v": 8 }], "length": 1, "repeat": "once" },
+    "at": [[1, 6], [2, 8]]
+  },
+  {
+    "name": "mirror",
+    "motion": { "keys": [{ "t": 0, "v": 0, "ease": "linear" }, { "t": 2, "v": 10 }], "length": 3, "repeat": "mirror" },
+    "at": [[1, 5], [2.5, 10], [3.5, 10], [5, 5], [6, 0], [7, 5]]
+  },
+  {
+    "name": "hold",
+    "motion": { "keys": [{ "t": 0, "v": 1, "ease": "hold" }, { "t": 2, "v": 5 }], "repeat": "once" },
+    "at": [[1.99, 1], [2, 5]]
+  },
+  {
+    "name": "before the first key",
+    "motion": { "keys": [{ "t": 1, "v": 3 }, { "t": 2, "v": 5 }], "repeat": "once" },
+    "at": [[0, 3], [0.9, 3]]
+  },
+  {
+    "name": "one key",
+    "motion": { "keys": [{ "t": 1, "v": 4 }] },
+    "at": [[0, 4], [0.3, 4], [7, 4]]
+  }
+]

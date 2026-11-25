@@ -98,7 +98,23 @@ pub fn draw_at(background: &str, layers: Value, pointer: [f32; 2], time: f32) ->
         return None;
     };
     let gpu = gpu.lock().unwrap_or_else(PoisonError::into_inner);
-    Some(render(&gpu, background, &layers, pointer, time))
+    let inputs = FrameInputs {
+        pointer,
+        time,
+        ..FrameInputs::default()
+    };
+    Some(render(&gpu, background, &layers, &inputs))
+}
+
+/// With sound: how loud each band is.
+pub fn draw_loud(background: &str, layers: Value, loud: impl Fn(usize) -> f32) -> Option<Picture> {
+    let gpu = GPU.as_ref()?;
+    let gpu = gpu.lock().unwrap_or_else(PoisonError::into_inner);
+    let inputs = FrameInputs {
+        audio: [std::array::from_fn(&loud); 2],
+        ..FrameInputs::default()
+    };
+    Some(render(&gpu, background, &layers, &inputs))
 }
 
 fn renderer(gpu: &Gpu, background: &str, layers: &Value) -> SceneRenderer {
@@ -118,14 +134,9 @@ fn renderer(gpu: &Gpu, background: &str, layers: &Value) -> SceneRenderer {
     SceneRenderer::new(gpu, &scene, &compiler, None).unwrap()
 }
 
-fn render(gpu: &Gpu, background: &str, layers: &Value, pointer: [f32; 2], time: f32) -> Picture {
+fn render(gpu: &Gpu, background: &str, layers: &Value, inputs: &FrameInputs) -> Picture {
     let mut renderer = renderer(gpu, background, layers);
-    let inputs = FrameInputs {
-        pointer,
-        time,
-        ..FrameInputs::default()
-    };
-    renderer.render(gpu, &inputs);
+    renderer.render(gpu, inputs);
     Picture(renderer.read_output(gpu).unwrap())
 }
 

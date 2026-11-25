@@ -4,6 +4,9 @@
   import * as api from '../api.js';
   import Field from './Field.svelte';
   import FontPicker from './FontPicker.svelte';
+  import { sourceOf } from './motion.js';
+  import Source from './Source.svelte';
+  import ViewerSettings from './ViewerSettings.svelte';
 
   let { editor } = $props();
 
@@ -27,23 +30,12 @@
 
   // Leaves out what is as it would be without it.
   const set = (key, otherwise) => (v) =>
-    editor.edit(layer.id, (l) => editor.assign(l, key, JSON.stringify(v) === JSON.stringify(otherwise) && !editor.bound(l[key]) ? undefined : v), key);
-  const unbind = (key, otherwise) => () => editor.edit(layer.id, (l) => (l[key] = editor.value(l[key], otherwise)));
+    editor.edit(layer.id, (l) => editor.assign(l, key, JSON.stringify(v) === JSON.stringify(otherwise) && !sourceOf(l[key]) ? undefined : v), key);
+  // `raw`: what the document is to hold (or makes it, within the change).
+  const made = (raw) => (typeof raw === 'function' ? raw() : raw);
+  const link = (key, moves = true) => ({ key, moves, raw: layer[key], set: (raw, kind) => editor.edit(layer.id, (l) => (l[key] = made(raw)), kind && `${key} ${kind}`) });
   const done = () => editor.settle();
   const get = (key, otherwise) => editor.value(layer[key], otherwise);
-
-  function axis(key, i, v, d) {
-    editor.edit(
-      layer.id,
-      (l) => {
-        const now = [...editor.place(l)[key]];
-        now[i] = v;
-        l[key] = key === 'scale' && now[0] === now[1] ? now[0] : now;
-        if (key === 'scale' && now[0] === d && now[1] === d) l[key] = undefined;
-      },
-      key + i,
-    );
-  }
 
   function both(v) {
     // Proportions stay: the larger side says how much.
@@ -72,6 +64,13 @@
   const effectOf = (name) => editor.effects.find((e) => e.name === name);
   const edits = (i, fn, kind) => editor.edit(layer.id, (l) => fn(l.effects[i]), kind && `${kind} ${i}`);
   const otherwise = (s) => s.default ?? null;
+  // All but the speed an effect moves with can move.
+  const effectLink = (i, s, e, effect) => ({
+    key: s.key,
+    moves: ['number', 'color'].includes(s.type) && effect.animated !== s.key,
+    raw: e[s.key],
+    set: (raw, kind) => edits(i, (x) => (x[s.key] = made(raw)), kind && `${s.key} ${kind}`),
+  });
 
   async function addEffect(name) {
     const effect = effectOf(name);
@@ -97,7 +96,7 @@
 
   // ---- wallpaper ---
   const wall = (key, v) => editor.change((doc) => editor.assign(doc, key, v), key);
-  const fixWall = (key, otherwise) => editor.change((doc) => (doc[key] = editor.value(doc[key], otherwise)));
+  const wallLink = (key) => ({ key, moves: false, raw: editor.doc[key], set: (raw) => editor.change((doc) => (doc[key] = made(raw))) });
   const parallax = $derived(editor.doc?.parallax ?? null);
   const setParallax = (key, v) =>
     editor.change((doc) => {
@@ -113,12 +112,13 @@
 
     {#if layer.type === 'text'}
       <section>
-        <textarea rows="2" maxlength="10000" aria-label="Text" value={get('text', '')} oninput={(e) => set('text', '')(e.currentTarget.value)} onchange={done}></textarea>
-        {#if editor.bound(layer.text)}
-          <Field label="Text" kind="none" bound={editor.bound(layer.text)} onunbind={unbind('text', '')} />
-        {/if}
-        <Field label="Size" value={get('font-size', 64)} bound={editor.bound(layer['font-size'])} min={1} max={1000} step={1} unit="px" onchange={set('font-size', 64)} ondone={done} onunbind={unbind('font-size', 64)} />
-        <Field label="Colour" kind="color" value={get('color', '#ffffff')} bound={editor.bound(layer.color)} onchange={set('color', '#ffffff')} ondone={done} onunbind={unbind('color', '#ffffff')} />
+        <div class="words">
+          <textarea rows="2" maxlength="10000" aria-label="Text" value={get('text', '')} oninput={(e) => set('text', '')(e.currentTarget.value)} onchange={done}></textarea>
+          <Source {editor} link={link('text', false)} label="Text" kind="text" now={get('text', '')} />
+        </div>
+        {#if editor.bound(layer.text)}<p class="note">Viewers can change the text.</p>{/if}
+        <Field label="Size" value={get('font-size', 64)} {editor} link={link('font-size', false)} min={1} max={1000} step={1} unit="px" onchange={set('font-size', 64)} ondone={done} />
+        <Field label="Colour" kind="color" value={get('color', '#ffffff')} {editor} link={link('color')} onchange={set('color', '#ffffff')} ondone={done} />
         <FontPicker {editor} {layer} />
         <Field label="Align" kind="choice" choices={ALIGN} value={get('align', 'center')} onchange={set('align', 'center')} />
         <Field label="Vertical" kind="choice" choices={VALIGN} value={get('vertical-align', 'middle')} onchange={set('vertical-align', 'middle')} />
@@ -127,41 +127,37 @@
     {:else if layer.type === 'image' || layer.type === 'video'}
       <section>
         <Field label="File" kind="file" value={layer.source} onpick={() => pickAsset(layer.type, set('source'))} />
-        <Field label="Tint" kind="color" value={get('tint', '#ffffff')} bound={editor.bound(layer.tint)} onchange={set('tint', '#ffffff')} ondone={done} onunbind={unbind('tint', '#ffffff')} />
+        <Field label="Tint" kind="color" value={get('tint', '#ffffff')} {editor} link={link('tint')} onchange={set('tint', '#ffffff')} ondone={done} />
         {#if layer.type === 'image'}
           <Field label="Smooth" kind="flag" value={get('smooth', true)} onchange={set('smooth', true)} />
         {/if}
       </section>
     {:else if layer.type === 'color'}
       <section>
-        <Field label="Colour" kind="color" value={get('color', '#ffffff')} bound={editor.bound(layer.color)} onchange={set('color', '#ffffff')} ondone={done} onunbind={unbind('color', '#ffffff')} />
+        <Field label="Colour" kind="color" value={get('color', '#ffffff')} {editor} link={link('color')} onchange={set('color', '#ffffff')} ondone={done} />
       </section>
     {/if}
 
     {#if placed}
       <section>
         <h3>Place</h3>
-        {#if editor.bound(layer.position)}
-          <Field label="Position" kind="none" bound={editor.bound(layer.position)} onunbind={unbind('position', [0, 0])} />
-        {:else}
-          <Field label="X" slider={false} value={place.position[0]} min={-100000} max={100000} step={1} unit="px" onchange={(v) => axis('position', 0, v)} ondone={done} />
-          <Field label="Y" slider={false} value={place.position[1]} min={-100000} max={100000} step={1} unit="px" onchange={(v) => axis('position', 1, v)} ondone={done} />
-        {/if}
+        <Field label="Position" kind="pair" {editor} link={link('position')} value={place.position} min={-100000} max={100000} step={1} unit="px" onchange={(v) => set('position')(v)} ondone={done} />
         {#if sized}
           <Field label="Width" slider={false} value={size[0]} min={1} max={16384} step={1} unit="px" onchange={(v) => resizeTo(0, v)} ondone={done} />
           <Field label="Height" slider={false} value={size[1]} min={1} max={16384} step={1} unit="px" onchange={(v) => resizeTo(1, v)} ondone={done} />
         {/if}
-        <Field label="Scale" value={place.scale[0]} bound={editor.bound(layer.scale)} min={0.01} max={5} step={0.01} onchange={both} ondone={done} onunbind={unbind('scale', 1)} />
-        <Field label="Rotation" value={place.rotation} bound={editor.bound(layer.rotation)} min={-180} max={180} step={1} unit="°" onchange={set('rotation', 0)} ondone={done} onunbind={unbind('rotation', 0)} />
-        <Field label="Depth" value={get('depth', 0)} bound={editor.bound(layer.depth)} min={-2} max={2} step={0.05} onchange={set('depth', 0)} ondone={done} onunbind={unbind('depth', 0)} />
+        <Field label="Scale" value={place.scale[0]} {editor} link={link('scale')} min={0.01} max={5} step={0.01} onchange={both} ondone={done} />
+        <Field label="Rotation" value={place.rotation} {editor} link={link('rotation')} min={-180} max={180} limit={[-36000, 36000]} step={1} unit="°" onchange={set('rotation', 0)} ondone={done} />
+        <Field label="Depth" value={get('depth', 0)} {editor} link={link('depth', false)} min={-2} max={2} step={0.05} onchange={set('depth', 0)} ondone={done} />
         <p class="note">Depth: how far it follows the cursor.</p>
       </section>
     {/if}
 
     <section>
       <h3>Look</h3>
-      <Field label="Opacity" value={get('opacity', 1)} bound={editor.bound(layer.opacity)} onchange={set('opacity', 1)} ondone={done} onunbind={unbind('opacity', 1)} />
-      <Field label="Blend" kind="choice" choices={BLENDS} value={get('blend', 'normal')} bound={editor.bound(layer.blend)} onchange={set('blend', 'normal')} onunbind={unbind('blend', 'normal')} />
+      <Field label="Visible" kind="flag" value={get('visible', true) !== false} {editor} link={link('visible', false)} onchange={set('visible', true)} />
+      <Field label="Opacity" value={get('opacity', 1)} {editor} link={link('opacity')} onchange={set('opacity', 1)} ondone={done} />
+      <Field label="Blend" kind="choice" choices={BLENDS} value={get('blend', 'normal')} {editor} link={link('blend', false)} onchange={set('blend', 'normal')} />
     </section>
 
     <section>
@@ -185,7 +181,8 @@
               label={s.label}
               kind={s.type === 'image' ? 'file' : s.type}
               value={editor.value(e[s.key], otherwise(s))}
-              bound={editor.bound(e[s.key])}
+              {editor}
+              link={s.type === 'image' ? null : effectLink(i, s, e, effect)}
               min={s.min}
               max={s.max}
               step={s.step}
@@ -193,7 +190,6 @@
               choices={s.choices ?? []}
               onchange={(v) => edits(i, (x) => editor.assign(x, s.key, v), s.key)}
               ondone={done}
-              onunbind={() => edits(i, (x) => (x[s.key] = editor.value(x[s.key], otherwise(s))))}
               onpick={() => pickAsset('image', (path) => edits(i, (x) => (x[s.key] = path)))}
             />
           {/each}
@@ -212,15 +208,16 @@
     <h2>Wallpaper</h2>
     <section>
       <Field label="Size" kind="choice" value={sizeId} choices={SIZES.some(([id]) => id === sizeId) ? SIZES : [[sizeId, editor.size.join(' × ')], ...SIZES]} onchange={(v) => wall('size', v.split('x').map(Number))} />
-      <Field label="Background" kind="color" value={editor.value(editor.doc.background, '#000000')} bound={editor.bound(editor.doc.background)} onchange={(v) => wall('background', v)} ondone={done} onunbind={() => fixWall('background', '#000000')} />
+      <Field label="Background" kind="color" value={editor.value(editor.doc.background, '#000000')} {editor} link={wallLink('background')} onchange={(v) => wall('background', v)} ondone={done} />
       <p class="note">The background shows where no layer covers it.</p>
     </section>
     <section>
       <h3>Parallax</h3>
-      <Field label="Amount" value={editor.value(parallax?.amount, parallax ? 0.05 : 0)} bound={editor.bound(parallax?.amount)} max={0.2} step={0.005} onchange={(v) => setParallax('amount', v)} ondone={done} onunbind={() => editor.change((doc) => (doc.parallax.amount = editor.value(doc.parallax.amount, 0.05)))} />
+      <Field label="Amount" value={editor.value(parallax?.amount, parallax ? 0.05 : 0)} {editor} link={parallax ? { key: 'amount', moves: false, raw: parallax.amount, set: (raw) => editor.change((doc) => (doc.parallax.amount = made(raw))) } : null} max={0.2} step={0.005} onchange={(v) => setParallax('amount', v)} ondone={done} />
       <Field label="Smoothing" value={editor.value(parallax?.smoothing, 0.15)} max={2} step={0.05} unit="s" onchange={(v) => setParallax('smoothing', v)} ondone={done} />
       <p class="note">Layers with a depth follow the cursor.</p>
     </section>
+    <ViewerSettings {editor} />
     <section>
       <h3>In the library</h3>
       <textarea rows="3" maxlength="5000" aria-label="Description" placeholder="Description" value={editor.project.description ?? ''} onchange={(e) => editor.changeProject((p) => (p.description = e.currentTarget.value))}></textarea>
@@ -264,6 +261,17 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
+  }
+
+  .words {
+    display: flex;
+    align-items: flex-start;
+    gap: 4px;
+  }
+
+  .words textarea {
+    flex: 1;
+    min-width: 0;
   }
 
   textarea {

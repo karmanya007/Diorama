@@ -8,6 +8,7 @@
   import Layers from './Layers.svelte';
   import Leave from './Leave.svelte';
   import Stage from './Stage.svelte';
+  import Timeline from './Timeline.svelte';
 
   let { dir } = $props();
 
@@ -97,12 +98,15 @@
     if (ctrl && e.key.toLowerCase() === 'z') e.shiftKey ? editor.redo() : editor.undo();
     else if (ctrl && e.key.toLowerCase() === 'y') editor.redo();
     else if (ctrl && e.key.toLowerCase() === 'd' && layer) editor.duplicate(layer.id);
+    else if ((e.key === 'Delete' || e.key === 'Backspace') && editor.key?.track.startsWith(`${layer?.id}
+`)) editor.removeKey();
     else if ((e.key === 'Delete' || e.key === 'Backspace') && layer) editor.remove(layer.id);
-    else if (e.key === 'Escape') editor.selected = null;
+    else if (e.key === ' ' && !e.target.closest?.('button, [role=option], [role=slider], input')) editor.playing ? editor.pause() : editor.play();
+    else if (e.key === 'Escape') editor.key ? (editor.key = null) : (editor.selected = null);
     else if (arrows[e.key] && !e.altKey && layer && layer.type !== 'adjustment' && !editor.bound(layer.position) && e.target.type !== 'range') {
       const [dx, dy] = arrows[e.key];
       const [x, y] = editor.place(layer).position;
-      editor.edit(layer.id, (l) => (l.position = [x + dx, y + dy]), 'nudge');
+      editor.edit(layer.id, (l) => editor.assign(l, 'position', [x + dx, y + dy]), 'nudge');
     } else return;
     e.preventDefault();
   }
@@ -146,7 +150,10 @@
   {:else}
     <div class="panes">
       <Layers {editor} />
-      <Stage {editor} />
+      <div class="middle">
+        <Stage {editor} />
+        <Timeline {editor} />
+      </div>
       <Inspector {editor} />
     </div>
   {/if}
@@ -183,6 +190,14 @@
     flex: 1;
     min-height: 0;
     display: flex;
+  }
+
+  .middle {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
   }
 
   .center {

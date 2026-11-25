@@ -75,7 +75,7 @@ gnome-extensions enable diorama@karmanya007.github.io
 - **Library**: lists your Workshop items, Wallpaper Engine's projects and any folders you add (Settings → Library folders). Select a wallpaper to see its details, preview and settings, then choose the monitors and press **Show**.
 - **Monitors**: what each monitor shows, and whether it is paused and why.
 - **Playlists**: build a list, pick the order and when it changes (every N minutes, or at set times of day), and the monitors it runs on.
-- **Editor**: *New wallpaper* in the library makes one of your own from pictures, videos, text and colours, with effects and parallax. *Save* also updates the monitors that show it. *Share…* writes it to a `.diorama` file for others; *Open file…* opens one.
+- **Editor**: *New wallpaper* in the library makes one of your own from pictures, videos, text and colours, with effects and parallax. Values can move between keyframes or with the sound, and you choose what viewers may change. *Save* also updates the monitors that show it. *Share…* writes it to a `.diorama` file for others; *Open file…* opens one.
 - **Presets** (under *Monitors*): save what the monitors show under a number from 1 to 9. Hotkeys (Ctrl+Alt and the number, or other keys you choose) are off until you turn them on; Wayland desktops have none, so bind keys to `diorama preset 1` there.
 - **Settings**: pause rules and presets, volume, library folders, start Diorama when you sign in, updates.
 
@@ -200,7 +200,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) before sending changes.
 - **Windows**: a code-signed installer, the winget listing, remaining scene differences.
 - **Linux**: testing on real desktops; Flatpak and distribution packages.
 - **macOS.**
-- **More for the editor**: motion and keyframes, particles, scripts.
+- **More for the editor**: particles, scripts.
 
 ## Content and legal
 

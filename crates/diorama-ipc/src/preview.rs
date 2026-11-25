@@ -33,9 +33,20 @@ pub struct Command {
     /// The wallpaper's document as it is being edited (Diorama's own only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub document: Option<serde_json::Value>,
+    /// Where the wallpaper's time goes on from, or stands.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clock: Option<Clock>,
     /// With `document`: the user settings' values as they are being edited.
     #[serde(skip_serializing_if = "serde_json::Map::is_empty")]
     pub values: serde_json::Map<String, serde_json::Value>,
+}
+
+/// The wallpaper's time.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Clock {
+    /// Seconds.
+    pub at: f32,
+    pub playing: bool,
 }
 
 /// What the preview reports beside frames.

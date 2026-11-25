@@ -13,9 +13,11 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+pub mod motion;
 pub mod particles;
 pub mod puppet;
 pub mod space;
+pub use motion::{AudioTrack, LayerMotion, MotionTarget, Numbers, Track};
 pub use particles::ParticleSystem;
 pub use space::{
     Camera, CameraKey, CameraShot, IDENTITY_MAT4, Mat4, affine_mat4, camera_on_path, mat4_mul,
@@ -76,6 +78,8 @@ pub struct Scene {
     pub scripts: Vec<Script>,
     /// Keyframe-animated values, in scene order.
     pub animations: Vec<Animation>,
+    /// Values the renderer moves itself, one entry per layer.
+    pub motions: Vec<LayerMotion>,
     /// Helper JavaScript the scripts expect (`None` without scripts).
     pub script_library: Option<ScriptLibrary>,
     /// User properties as `{"name": {"type", "value"}, …}` JSON (what

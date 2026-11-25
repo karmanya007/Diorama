@@ -22,6 +22,7 @@ use diorama_scene::{self as ir, Blend, LayerKind, TextureBinding};
 use wgpu::util::DeviceExt as _;
 
 use crate::VideoBlit;
+use crate::motion::Motions;
 use crate::text::TextState;
 
 /// Scene targets use WE's gamma-space RGBA8 (no sRGB conversion)...
@@ -95,6 +96,9 @@ impl Reacts {
     }
 }
 
+/// As the effect of a [`LayerUpdate`] constant: the layer's composite pass.
+pub const COMPOSITE: usize = usize::MAX;
+
 /// Runtime changes to one layer (from scripts). `None` / empty = unchanged.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct LayerUpdate {
@@ -108,7 +112,7 @@ pub struct LayerUpdate {
     pub text: Option<String>,
     /// (effect index, visible).
     pub effects: Vec<(usize, bool)>,
-    /// (effect index, pass index, uniform, value).
+    /// (effect index or [`COMPOSITE`], pass index, uniform, value).
     pub constants: Vec<(usize, usize, String, Vec<f32>)>,
     /// Frame of the layer's animated texture, chosen by a script (it then
     /// stops following scene time).
@@ -202,7 +206,7 @@ struct GpuPass {
     mirrored: bool,
     /// Uniform data changed outside the frame loop; upload before drawing.
     dirty: bool,
-    /// (effect, pass) this GPU pass draws; `None` for albedo / composite.
+    /// (effect or [`COMPOSITE`], pass) this GPU pass draws; `None` for albedo.
     source: Option<(usize, usize)>,
     /// Asset whose animation frames drive `g_Texture0Translation/Rotation`.
     sprite: Option<usize>,
@@ -320,6 +324,7 @@ pub struct SceneRenderer {
     texts: HashMap<usize, TextState>,
     /// Target slots released by rebuilt layers.
     free_targets: Vec<usize>,
+    motions: Motions,
 }
 
 /// Resources every layer build needs.
@@ -778,6 +783,7 @@ impl SceneRenderer {
             state,
             texts: HashMap::new(),
             free_targets: Vec::new(),
+            motions: Motions::new(scene),
         };
 
         tracing::debug!(reacts = ?renderer.reacts, "what the picture depends on");
@@ -1329,7 +1335,12 @@ impl SceneRenderer {
             e.visible = *visible;
         }
         for ((e, p, uniform), value) in &state.constants {
-            if let Some(pass) = layer.effects.get_mut(*e).and_then(|e| e.passes.get_mut(*p)) {
+            let pass = if *e == COMPOSITE {
+                layer.composite.as_mut()
+            } else {
+                layer.effects.get_mut(*e).and_then(|e| e.passes.get_mut(*p))
+            };
+            if let Some(pass) = pass {
                 pass.constants.insert(uniform.clone(), value.clone());
             }
         }
@@ -1731,6 +1742,7 @@ impl SceneRenderer {
                 point: pixel_art,
             };
             if let Some(mut p) = self.build_pass(ctx, &plan) {
+                p.source = Some((COMPOSITE, 0));
                 p.load |= into_group;
                 passes.push(p);
                 return Some(GpuLayer {
@@ -2193,6 +2205,10 @@ impl SceneRenderer {
 
     /// Renders one frame into [`SceneRenderer::output`] and submits.
     pub fn render(&mut self, gpu: &Gpu, inputs: &FrameInputs) {
+        self.motions.advance(inputs);
+        for (layer, update) in self.motions.take() {
+            self.update_layer(gpu, layer, &update);
+        }
         self.render_impl(gpu, inputs);
         self.drawn = Some(*inputs);
     }
@@ -2202,13 +2218,16 @@ impl SceneRenderer {
     /// [`Self::render`]. Changes made to textures ([`Self::write_texture`],
     /// system textures) are the caller's to know about.
     pub fn idle(&mut self, inputs: &FrameInputs) -> bool {
+        if self.motions.advance(inputs) {
+            return false;
+        }
         let Some(drawn) = self.drawn else {
             return false;
         };
         let near = |a: [f32; 2], b: [f32; 2]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-4);
         let pointer_rests = near(drawn.pointer, inputs.pointer)
             && (self.parallax.is_none() || near(self.parallax_pointer, inputs.pointer));
-        let idle = !self.reacts.time
+        let idle = (!self.reacts.time || drawn.time == inputs.time)
             && (!self.reacts.pointer || pointer_rests)
             && (!self.reacts.audio || drawn.audio == inputs.audio);
         if idle {
@@ -2220,7 +2239,9 @@ impl SceneRenderer {
 
     /// Whether what the system plays can change the picture (scripts aside).
     pub fn uses_audio(&self) -> bool {
-        self.reacts.audio || self.ir.layers.iter().any(|l| l.particles.is_some())
+        self.reacts.audio
+            || self.motions.uses_audio()
+            || self.ir.layers.iter().any(|l| l.particles.is_some())
     }
 
     fn composite(&self) -> CompositeShared {

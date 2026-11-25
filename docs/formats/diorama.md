@@ -1,6 +1,6 @@
 # Diorama wallpapers (format 1)
 
-Diorama's own wallpapers ([ADR-009](../adr/0009-editor.md)). They need neither Wallpaper Engine nor a shader compiler. Read by `crates/diorama-project`; [examples/wallpapers/ridges](../../examples/wallpapers/ridges) is one. Files of version 1 stay readable. The editor (*New wallpaper* in the library) writes it.
+Diorama's own wallpapers ([ADR-009](../adr/0009-editor.md)). They need neither Wallpaper Engine nor a shader compiler. Read by `crates/diorama-project`; [ridges](../../examples/wallpapers/ridges) and [lanterns](../../examples/wallpapers/lanterns) are examples. Files of version 1 stay readable. The editor (*New wallpaper* in the library) writes it.
 
 ## Folder
 
@@ -125,6 +125,38 @@ Any value except `id`, `type` and `version` can come from a user property:
 ```json
 { "type": "text", "text": { "property": "words" }, "color": { "property": "accent" } }
 ```
+
+#### Values that move
+
+`position`, `scale`, `rotation`, `opacity`, `tint`, `color` of a layer (not of the wallpaper) and the numbers and colours of effects can move. The exception is an effect's `speed`. Other values keep what they would start with.
+
+Between keys:
+
+```json
+{ "keys": [{ "t": 0, "v": [0, 0] }, { "t": 2, "v": [300, 0], "ease": "linear" }], "length": 3, "repeat": "loop" }
+```
+
+| Key | Meaning | Default |
+|---|---|---|
+| `keys` | At most 1000, each with `t` (seconds), `v` (the value) and `ease`: how it goes on to the next key. | |
+| `ease` | `in-out` (smooth), `linear`, `in` (starts slowly), `out` (ends slowly), `hold` (stays, then jumps). | `in-out` |
+| `length` | Seconds until it repeats or ends. | the last key |
+| `repeat` | `loop` starts over; in the time between the last key and `length` it goes on to the first key. `mirror` goes there and back. `once`. | `loop` |
+
+With the sound the system plays:
+
+```json
+{ "audio": "bass", "from": 0.3, "to": 1 }
+```
+
+| Key | Meaning | Default |
+|---|---|---|
+| `audio` | What it listens to: `bass` (to about 250 Hz), `middle` (to about 4 kHz), `treble`, `all`. | |
+| `from`, `to` | The value in silence and at its loudest. | |
+| `threshold` | Levels below count as silence, 0–0.95. Levels are relative to how loud it has lately been. | `0.3` |
+| `smooth` | Seconds it takes to follow. | `0.1` |
+
+`v`, `from` and `to` can be properties. Rotations are not shortened: from 0 to 720 turns twice.
 
 Numbers outside a key's range are moved into it. A value of the wrong type counts as missing. A layer that cannot be used (a missing image, an unknown type) is left out; the log names it, and the rest of the wallpaper shows. Unknown keys are ignored.
 

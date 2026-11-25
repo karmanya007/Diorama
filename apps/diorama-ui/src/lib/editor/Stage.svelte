@@ -3,6 +3,7 @@
   // wallpaper's own, from its middle.
   import { onMount } from 'svelte';
   import { contains, corners, frameSize, move, resize, rotate, round } from './geometry.js';
+  import { sourceOf } from './motion.js';
 
   let { editor } = $props();
 
@@ -97,12 +98,15 @@
     if (!what) {
       const target = hit(p);
       editor.selected = target?.id ?? null;
+      editor.key = null;
       if (!target || ['position'].some((k) => editor.bound(target[k]))) return;
       what = { move: true };
     } else if (fixed) {
       return;
     }
     e.stopPropagation();
+    // What moves is changed where it is.
+    if (['position', 'scale', 'rotation'].some((k) => sourceOf(editor.layer[k]) === 'keys')) editor.pause();
     svg.setPointerCapture(e.pointerId);
     const l = editor.layer;
     editor.settle();
@@ -132,12 +136,15 @@
     editor.edit(
       drag.id,
       (l) => {
-        l.position = to.position.map((v) => round(v));
+        const position = to.position.map((v) => round(v));
+        const old = drag.place.position;
+        // Resizing and turning may leave the middle where it is.
+        if (drag.what.move || position.some((v, i) => Math.abs(v - old[i]) >= 1)) editor.assign(l, 'position', position);
         if (drag.what.side) {
           const [sx, sy] = to.scale.map((v) => round(v, 4));
-          l.scale = sx === sy ? sx : [sx, sy];
+          editor.assign(l, 'scale', sx === sy ? sx : [sx, sy]);
         }
-        if (drag.what.turn) l.rotation = round(to.rotation, 1) || undefined;
+        if (drag.what.turn) editor.assign(l, 'rotation', round(to.rotation, 1) || (sourceOf(l.rotation) ? 0 : undefined));
       },
       'drag',
     );

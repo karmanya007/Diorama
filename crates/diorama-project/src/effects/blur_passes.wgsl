@@ -3,6 +3,12 @@
 // the layer. `u_Divisor`: how much smaller; `u_Sigma`: the blur there, in
 // its own pixels.
 
+// A smaller copy is too coarse for a blur that has moved to (almost) nothing:
+// then the layer itself shows.
+fn smoothness() -> f32 {
+    return select(1.0, clamp(s.u_Sigma / 0.8, 0.0, 1.0), s.u_Divisor > 1.5);
+}
+
 fn gauss(uv: vec2<f32>, axis: vec2<f32>) -> vec4<f32> {
     let texel = axis / vec2<f32>(textureDimensions(image));
     var sum = pixel(uv);

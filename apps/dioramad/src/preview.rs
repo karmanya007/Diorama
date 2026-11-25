@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 use diorama_core::Limits;
 use diorama_gpu::shader::ShaderCompiler;
 use diorama_gpu::{Gpu, GpuOptions, wgpu};
-use diorama_ipc::preview::{Command, Event, LayerBox, MAX_SIDE, write_event, write_frame};
+use diorama_ipc::preview::{Clock, Command, Event, LayerBox, MAX_SIDE, write_event, write_frame};
 use diorama_project::{Compiled, Folder, LayerInfo};
 use diorama_render::scene::{FrameInputs, SceneRenderer};
 use diorama_render::{FitMode, ImageBlit, Rect, read_rgba8, render_size};
@@ -20,6 +20,7 @@ use diorama_scene::Scene;
 
 use crate::headless::{ProjectHost, load_scene, shader_compiler};
 use crate::scripts::{SceneScripts, ScriptFrame, day_fraction_at, now_ms};
+use crate::session::SceneAudio;
 use crate::videos::SceneVideos;
 
 /// Until the UI says otherwise.
@@ -66,6 +67,46 @@ struct View {
     size: [u32; 2],
     fps: u32,
     pointer: [f32; 2],
+    timer: Timer,
+}
+
+/// The wallpaper's time: goes on from a moment, or stands.
+struct Timer {
+    clock: Clock,
+    since: Instant,
+}
+
+impl Default for Timer {
+    fn default() -> Self {
+        Self {
+            clock: Clock {
+                at: 0.0,
+                playing: true,
+            },
+            since: Instant::now(),
+        }
+    }
+}
+
+impl Timer {
+    fn set(&mut self, clock: Clock) {
+        let at = if clock.at.is_finite() {
+            clock.at.clamp(0.0, 1e6)
+        } else {
+            0.0
+        };
+        self.clock = Clock { at, ..clock };
+        self.since = Instant::now();
+    }
+
+    fn now(&self) -> f32 {
+        let gone = if self.clock.playing {
+            self.since.elapsed().as_secs_f32()
+        } else {
+            0.0
+        };
+        self.clock.at + gone
+    }
 }
 
 impl View {
@@ -73,6 +114,9 @@ impl View {
     fn apply(&mut self, command: &Command) -> bool {
         self.fps = command.fps.unwrap_or(self.fps).min(240);
         self.pointer = command.pointer.unwrap_or(self.pointer);
+        if let Some(clock) = command.clock {
+            self.timer.set(clock);
+        }
         let size = command
             .size
             .unwrap_or(self.size)
@@ -120,10 +164,12 @@ fn draw(
         size: SIZE,
         fps: FPS,
         pointer: [0.5, 0.5],
+        timer: Timer::default(),
     };
     let mut stage = Stage::new(&gpu, &picture.scene, &compiler, view.size, None)?;
     let mut scripts = SceneScripts::new(&picture.scene, now_ms(), false, None, None);
     let mut videos = SceneVideos::start(&picture.scene);
+    let mut audio = None;
     let started = Instant::now();
     let mut next = started;
     report(out, &picture, &ids, &stage)?;
@@ -187,15 +233,23 @@ fn draw(
         };
         // Late frames are dropped, not caught up with.
         next = (next + interval).max(Instant::now());
-        let time = started.elapsed().as_secs_f32();
+        let time = view.timer.now();
         let clock_ms = now_ms();
+        // Listens while something follows the sound.
+        if !stage.renderer.uses_audio() {
+            audio = None;
+        } else if audio.is_none() {
+            audio = SceneAudio::start();
+        }
+        let heard = started.elapsed().as_secs_f32();
+        let spectrum = audio.as_mut().map_or([[0.0; 64]; 2], |a| a.spectrum(heard));
         if let Some(scripts) = &mut scripts {
             let frame = ScriptFrame {
                 time,
                 clock_ms,
                 pointer: view.pointer,
                 buttons: None,
-                audio: [[0.0; 64]; 2],
+                audio: spectrum,
             };
             scripts.frame(&gpu, &mut stage.renderer, None, &frame);
         }
@@ -206,7 +260,7 @@ fn draw(
             time,
             pointer: view.pointer,
             daytime: day_fraction_at(clock_ms),
-            audio: [[0.0; 64]; 2],
+            audio: spectrum,
         };
         if scripts.is_none() && videos.is_none() && stage.renderer.idle(&inputs) {
             continue;
@@ -348,6 +402,7 @@ mod tests {
             size: SIZE,
             fps: FPS,
             pointer: [0.5, 0.5],
+            timer: Timer::default(),
         };
         assert!(!view.apply(&Command::default()));
         assert!(!view.apply(&Command {
@@ -363,6 +418,26 @@ mod tests {
         }));
         assert_eq!(view.size, [1, MAX_SIDE]);
         assert_eq!(view.interval(), Some(Duration::from_millis(20)));
+        assert!(!view.apply(&Command {
+            clock: Some(Clock {
+                at: 2.5,
+                playing: false,
+            }),
+            ..Command::default()
+        }));
+        std::thread::sleep(Duration::from_millis(5));
+        assert_eq!(view.timer.now(), 2.5, "it stands");
+        view.timer.set(Clock {
+            at: 1.0,
+            playing: true,
+        });
+        std::thread::sleep(Duration::from_millis(5));
+        assert!(view.timer.now() > 1.0 && view.timer.now() < 2.0);
+        view.timer.set(Clock {
+            at: f32::NAN,
+            playing: false,
+        });
+        assert_eq!(view.timer.now(), 0.0);
     }
 
     #[test]

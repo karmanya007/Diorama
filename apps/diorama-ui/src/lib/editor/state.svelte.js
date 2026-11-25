@@ -2,8 +2,9 @@
 // saved is kept as a draft), and its preview (a process that draws it, see src-tauri/src/editor.rs).
 import * as api from '../api.js';
 import { toast } from '../state.svelte.js';
-import { fromHex } from '../props.js';
+import { fields, fromHex, toHex } from '../props.js';
 import { pair } from './geometry.js';
+import { setKey, sourceOf, spanOf, tracks, valueAt } from './motion.js';
 
 const DRAFT_AFTER = 800;
 /** Changes of one kind within this time are undone together. */
@@ -36,6 +37,14 @@ export class Editor {
   failure = $state('');
   past = $state.raw([]);
   future = $state.raw([]);
+
+  /** The wallpaper's time in seconds, and whether it goes on. */
+  time = $state(0);
+  playing = $state(true);
+  /** The key that is selected: its track's id and its place in the list. */
+  key = $state(null);
+  /** When playing: what `time` was, and when. */
+  #from = { at: 0, since: performance.now() };
 
   #lastKind = null;
   #lastAt = 0;
@@ -101,17 +110,30 @@ export class Editor {
 
   // ---- values -------------------------------------------------------------
 
-  /** A value as it is now: `v`, or the default of the user setting it names. */
+  /** A value as it is now: `v`, the default of the user setting it names, or
+   * where it is if it moves (one that follows the sound: in silence). */
   value(v, otherwise) {
-    if (v && typeof v === 'object' && !Array.isArray(v)) {
-      return this.project?.general?.properties?.[v.property]?.value ?? otherwise;
+    switch (sourceOf(v)) {
+      case 'setting':
+        return this.setting(v.property) ?? otherwise;
+      case 'keys':
+        return valueAt(v, this.time, (k) => this.value(k, otherwise)) ?? otherwise;
+      case 'audio':
+        return this.value(v.from, otherwise);
+      default:
+        return (v !== null && typeof v === 'object' && !Array.isArray(v) ? null : v) ?? otherwise;
     }
-    return v ?? otherwise;
+  }
+
+  /** The default of a user setting; colours as the document has them. */
+  setting(name) {
+    const def = this.project?.general?.properties?.[name];
+    return def?.type === 'color' && !/^#/.test(def.value ?? '') ? toHex(def.value) : def?.value;
   }
 
   /** The user setting a value comes from, if it does. */
   bound(v) {
-    return v && typeof v === 'object' && !Array.isArray(v) ? (v.property ?? null) : null;
+    return sourceOf(v) === 'setting' ? v.property : null;
   }
 
   /** A layer's place, as numbers. */
@@ -159,11 +181,132 @@ export class Editor {
   }
 
   /** Sets `owner[key]` within a change. A value that comes from a user
-   * setting stays one: its default changes. */
+   * setting stays one: its default changes. One with keys gets one at the
+   * time now; one that follows the sound changes for silence. */
   assign(owner, key, v) {
-    const setting = this.project?.general?.properties?.[this.bound(owner[key])];
+    const now = owner[key];
+    if (sourceOf(now) === 'keys') {
+      this.pause();
+      const i = setKey(now, this.time, v);
+      const track = this.tracks.find((t) => t.motion === now);
+      if (track) this.key = { track: track.id, i };
+      return;
+    }
+    if (sourceOf(now) === 'audio') {
+      now.from = v;
+      return;
+    }
+    const setting = this.project?.general?.properties?.[this.bound(now)];
     if (!setting) owner[key] = v;
     else setting.value = setting.type === 'color' && /^#/.test(v ?? '') ? fromHex(v) : (v ?? setting.value);
+  }
+
+  // ---- motion ---------------------------------------------------------------
+
+  /** The values with keys. */
+  tracks = $derived(tracks(this.doc, this.effects));
+
+  /** Seconds the timeline shows. */
+  span = $derived(spanOf(this.tracks));
+
+  /** Changes a track's motion. */
+  editTrack(id, fn, kind = null) {
+    this.change(() => {
+      const track = this.tracks.find((t) => t.id === id);
+      if (track) fn(track.motion);
+    }, kind && `${kind} ${id}`);
+  }
+
+  /** Removes the selected key; with its last one a value stands still. */
+  removeKey() {
+    const { track: id, i } = this.key ?? {};
+    const track = this.tracks.find((t) => t.id === id);
+    if (!track || !track.motion.keys[i]) return;
+    this.key = null;
+    this.change((doc) => {
+      const layer = doc.layers.find((l) => l.id === track.layer.id);
+      const owner = track.effect === null ? layer : layer.effects[track.effect];
+      const motion = owner[track.key];
+      if (motion.keys.length > 1) motion.keys.splice(i, 1);
+      else owner[track.key] = motion.keys[0].v;
+    });
+  }
+
+  /** Called at each of the page's frames. */
+  tick() {
+    if (this.playing) this.time = this.#from.at + (performance.now() - this.#from.since) / 1000;
+  }
+
+  play() {
+    this.playing = true;
+    this.#sendClock();
+  }
+
+  /** Stands still, at `at` or where the timeline is. */
+  pause(at = this.playing ? this.time % this.span : this.time) {
+    if (!this.playing && at === this.time) return;
+    this.playing = false;
+    this.time = Math.max(0, at);
+    this.#sendClock();
+  }
+
+  #sendClock() {
+    this.#from = { at: this.time, since: performance.now() };
+    this.#command({ clock: { at: this.time, playing: this.playing } });
+  }
+
+  // ---- user settings --------------------------------------------------------
+
+  /** The user settings, in order. */
+  get settings() {
+    return fields(this.project?.general?.properties);
+  }
+
+  #properties() {
+    this.project.general ??= {};
+    return (this.project.general.properties ??= {});
+  }
+
+  /** Makes a user setting (within a change); its name. */
+  makeSetting(label, def) {
+    const all = this.#properties();
+    const base = label.toLowerCase().replace(/[^a-z0-9]+/g, '') || 'setting';
+    let name = base;
+    for (let n = 2; name in all; n++) name = `${base}${n}`;
+    const order = 1 + Math.max(-1, ...Object.values(all).map((p) => Number(p?.order) || 0));
+    all[name] = { order, text: label, ...def };
+    return name;
+  }
+
+  changeSetting(name, fn, kind = null) {
+    this.change(() => fn(this.#properties()[name]), kind && `${kind} ${name}`);
+  }
+
+  /** Moves a setting among the others. */
+  moveSetting(name, by) {
+    this.change(() => {
+      const names = this.settings.map((s) => s.name);
+      const [i, j] = [names.indexOf(name), names.indexOf(name) + by];
+      if (!names[j]) return;
+      [names[i], names[j]] = [names[j], names[i]];
+      names.forEach((n, order) => (this.#properties()[n].order = order));
+    });
+  }
+
+  /** Removes a setting; what it was used for keeps its value. */
+  removeSetting(name) {
+    this.change((doc) => {
+      const value = this.setting(name);
+      const fix = (v) => {
+        for (const [k, inner] of Object.entries(v)) {
+          if (inner === null || typeof inner !== 'object') continue;
+          if (inner.property === name) v[k] = copy($state.snapshot(value) ?? null);
+          else fix(inner);
+        }
+      };
+      fix(doc);
+      delete this.#properties()[name];
+    });
   }
 
   undo() {
@@ -183,6 +326,7 @@ export class Editor {
     this[from] = this[from].slice(0, -1);
     this.settle();
     if (!this.layer) this.selected = null;
+    this.key = null;
     this.#changed();
   }
 
@@ -210,7 +354,7 @@ export class Editor {
     const [x, y] = this.place(layer).position;
     twin.id = this.#newId();
     twin.name = `${layer.name ?? 'Layer'} copy`;
-    if (!this.bound(layer.position)) twin.position = [x + 20, y + 20];
+    if (!sourceOf(layer.position)) twin.position = [x + 20, y + 20];
     this.change((doc) => doc.layers.splice(doc.layers.findIndex((l) => l.id === id) + 1, 0, twin));
     this.selected = twin.id;
   }
@@ -339,6 +483,7 @@ export class Editor {
     this.#startedAt = performance.now();
     await api.previewStart(this.dir);
     if (this.#size) await this.#command({ size: this.#size });
+    this.#sendClock();
     // The file may be older than what is edited.
     this.#send();
     this.#frames();

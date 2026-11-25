@@ -6,9 +6,9 @@ use std::sync::Arc;
 
 use diorama_core::Limits;
 use diorama_scene::{
-    Attribute, Blend, FontData, IDENTITY_AFFINE, ImageLayer, LayerKind, MeshQuad, Node, Parallax,
-    Pass, ProgramId, Scene, ShaderLanguage, ShaderProgram, TextAlign, TextSpec, Texture,
-    TextureBinding, TextureId, VideoData,
+    Attribute, Blend, FontData, IDENTITY_AFFINE, ImageLayer, LayerKind, LayerMotion, MeshQuad,
+    MotionTarget, Node, Parallax, Pass, ProgramId, Scene, ShaderLanguage, ShaderProgram, TextAlign,
+    TextSpec, Texture, TextureBinding, TextureId, VideoData,
 };
 use serde_json::Value;
 
@@ -282,6 +282,7 @@ impl<'a> Compiler<'a> {
         let far = [-FAR, FAR];
         let side = [1.0, self.limits.max_texture_dim as f32];
         let mut tint = [1.0; 4];
+        let mut color_key = "tint";
         let mut text = None;
         let mut size = [1, 1];
         let mut layer_kind = LayerKind::Image;
@@ -303,12 +304,14 @@ impl<'a> Compiler<'a> {
                 (Source::Image, TextureBinding::Asset(id))
             }
             "color" => {
+                color_key = "color";
                 tint = f.color("color", tint);
                 let full = f.pair("size", [w, h], side);
                 size = full.map(|v| v.round() as u32);
                 (Source::Image, TextureBinding::Asset(self.white()))
             }
             "text" => {
+                color_key = "color";
                 tint = f.color("color", tint);
                 let mut content = f.text("text").unwrap_or_default();
                 if let Some((end, _)) = content.char_indices().nth(MAX_TEXT) {
@@ -342,7 +345,18 @@ impl<'a> Compiler<'a> {
             other => return Err(format!("unknown type {other}")),
         };
         let own_size = text.is_none().then(|| size.map(|s| s as f32));
-        let opacity = f.number("opacity", 1.0, [0.0, 1.0]);
+        let fade = |f: &Fields<'_>, key: &str| [f.number(key, 1.0, [0.0, 1.0]), 0.0, 0.0, 0.0];
+        let opacity = fade(f, "opacity")[0];
+        let color = tint;
+        let mut tracks = Vec::new();
+        if layer_kind == LayerKind::Image {
+            let all = |f: &Fields<'_>, key: &str| f.color(key, [1.0; 4]);
+            tracks.extend(f.motion(color_key, all).map(|t| (MotionTarget::Color, t)));
+        }
+        tracks.extend(
+            f.motion("opacity", fade)
+                .map(|t| (MotionTarget::Opacity, t)),
+        );
         let mut effects = Vec::new();
         let mut mesh = None;
         if !list.is_empty() {
@@ -374,7 +388,7 @@ impl<'a> Compiler<'a> {
                     }]);
                 }
             }
-            effects = self.effects(&list, frame);
+            effects = self.effects(&list, frame, &mut tracks);
         }
         // Effects come before opacity and blending, which the composite does.
         let (albedo, composite) = if effects.is_empty() {
@@ -390,8 +404,19 @@ impl<'a> Compiler<'a> {
         };
 
         let placed = layer_kind == LayerKind::Image;
-        let [x, y] = f.pair("position", [0.0, 0.0], far);
-        let [sx, sy] = f.pair("scale", [1.0, 1.0], [-1000.0, 1000.0]);
+        let pair = |key: &str, default, range: [f32; 2]| {
+            let read = move |f: &Fields<'_>, key: &str| {
+                let [x, y] = f.pair(key, default, range);
+                [x, y, 0.0, 0.0]
+            };
+            let [x, y, ..] = read(f, key);
+            ([x, y], f.motion(key, read))
+        };
+        let ([x, y], moves) = pair("position", [0.0, 0.0], far);
+        let ([sx, sy], grows) = pair("scale", [1.0, 1.0], [-1000.0, 1000.0]);
+        let turns = f.motion("rotation", |f, key| {
+            [f.number(key, 0.0, far), 0.0, 0.0, 0.0]
+        });
         // Documents count y down from the middle and turn clockwise; scenes
         // count it up from the bottom left and turn the other way.
         let rotation = f.number("rotation", 0.0, far).rem_euclid(360.0);
@@ -400,6 +425,21 @@ impl<'a> Compiler<'a> {
         } else {
             (0.0, 0.0, 1.0, 1.0, 0.0)
         };
+        if placed {
+            let moves = moves.map(|t| t.map(|[x, y, ..]| [w / 2.0 + x, h / 2.0 - y, 0.0, 0.0]));
+            let turns = turns.map(|t| t.map(|[r, ..]| [-r.to_radians(), 0.0, 0.0, 0.0]));
+            tracks.extend(moves.map(|t| (MotionTarget::Position, t)));
+            tracks.extend(grows.map(|t| (MotionTarget::Scale, t)));
+            tracks.extend(turns.map(|t| (MotionTarget::Rotation, t)));
+        }
+        if !tracks.is_empty() {
+            self.scene.motions.push(LayerMotion {
+                layer: self.scene.layers.len(),
+                color,
+                opacity,
+                tracks,
+            });
+        }
         let node = Node {
             name: name.clone(),
             id: self.scene.nodes.len() as i64,

@@ -1,0 +1,1564 @@
+{
+  "version": 1,
+  "size": [
+    2560,
+    1440
+  ],
+  "background": "#080c22",
+  "parallax": {
+    "amount": {
+      "property": "depth"
+    },
+    "smoothing": 0.25
+  },
+  "layers": [
+    {
+      "id": "sky",
+      "name": "Sky",
+      "type": "image",
+      "source": "assets/sky.png",
+      "size": [
+        2640,
+        1485
+      ],
+      "depth": 0.05
+    },
+    {
+      "id": "far",
+      "name": "Far hills",
+      "type": "image",
+      "source": "assets/hills-far.png",
+      "size": [
+        2800,
+        440
+      ],
+      "position": [
+        0,
+        460
+      ],
+      "depth": 0.15
+    },
+    {
+      "id": "light-1",
+      "name": "Light 1",
+      "type": "image",
+      "source": "assets/light.png",
+      "blend": "add",
+      "tint": {
+        "property": "colour"
+      },
+      "position": {
+        "keys": [
+          {
+            "t": 0,
+            "v": [
+              67,
+              338
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 4.35,
+            "v": [
+              51,
+              208
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 11.6,
+            "v": [
+              36,
+              -10
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 18.85,
+            "v": [
+              51,
+              -228
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 26.1,
+            "v": [
+              77,
+              -445
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 33.35,
+            "v": [
+              82,
+              -662
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 40.6,
+            "v": [
+              60,
+              -880
+            ],
+            "ease": "hold"
+          },
+          {
+            "t": 40.65,
+            "v": [
+              60,
+              860
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 47.85,
+            "v": [
+              82,
+              642
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 55.1,
+            "v": [
+              77,
+              425
+            ],
+            "ease": "linear"
+          }
+        ],
+        "length": 58
+      },
+      "scale": 0.88,
+      "depth": 0.37,
+      "opacity": {
+        "audio": "bass",
+        "from": 0.28,
+        "to": 0.75,
+        "smooth": 0.12
+      }
+    },
+    {
+      "id": "lantern-1",
+      "name": "Lantern 1",
+      "type": "image",
+      "source": "assets/lantern.png",
+      "position": {
+        "keys": [
+          {
+            "t": 0,
+            "v": [
+              67,
+              338
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 4.35,
+            "v": [
+              51,
+              208
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 11.6,
+            "v": [
+              36,
+              -10
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 18.85,
+            "v": [
+              51,
+              -228
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 26.1,
+            "v": [
+              77,
+              -445
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 33.35,
+            "v": [
+              82,
+              -662
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 40.6,
+            "v": [
+              60,
+              -880
+            ],
+            "ease": "hold"
+          },
+          {
+            "t": 40.65,
+            "v": [
+              60,
+              860
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 47.85,
+            "v": [
+              82,
+              642
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 55.1,
+            "v": [
+              77,
+              425
+            ],
+            "ease": "linear"
+          }
+        ],
+        "length": 58
+      },
+      "scale": 0.34,
+      "depth": 0.37,
+      "rotation": {
+        "keys": [
+          {
+            "t": 0,
+            "v": -4
+          },
+          {
+            "t": 6.44,
+            "v": 4
+          }
+        ],
+        "repeat": "mirror"
+      }
+    },
+    {
+      "id": "light-2",
+      "name": "Light 2",
+      "type": "image",
+      "source": "assets/light.png",
+      "blend": "add",
+      "tint": {
+        "property": "colour"
+      },
+      "position": {
+        "keys": [
+          {
+            "t": 0,
+            "v": [
+              -166,
+              -393
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 1.56,
+            "v": [
+              -159,
+              -445
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 8.06,
+            "v": [
+              -152,
+              -662
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 14.56,
+            "v": [
+              -180,
+              -880
+            ],
+            "ease": "hold"
+          },
+          {
+            "t": 14.61,
+            "v": [
+              -180,
+              860
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 21.06,
+            "v": [
+              -152,
+              642
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 27.56,
+            "v": [
+              -159,
+              425
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 34.06,
+            "v": [
+              -191,
+              208
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 40.56,
+            "v": [
+              -210,
+              -10
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 47.06,
+            "v": [
+              -191,
+              -228
+            ],
+            "ease": "linear"
+          }
+        ],
+        "length": 52
+      },
+      "scale": 1.09,
+      "depth": 0.41,
+      "opacity": {
+        "audio": "bass",
+        "from": 0.28,
+        "to": 0.75,
+        "smooth": 0.12
+      }
+    },
+    {
+      "id": "lantern-2",
+      "name": "Lantern 2",
+      "type": "image",
+      "source": "assets/lantern.png",
+      "position": {
+        "keys": [
+          {
+            "t": 0,
+            "v": [
+              -166,
+              -393
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 1.56,
+            "v": [
+              -159,
+              -445
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 8.06,
+            "v": [
+              -152,
+              -662
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 14.56,
+            "v": [
+              -180,
+              -880
+            ],
+            "ease": "hold"
+          },
+          {
+            "t": 14.61,
+            "v": [
+              -180,
+              860
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 21.06,
+            "v": [
+              -152,
+              642
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 27.56,
+            "v": [
+              -159,
+              425
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 34.06,
+            "v": [
+              -191,
+              208
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 40.56,
+            "v": [
+              -210,
+              -10
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 47.06,
+            "v": [
+              -191,
+              -228
+            ],
+            "ease": "linear"
+          }
+        ],
+        "length": 52
+      },
+      "scale": 0.42,
+      "depth": 0.41,
+      "rotation": {
+        "keys": [
+          {
+            "t": 0,
+            "v": -4
+          },
+          {
+            "t": 5.78,
+            "v": 4
+          }
+        ],
+        "repeat": "mirror"
+      }
+    },
+    {
+      "id": "light-3",
+      "name": "Light 3",
+      "type": "image",
+      "source": "assets/light.png",
+      "blend": "add",
+      "tint": {
+        "property": "colour"
+      },
+      "position": {
+        "keys": [
+          {
+            "t": 0,
+            "v": [
+              -1016,
+              -97
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 3.45,
+            "v": [
+              -995,
+              -228
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 9.2,
+            "v": [
+              -952,
+              -445
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 14.95,
+            "v": [
+              -943,
+              -662
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 20.7,
+            "v": [
+              -980,
+              -880
+            ],
+            "ease": "hold"
+          },
+          {
+            "t": 20.75,
+            "v": [
+              -980,
+              860
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 26.45,
+            "v": [
+              -943,
+              642
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 32.2,
+            "v": [
+              -952,
+              425
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 37.95,
+            "v": [
+              -995,
+              208
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 43.7,
+            "v": [
+              -1020,
+              -10
+            ],
+            "ease": "linear"
+          }
+        ],
+        "length": 46
+      },
+      "scale": 1.3,
+      "depth": 0.45,
+      "opacity": {
+        "audio": "bass",
+        "from": 0.28,
+        "to": 0.75,
+        "smooth": 0.12
+      }
+    },
+    {
+      "id": "lantern-3",
+      "name": "Lantern 3",
+      "type": "image",
+      "source": "assets/lantern.png",
+      "position": {
+        "keys": [
+          {
+            "t": 0,
+            "v": [
+              -1016,
+              -97
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 3.45,
+            "v": [
+              -995,
+              -228
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 9.2,
+            "v": [
+              -952,
+              -445
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 14.95,
+            "v": [
+              -943,
+              -662
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 20.7,
+            "v": [
+              -980,
+              -880
+            ],
+            "ease": "hold"
+          },
+          {
+            "t": 20.75,
+            "v": [
+              -980,
+              860
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 26.45,
+            "v": [
+              -943,
+              642
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 32.2,
+            "v": [
+              -952,
+              425
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 37.95,
+            "v": [
+              -995,
+              208
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 43.7,
+            "v": [
+              -1020,
+              -10
+            ],
+            "ease": "linear"
+          }
+        ],
+        "length": 46
+      },
+      "scale": 0.5,
+      "depth": 0.45,
+      "rotation": {
+        "keys": [
+          {
+            "t": 0,
+            "v": -4
+          },
+          {
+            "t": 5.11,
+            "v": 4
+          }
+        ],
+        "repeat": "mirror"
+      }
+    },
+    {
+      "id": "light-4",
+      "name": "Light 4",
+      "type": "image",
+      "source": "assets/light.png",
+      "blend": "add",
+      "tint": {
+        "property": "colour"
+      },
+      "position": {
+        "keys": [
+          {
+            "t": 0,
+            "v": [
+              677,
+              -706
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 4.4,
+            "v": [
+              640,
+              -880
+            ],
+            "ease": "hold"
+          },
+          {
+            "t": 4.45,
+            "v": [
+              640,
+              860
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 9.9,
+            "v": [
+              682,
+              642
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 15.4,
+            "v": [
+              673,
+              425
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 20.9,
+            "v": [
+              622,
+              208
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 26.4,
+            "v": [
+              594,
+              -10
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 31.9,
+            "v": [
+              622,
+              -228
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 37.4,
+            "v": [
+              673,
+              -445
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 42.9,
+            "v": [
+              682,
+              -662
+            ],
+            "ease": "linear"
+          }
+        ],
+        "length": 44
+      },
+      "scale": 1.56,
+      "depth": 0.5,
+      "opacity": {
+        "audio": "bass",
+        "from": 0.28,
+        "to": 0.75,
+        "smooth": 0.12
+      }
+    },
+    {
+      "id": "lantern-4",
+      "name": "Lantern 4",
+      "type": "image",
+      "source": "assets/lantern.png",
+      "position": {
+        "keys": [
+          {
+            "t": 0,
+            "v": [
+              677,
+              -706
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 4.4,
+            "v": [
+              640,
+              -880
+            ],
+            "ease": "hold"
+          },
+          {
+            "t": 4.45,
+            "v": [
+              640,
+              860
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 9.9,
+            "v": [
+              682,
+              642
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 15.4,
+            "v": [
+              673,
+              425
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 20.9,
+            "v": [
+              622,
+              208
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 26.4,
+            "v": [
+              594,
+              -10
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 31.9,
+            "v": [
+              622,
+              -228
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 37.4,
+            "v": [
+              673,
+              -445
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 42.9,
+            "v": [
+              682,
+              -662
+            ],
+            "ease": "linear"
+          }
+        ],
+        "length": 44
+      },
+      "scale": 0.6,
+      "depth": 0.5,
+      "rotation": {
+        "keys": [
+          {
+            "t": 0,
+            "v": -4
+          },
+          {
+            "t": 4.89,
+            "v": 4
+          }
+        ],
+        "repeat": "mirror"
+      }
+    },
+    {
+      "id": "light-5",
+      "name": "Light 5",
+      "type": "image",
+      "source": "assets/light.png",
+      "blend": "add",
+      "tint": {
+        "property": "colour"
+      },
+      "position": {
+        "keys": [
+          {
+            "t": 0,
+            "v": [
+              1036,
+              373
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 3.8,
+            "v": [
+              989,
+              208
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 8.8,
+            "v": [
+              956,
+              -10
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 13.8,
+            "v": [
+              989,
+              -228
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 18.8,
+            "v": [
+              1048,
+              -445
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 23.8,
+            "v": [
+              1060,
+              -662
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 28.8,
+            "v": [
+              1010,
+              -880
+            ],
+            "ease": "hold"
+          },
+          {
+            "t": 28.85,
+            "v": [
+              1010,
+              860
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 33.8,
+            "v": [
+              1060,
+              642
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 38.8,
+            "v": [
+              1048,
+              425
+            ],
+            "ease": "linear"
+          }
+        ],
+        "length": 40
+      },
+      "scale": 2.03,
+      "depth": 0.59,
+      "opacity": {
+        "audio": "bass",
+        "from": 0.28,
+        "to": 0.75,
+        "smooth": 0.12
+      }
+    },
+    {
+      "id": "lantern-5",
+      "name": "Lantern 5",
+      "type": "image",
+      "source": "assets/lantern.png",
+      "position": {
+        "keys": [
+          {
+            "t": 0,
+            "v": [
+              1036,
+              373
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 3.8,
+            "v": [
+              989,
+              208
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 8.8,
+            "v": [
+              956,
+              -10
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 13.8,
+            "v": [
+              989,
+              -228
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 18.8,
+            "v": [
+              1048,
+              -445
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 23.8,
+            "v": [
+              1060,
+              -662
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 28.8,
+            "v": [
+              1010,
+              -880
+            ],
+            "ease": "hold"
+          },
+          {
+            "t": 28.85,
+            "v": [
+              1010,
+              860
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 33.8,
+            "v": [
+              1060,
+              642
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 38.8,
+            "v": [
+              1048,
+              425
+            ],
+            "ease": "linear"
+          }
+        ],
+        "length": 40
+      },
+      "scale": 0.78,
+      "depth": 0.59,
+      "rotation": {
+        "keys": [
+          {
+            "t": 0,
+            "v": -4
+          },
+          {
+            "t": 4.44,
+            "v": 4
+          }
+        ],
+        "repeat": "mirror"
+      }
+    },
+    {
+      "id": "light-6",
+      "name": "Light 6",
+      "type": "image",
+      "source": "assets/light.png",
+      "blend": "add",
+      "tint": {
+        "property": "colour"
+      },
+      "position": {
+        "keys": [
+          {
+            "t": 0,
+            "v": [
+              -501,
+              599
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 3.8,
+            "v": [
+              -518,
+              425
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 8.55,
+            "v": [
+              -583,
+              208
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 13.3,
+            "v": [
+              -620,
+              -10
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 18.05,
+            "v": [
+              -583,
+              -228
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 22.8,
+            "v": [
+              -518,
+              -445
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 27.55,
+            "v": [
+              -505,
+              -662
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 32.3,
+            "v": [
+              -560,
+              -880
+            ],
+            "ease": "hold"
+          },
+          {
+            "t": 32.35,
+            "v": [
+              -560,
+              860
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 37.05,
+            "v": [
+              -505,
+              642
+            ],
+            "ease": "linear"
+          }
+        ],
+        "length": 38
+      },
+      "scale": 2.21,
+      "depth": 0.62,
+      "opacity": {
+        "audio": "bass",
+        "from": 0.28,
+        "to": 0.75,
+        "smooth": 0.12
+      }
+    },
+    {
+      "id": "lantern-6",
+      "name": "Lantern 6",
+      "type": "image",
+      "source": "assets/lantern.png",
+      "position": {
+        "keys": [
+          {
+            "t": 0,
+            "v": [
+              -501,
+              599
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 3.8,
+            "v": [
+              -518,
+              425
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 8.55,
+            "v": [
+              -583,
+              208
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 13.3,
+            "v": [
+              -620,
+              -10
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 18.05,
+            "v": [
+              -583,
+              -228
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 22.8,
+            "v": [
+              -518,
+              -445
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 27.55,
+            "v": [
+              -505,
+              -662
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 32.3,
+            "v": [
+              -560,
+              -880
+            ],
+            "ease": "hold"
+          },
+          {
+            "t": 32.35,
+            "v": [
+              -560,
+              860
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 37.05,
+            "v": [
+              -505,
+              642
+            ],
+            "ease": "linear"
+          }
+        ],
+        "length": 38
+      },
+      "scale": 0.85,
+      "depth": 0.62,
+      "rotation": {
+        "keys": [
+          {
+            "t": 0,
+            "v": -4
+          },
+          {
+            "t": 4.22,
+            "v": 4
+          }
+        ],
+        "repeat": "mirror"
+      }
+    },
+    {
+      "id": "light-7",
+      "name": "Light 7",
+      "type": "image",
+      "source": "assets/light.png",
+      "blend": "add",
+      "tint": {
+        "property": "colour"
+      },
+      "position": {
+        "keys": [
+          {
+            "t": 0,
+            "v": [
+              189,
+              129
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 2.72,
+            "v": [
+              170,
+              -10
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 6.97,
+            "v": [
+              213,
+              -228
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 11.22,
+            "v": [
+              289,
+              -445
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 15.47,
+            "v": [
+              305,
+              -662
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 19.72,
+            "v": [
+              240,
+              -880
+            ],
+            "ease": "hold"
+          },
+          {
+            "t": 19.77,
+            "v": [
+              240,
+              860
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 23.97,
+            "v": [
+              305,
+              642
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 28.22,
+            "v": [
+              289,
+              425
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 32.47,
+            "v": [
+              213,
+              208
+            ],
+            "ease": "linear"
+          }
+        ],
+        "length": 34
+      },
+      "scale": 2.6,
+      "depth": 0.7,
+      "opacity": {
+        "audio": "bass",
+        "from": 0.28,
+        "to": 0.75,
+        "smooth": 0.12
+      }
+    },
+    {
+      "id": "lantern-7",
+      "name": "Lantern 7",
+      "type": "image",
+      "source": "assets/lantern.png",
+      "position": {
+        "keys": [
+          {
+            "t": 0,
+            "v": [
+              189,
+              129
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 2.72,
+            "v": [
+              170,
+              -10
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 6.97,
+            "v": [
+              213,
+              -228
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 11.22,
+            "v": [
+              289,
+              -445
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 15.47,
+            "v": [
+              305,
+              -662
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 19.72,
+            "v": [
+              240,
+              -880
+            ],
+            "ease": "hold"
+          },
+          {
+            "t": 19.77,
+            "v": [
+              240,
+              860
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 23.97,
+            "v": [
+              305,
+              642
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 28.22,
+            "v": [
+              289,
+              425
+            ],
+            "ease": "linear"
+          },
+          {
+            "t": 32.47,
+            "v": [
+              213,
+              208
+            ],
+            "ease": "linear"
+          }
+        ],
+        "length": 34
+      },
+      "scale": 1.0,
+      "depth": 0.7,
+      "rotation": {
+        "keys": [
+          {
+            "t": 0,
+            "v": -4
+          },
+          {
+            "t": 3.78,
+            "v": 4
+          }
+        ],
+        "repeat": "mirror"
+      }
+    },
+    {
+      "id": "near",
+      "name": "Near hills",
+      "type": "image",
+      "source": "assets/hills-near.png",
+      "size": [
+        3000,
+        520
+      ],
+      "position": [
+        0,
+        560
+      ],
+      "depth": 0.7
+    },
+    {
+      "id": "words",
+      "name": "Words",
+      "type": "text",
+      "text": {
+        "property": "words"
+      },
+      "color": "#ffe6c4",
+      "font-size": 96,
+      "max-width": 2200,
+      "position": [
+        0,
+        520
+      ],
+      "depth": 0.8,
+      "visible": {
+        "property": "showwords"
+      },
+      "opacity": {
+        "keys": [
+          {
+            "t": 0,
+            "v": 0.55
+          },
+          {
+            "t": 4,
+            "v": 0.95
+          }
+        ],
+        "repeat": "mirror"
+      }
+    },
+    {
+      "id": "finish",
+      "name": "Finish",
+      "type": "adjustment",
+      "effects": [
+        {
+          "type": "vignette",
+          "amount": 0.4,
+          "size": 0.5
+        }
+      ]
+    }
+  ]
+}

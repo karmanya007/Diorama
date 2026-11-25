@@ -177,16 +177,21 @@ fn text_is_drawn_where_it_is_anchored() {
 }
 
 #[test]
-fn the_example_uses_all_its_layers() {
+fn the_examples_use_all_their_layers() {
     if System.default_font().is_none() {
         eprintln!("no font; skipping");
         return;
     }
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/wallpapers/ridges");
-    assert!(diorama_project::is_project(&dir));
-    let scene = diorama_project::load(&dir, &Values::new(), &System, &Limits::default()).unwrap();
-    assert!(scene.skipped.is_empty(), "{:?}", scene.skipped);
-    assert_eq!(scene.layers.len(), 9);
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/wallpapers");
+    for (name, layers, moving) in [("ridges", 9, 0), ("lanterns", 19, 15)] {
+        let dir = examples.join(name);
+        assert!(diorama_project::is_project(&dir));
+        let scene =
+            diorama_project::load(&dir, &Values::new(), &System, &Limits::default()).unwrap();
+        assert!(scene.skipped.is_empty(), "{name}: {:?}", scene.skipped);
+        let counts = (scene.layers.len(), scene.motions.len());
+        assert_eq!(counts, (layers, moving), "{name}");
+    }
 }
 
 #[test]

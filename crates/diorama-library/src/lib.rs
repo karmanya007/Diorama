@@ -366,6 +366,7 @@ mod tests {
             [
                 ("Aurora", Kind::Web),
                 ("Dunes", Kind::Web),
+                ("Lanterns", Kind::Scene),
                 ("Paper Valley", Kind::Web),
                 ("Ridges", Kind::Scene),
             ]
@@ -376,7 +377,7 @@ mod tests {
                 "{}",
                 item.title
             );
-            assert_eq!(item.editable, item.title == "Ridges");
+            assert_eq!(item.editable, item.kind == Kind::Scene);
             assert!(
                 item.properties.as_object().is_some_and(|p| !p.is_empty()),
                 "{}",

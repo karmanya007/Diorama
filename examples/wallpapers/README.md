@@ -1,13 +1,14 @@
 # Example wallpapers
 
-Three web wallpapers and one in Diorama's own format, made for Diorama. Use them, change them, or start your own from them. They are covered by the project's licence (MIT or Apache-2.0).
+Three web wallpapers and two in Diorama's own format, made for Diorama. Use them, change them, or start your own from them. They are covered by the project's licence (MIT or Apache-2.0).
 
 | | |
 |---|---|
 | ![Paper Valley](paper-valley/preview.png) | **Paper Valley**: paper-cut hills under a night sky. Fireflies drift between the layers and brighten with music; the hills shift with your cursor. |
 | ![Aurora](aurora/preview.png) | **Aurora**: northern lights ripple over snowy peaks and a still lake, and swell with music. |
 | ![Dunes](dunes/preview.png) | **Dunes**: a banded sunset over paper-cut dunes. Birds cross the sky, and the sun pulses gently with music. |
-| ![Ridges](ridges/preview.png) | **Ridges**: mountain ridges at dusk that shift with your cursor, and words of your choice. In Diorama's own format (not in a release yet). |
+| ![Ridges](ridges/preview.png) | **Ridges**: mountain ridges at dusk that shift with your cursor, and words of your choice. In Diorama's own format. |
+| ![Lanterns](lanterns/preview.png) | **Lanterns**: paper lanterns rise over a valley, and their light swells with music. In Diorama's own format, with keyframes and sound (needs a newer Diorama than 1.3.0). |
 
 ## Using them
 
@@ -29,4 +30,4 @@ Options in the address, useful for previews and recordings:
 
 For example, `index.html?t=3&loop=8&demo` is the frame used for Paper Valley's preview.
 
-*Ridges* is a document and a few images: see [the format](../../docs/formats/diorama.md).
+*Ridges* and *Lanterns* are a document and a few images each; open them with *Edit* (a copy, if you want to keep the original). See [the format](../../docs/formats/diorama.md).
