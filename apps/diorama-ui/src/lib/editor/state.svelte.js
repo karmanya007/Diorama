@@ -2,6 +2,7 @@
 // its preview (a process that draws it, see src-tauri/src/editor.rs).
 import * as api from '../api.js';
 import { toast } from '../state.svelte.js';
+import { fromHex } from '../props.js';
 import { pair } from './geometry.js';
 
 const SAVE_AFTER = 800;
@@ -111,11 +112,17 @@ export class Editor {
 
   // ---- changes --------------------------------------------------------------
 
-  /** Changes the document; changes of the same `kind` in a row are one to undo. */
+  /** What undo brings back: the document and the user settings. */
+  #snapshot() {
+    return JSON.stringify([this.doc, this.project?.general?.properties ?? {}]);
+  }
+
+  /** Changes the document (or user settings' defaults, see `assign`);
+   * changes of the same `kind` in a row are one to undo. */
   change(fn, kind = null) {
-    const before = JSON.stringify(this.doc);
+    const before = this.#snapshot();
     fn(this.doc);
-    if (JSON.stringify(this.doc) === before) return;
+    if (this.#snapshot() === before) return;
     const now = performance.now();
     if (!kind || kind !== this.#lastKind || now - this.#lastAt > MERGE_WITHIN) {
       this.past = [...this.past.slice(1 - MAX_UNDO), before];
@@ -139,6 +146,14 @@ export class Editor {
     }, kind && `${kind} ${id}`);
   }
 
+  /** Sets `owner[key]` within a change. A value that comes from a user
+   * setting stays one: its default changes. */
+  assign(owner, key, v) {
+    const setting = this.project?.general?.properties?.[this.bound(owner[key])];
+    if (!setting) owner[key] = v;
+    else setting.value = setting.type === 'color' && /^#/.test(v ?? '') ? fromHex(v) : (v ?? setting.value);
+  }
+
   undo() {
     this.#swap('past', 'future');
   }
@@ -149,8 +164,10 @@ export class Editor {
 
   #swap(from, to) {
     if (!this[from].length) return;
-    this[to] = [...this[to], JSON.stringify(this.doc)];
-    this.doc = JSON.parse(this[from].at(-1));
+    this[to] = [...this[to], this.#snapshot()];
+    const [doc, properties] = JSON.parse(this[from].at(-1));
+    this.doc = doc;
+    if (this.project.general) this.project.general.properties = properties;
     this[from] = this[from].slice(0, -1);
     this.settle();
     if (!this.layer) this.selected = null;
@@ -224,6 +241,7 @@ export class Editor {
 
   #changed() {
     this.#documentDirty = true;
+    this.#projectDirty = true;
     this.#schedule();
     this.#send();
   }
@@ -345,7 +363,10 @@ export class Editor {
     do {
       this.#unsent = false;
       const document = $state.snapshot(this.doc);
-      await this.#command({ document });
+      // Defaults of the user settings may not be written yet.
+      const settings = Object.entries($state.snapshot(this.project?.general?.properties ?? {}));
+      const values = Object.fromEntries(settings.filter(([, s]) => s?.value !== undefined).map(([name, s]) => [name, s.value]));
+      await this.#command({ document, values });
       await new Promise((r) => requestAnimationFrame(r));
     } while (this.#unsent && !this.#closed);
     this.#sending = false;

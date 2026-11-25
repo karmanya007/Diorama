@@ -27,7 +27,7 @@
 
   // Leaves out what is as it would be without it.
   const set = (key, otherwise) => (v) =>
-    editor.edit(layer.id, (l) => (l[key] = JSON.stringify(v) === JSON.stringify(otherwise) ? undefined : v), key);
+    editor.edit(layer.id, (l) => editor.assign(l, key, JSON.stringify(v) === JSON.stringify(otherwise) && !editor.bound(l[key]) ? undefined : v), key);
   const unbind = (key, otherwise) => () => editor.edit(layer.id, (l) => (l[key] = editor.value(l[key], otherwise)));
   const done = () => editor.settle();
   const get = (key, otherwise) => editor.value(layer[key], otherwise);
@@ -96,9 +96,14 @@
   }
 
   // ---- wallpaper ---
-  const wall = (key, v, kind = key) => editor.change((doc) => (doc[key] = v), kind);
+  const wall = (key, v) => editor.change((doc) => editor.assign(doc, key, v), key);
+  const fixWall = (key, otherwise) => editor.change((doc) => (doc[key] = editor.value(doc[key], otherwise)));
   const parallax = $derived(editor.doc?.parallax ?? null);
-  const setParallax = (key, v) => editor.change((doc) => (doc.parallax = { ...(doc.parallax ?? {}), [key]: v }), `parallax ${key}`);
+  const setParallax = (key, v) =>
+    editor.change((doc) => {
+      doc.parallax ??= {};
+      editor.assign(doc.parallax, key, v);
+    }, `parallax ${key}`);
   const sizeId = $derived(editor.size.join('x'));
 </script>
 
@@ -108,10 +113,9 @@
 
     {#if layer.type === 'text'}
       <section>
+        <textarea rows="2" maxlength="10000" aria-label="Text" value={get('text', '')} oninput={(e) => set('text', '')(e.currentTarget.value)} onchange={done}></textarea>
         {#if editor.bound(layer.text)}
-          <Field label="Text" bound={editor.bound(layer.text)} onunbind={unbind('text', '')} />
-        {:else}
-          <textarea rows="2" maxlength="10000" aria-label="Text" value={get('text', '')} oninput={(e) => set('text', '')(e.currentTarget.value)} onchange={done}></textarea>
+          <Field label="Text" kind="none" bound={editor.bound(layer.text)} onunbind={unbind('text', '')} />
         {/if}
         <Field label="Size" value={get('font-size', 64)} bound={editor.bound(layer['font-size'])} min={1} max={1000} step={1} unit="px" onchange={set('font-size', 64)} ondone={done} onunbind={unbind('font-size', 64)} />
         <Field label="Colour" kind="color" value={get('color', '#ffffff')} bound={editor.bound(layer.color)} onchange={set('color', '#ffffff')} ondone={done} onunbind={unbind('color', '#ffffff')} />
@@ -138,7 +142,7 @@
       <section>
         <h3>Place</h3>
         {#if editor.bound(layer.position)}
-          <Field label="Position" bound={editor.bound(layer.position)} onunbind={unbind('position', [0, 0])} />
+          <Field label="Position" kind="none" bound={editor.bound(layer.position)} onunbind={unbind('position', [0, 0])} />
         {:else}
           <Field label="X" slider={false} value={place.position[0]} min={-100000} max={100000} step={1} unit="px" onchange={(v) => axis('position', 0, v)} ondone={done} />
           <Field label="Y" slider={false} value={place.position[1]} min={-100000} max={100000} step={1} unit="px" onchange={(v) => axis('position', 1, v)} ondone={done} />
@@ -187,7 +191,7 @@
               step={s.step}
               unit={s.unit ?? ''}
               choices={s.choices ?? []}
-              onchange={(v) => edits(i, (x) => (x[s.key] = v), s.key)}
+              onchange={(v) => edits(i, (x) => editor.assign(x, s.key, v), s.key)}
               ondone={done}
               onunbind={() => edits(i, (x) => (x[s.key] = editor.value(x[s.key], otherwise(s))))}
               onpick={() => pickAsset('image', (path) => edits(i, (x) => (x[s.key] = path)))}
@@ -208,12 +212,12 @@
     <h2>Wallpaper</h2>
     <section>
       <Field label="Size" kind="choice" value={sizeId} choices={SIZES.some(([id]) => id === sizeId) ? SIZES : [[sizeId, editor.size.join(' × ')], ...SIZES]} onchange={(v) => wall('size', v.split('x').map(Number))} />
-      <Field label="Background" kind="color" value={editor.value(editor.doc.background, '#000000')} bound={editor.bound(editor.doc.background)} onchange={(v) => wall('background', v)} ondone={done} onunbind={() => wall('background', editor.value(editor.doc.background, '#000000'))} />
+      <Field label="Background" kind="color" value={editor.value(editor.doc.background, '#000000')} bound={editor.bound(editor.doc.background)} onchange={(v) => wall('background', v)} ondone={done} onunbind={() => fixWall('background', '#000000')} />
       <p class="note">The background shows where no layer covers it.</p>
     </section>
     <section>
       <h3>Parallax</h3>
-      <Field label="Amount" value={editor.value(parallax?.amount, parallax ? 0.05 : 0)} bound={editor.bound(parallax?.amount)} max={0.2} step={0.005} onchange={(v) => setParallax('amount', v)} ondone={done} onunbind={() => setParallax('amount', editor.value(parallax?.amount, 0.05))} />
+      <Field label="Amount" value={editor.value(parallax?.amount, parallax ? 0.05 : 0)} bound={editor.bound(parallax?.amount)} max={0.2} step={0.005} onchange={(v) => setParallax('amount', v)} ondone={done} onunbind={() => editor.change((doc) => (doc.parallax.amount = editor.value(doc.parallax.amount, 0.05)))} />
       <Field label="Smoothing" value={editor.value(parallax?.smoothing, 0.15)} max={2} step={0.05} unit="s" onchange={(v) => setParallax('smoothing', v)} ondone={done} />
       <p class="note">Layers with a depth follow the cursor.</p>
     </section>

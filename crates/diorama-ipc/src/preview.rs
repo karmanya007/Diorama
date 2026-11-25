@@ -33,6 +33,9 @@ pub struct Command {
     /// The wallpaper's document as it is being edited (Diorama's own only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub document: Option<serde_json::Value>,
+    /// With `document`: the user settings' values as they are being edited.
+    #[serde(skip_serializing_if = "serde_json::Map::is_empty")]
+    pub values: serde_json::Map<String, serde_json::Value>,
 }
 
 /// What the preview reports beside frames.

@@ -100,14 +100,14 @@ fn draw(
     let host = ProjectHost::default();
     let limits = Limits::default();
     let mut cache = diorama_project::Cache::default();
-    let mut compile = |document: &serde_json::Value| {
-        diorama_project::compile_document(document, &folder, &choices, &host, &limits, &mut cache)
+    let mut compile = |document: &serde_json::Value, values: &diorama_project::Values| {
+        diorama_project::compile_document(document, &folder, values, &host, &limits, &mut cache)
     };
     let mut ids = Vec::new();
     let mut picture = if project {
         let (document, _) = diorama_project::edit::open(dir)?;
         ids = layer_ids(&document);
-        compile(&document)?
+        compile(&document, &choices)?
     } else {
         Compiled {
             scene: load_scene(dir, assets, &choices)?,
@@ -139,12 +139,17 @@ fn draw(
                 // only the newest counts.
                 let mut resized = false;
                 let mut document = None;
+                let mut values = choices.clone();
                 for command in std::iter::once(first).chain(commands.try_iter()) {
                     resized |= view.apply(&command);
-                    document = command.document.or(document);
+                    if command.document.is_some() {
+                        document = command.document;
+                        values = choices.clone();
+                        values.extend(command.values);
+                    }
                 }
                 let document = document.filter(|_| project);
-                match document.as_ref().map(&mut compile) {
+                match document.as_ref().map(|d| compile(d, &values)) {
                     Some(Ok(new)) => {
                         let reuse = Some((&stage, &picture.scene));
                         let made = Stage::new(&gpu, &new.scene, &compiler, view.size, reuse)?;

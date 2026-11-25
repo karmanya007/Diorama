@@ -139,7 +139,7 @@
             class="ghost small"
             title={editor.value(layer.visible, true) === false ? 'Show' : 'Hide'}
             aria-label={editor.value(layer.visible, true) === false ? 'Show' : 'Hide'}
-            onclick={(e) => { e.stopPropagation(); editor.edit(layer.id, (l) => (l.visible = editor.value(layer.visible, true) === false ? undefined : false)); }}
+            onclick={(e) => { e.stopPropagation(); const hidden = editor.value(layer.visible, true) === false; editor.edit(layer.id, (l) => editor.assign(l, 'visible', editor.bound(l.visible) ? hidden : hidden ? undefined : false)); }}
           >
             {editor.value(layer.visible, true) === false ? '○' : '●'}
           </button>

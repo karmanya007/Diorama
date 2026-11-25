@@ -1,7 +1,7 @@
 <script>
   // One value of the document: a number (slider and box), a colour, a
-  // choice, a switch or an image. A value that comes from a user setting
-  // says so, and can be set here instead.
+  // choice, a switch or an image. Of a value that comes from a user setting
+  // this is the default, and it says so.
   import ColorPicker from '../ColorPicker.svelte';
   import { toHex } from '../props.js';
 
@@ -23,12 +23,10 @@
   }
 </script>
 
+{#if kind !== 'none'}
 <div class="field">
   <span class="label" title={label}>{label}</span>
-  {#if bound}
-    <span class="chip" title="Viewers choose it in the wallpaper's settings">setting: {bound}</span>
-    <button class="ghost small" onclick={onunbind} title="Set it here instead">✕</button>
-  {:else if kind === 'number'}
+  {#if kind === 'number'}
     {#if slider}
       <input class="grow" type="range" {min} {max} {step} value={shown} aria-label={label} oninput={(e) => onchange(Number(e.currentTarget.value))} onchange={ondone} />
     {/if}
@@ -48,6 +46,13 @@
     <button onclick={onpick}>Choose…</button>
   {/if}
 </div>
+{/if}
+{#if bound}
+  <div class="bound" class:alone={kind === 'none'}>
+    {kind === 'none' ? `${label}: v` : 'V'}iewers can change it (setting “{bound}”).
+    <button class="link" title="Takes it out of the wallpaper's settings" onclick={onunbind}>Make it fixed</button>
+  </div>
+{/if}
 
 <style>
   .field {
@@ -94,7 +99,21 @@
     white-space: nowrap;
   }
 
-  .small {
-    padding: 2px 6px;
+  .bound {
+    margin: -4px 0 2px 100px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  .bound.alone {
+    margin: 0;
+  }
+
+  .link {
+    border: none;
+    background: none;
+    padding: 0;
+    font-size: 11px;
+    color: var(--accent);
   }
 </style>
