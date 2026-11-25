@@ -426,3 +426,27 @@ fn text_takes_effects() {
     let glowing = text(json!([{"type": "glow", "radius": 12, "strength": 3}])).unwrap();
     assert!(sum(&glowing) > sum(&plain) * 11 / 10);
 }
+
+#[test]
+fn what_does_not_change_is_not_drawn_again() {
+    let layer = |depth: f32, effects: Value| json!([{"type": "color", "color": "#f00", "size": 16, "depth": depth, "effects": effects}]);
+    let still = layer(
+        0.0,
+        json!([{"type": "blur"}, {"type": "grain", "speed": 0}, {"type": "sway", "speed": 0}, {"type": "ripple", "amount": 0}]),
+    );
+    let (first, later) = ((1.0, MIDDLE), (9.0, MIDDLE));
+    let Some(idle) = support::idle(&still, first, later) else {
+        return;
+    };
+    assert!(idle, "nothing moves");
+    let moving = layer(0.0, json!([{"type": "sway"}]));
+    assert_eq!(support::idle(&moving, first, later), Some(false), "sway");
+    // Layers with depth follow the cursor, and rest with it.
+    let deep = layer(1.0, json!([]));
+    assert_eq!(support::idle(&deep, first, later), Some(true));
+    assert_eq!(
+        support::idle(&deep, first, (9.0, [0.9, 0.5])),
+        Some(false),
+        "cursor moved"
+    );
+}

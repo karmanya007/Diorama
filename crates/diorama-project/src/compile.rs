@@ -164,8 +164,8 @@ pub(crate) struct Compiler<'a> {
     /// By path; the empty path is the host's font.
     fonts: HashMap<String, usize>,
     programs: HashMap<(Source, bool), ProgramId>,
-    /// By effect and entry point.
-    pub(crate) effect_programs: HashMap<(&'static str, &'static str), ProgramId>,
+    /// By effect, entry point and whether it moves.
+    pub(crate) effect_programs: HashMap<(&'static str, &'static str, bool), ProgramId>,
     /// Decoded pixels so far.
     bytes: u64,
 }

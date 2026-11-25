@@ -1,6 +1,7 @@
 //! Windows, surfaces and GPU resources for the current desktop + wallpaper.
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use diorama_gpu::{Gpu, OutputSurface};
@@ -11,6 +12,10 @@ use diorama_render::scene::{FrameInputs, SceneRenderer};
 use diorama_render::{
     FitMode, ImageBlit, Nv12Planes, Rect, VideoBlit, display_size, render_size, uv_transform,
 };
+
+/// How often a scene whose picture does not change is shown anyway, in case
+/// the desktop lost it.
+const REFRESH: Duration = Duration::from_secs(2);
 
 /// How the picture is placed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -328,6 +333,8 @@ pub struct Session {
     /// Size the content is fitted by (scenes: the scene size).
     fit_size: (u32, u32),
     /// Size of the area the cursor was last mapped over (see [`Self::pointer`]).
+    /// When a scene was last shown.
+    presented: Option<Instant>,
     pointer_area: std::cell::Cell<(u32, u32)>,
 }
 
@@ -393,6 +400,7 @@ impl Session {
                 renderer: Renderer::Web(Box::new(host)),
                 look,
                 fit_size: (0, 0),
+                presented: None,
                 pointer_area: std::cell::Cell::new((1, 1)),
             });
         }
@@ -480,6 +488,9 @@ impl Session {
                     Some(&source.dir),
                 )
                 .map(Box::new);
+                let audio = (scripts.is_some() || renderer.uses_audio())
+                    .then(SceneAudio::start)
+                    .flatten();
                 let videos = crate::videos::SceneVideos::start(&scene);
                 let sounds = crate::sounds::SceneSounds::new(&scene);
                 let [r, g, b] = scene.scheme_color;
@@ -493,7 +504,7 @@ impl Session {
                 Renderer::Scene {
                     scene: Box::new(renderer),
                     scripts,
-                    audio: SceneAudio::start(),
+                    audio,
                     videos,
                     sounds,
                     blit,
@@ -512,6 +523,7 @@ impl Session {
             renderer,
             look,
             fit_size,
+            presented: None,
             pointer_area: std::cell::Cell::new((1, 1)),
         };
         if matches!(session.renderer, Renderer::Image(_)) {
@@ -618,18 +630,28 @@ impl Session {
                 };
                 scripts.frame(gpu, scene, sounds.as_mut(), &frame);
             }
-            scene.render(
-                gpu,
-                &FrameInputs {
-                    time,
-                    pointer,
-                    daytime: diorama_platform::day_fraction(),
-                    audio: spectrum,
-                },
-            );
+            let inputs = FrameInputs {
+                time,
+                pointer,
+                daytime: diorama_platform::day_fraction(),
+                audio: spectrum,
+            };
+            // Scripts and videos change the picture in ways of their own.
+            let still = scripts.is_none() && videos.is_none() && scene.idle(&inputs);
+            let shown = self.presented.is_some_and(|at| at.elapsed() < REFRESH);
+            if still && shown {
+                return Ok(());
+            }
+            scene.render(gpu, &inputs);
             self.present_all(gpu)?;
+            self.presented = Some(Instant::now());
         }
         Ok(())
+    }
+
+    /// Monitors that show an old frame get a new one.
+    pub fn refresh(&mut self) {
+        self.presented = None;
     }
 
     /// Puts its windows above any wallpaper being replaced.

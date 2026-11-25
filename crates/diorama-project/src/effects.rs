@@ -129,8 +129,19 @@ fn source(name: &str) -> Option<&'static str> {
 }
 
 impl Effect {
-    /// Its fragment stage.
-    fn module(&self) -> Option<String> {
+    /// Whether it moves with these settings.
+    fn moves(&self, f: &Fields<'_>) -> bool {
+        let at_all = |key: &str| {
+            let known = self.settings.iter().any(|s| s.key == key);
+            !known || self.number(f, key) != 0.0
+        };
+        self.animated.as_deref().is_some_and(at_all) && at_all("amount")
+    }
+
+    /// Its fragment stage. One that does not move has no use for the time,
+    /// so a picture that never changes is not drawn again and again.
+    fn module(&self, moves: bool) -> Option<String> {
+        let time = if moves { "g_Time" } else { "u_Still" };
         let mut settings = String::new();
         for s in &self.settings {
             let ty = match s.kind {
@@ -144,7 +155,7 @@ impl Effect {
             Build::Single => "",
             Build::Blur => BLUR_PASSES,
         };
-        Some(format!(
+        let module = format!(
             "struct Settings {{
     g_Texture0Resolution: vec4<f32>,
     g_Texture1Resolution: vec4<f32>,
@@ -157,7 +168,8 @@ impl Effect {
 {settings}}}
 {PRELUDE}{passes}{}",
             source(&self.name)?
-        ))
+        );
+        Some(module.replace("g_Time", time))
     }
 
     fn number(&self, f: &Fields<'_>, key: &str) -> f32 {
@@ -332,7 +344,7 @@ impl Compiler<'_> {
         };
         match effect.build {
             Build::Single => {
-                let pass = self.pass(effect, "fs", constants, image)?;
+                let pass = self.pass(effect, "fs", constants, image, effect.moves(f))?;
                 scene_effect.passes.push(pass);
             }
             Build::Blur => self.blur(effect, f, &constants, &mut scene_effect)?,
@@ -347,13 +359,14 @@ impl Compiler<'_> {
         entry: &'static str,
         constants: BTreeMap<String, Vec<f32>>,
         image: Option<TextureId>,
+        moves: bool,
     ) -> Result<Pass, String> {
         let mut textures = BTreeMap::from([(0, TextureBinding::Previous)]);
         if let Some(id) = image {
             textures.insert(1, TextureBinding::Asset(id));
         }
         Ok(Pass {
-            program: self.effect_program(effect, entry)?,
+            program: self.effect_program(effect, entry, moves)?,
             textures,
             target: None,
             constants,
@@ -400,7 +413,7 @@ impl Compiler<'_> {
         for (entry, first, second, layer_slot, target) in steps {
             let mut constants = constants.clone();
             constants.insert("u_Layer".to_owned(), vec![layer_slot]);
-            let mut pass = self.pass(effect, entry, constants, None)?;
+            let mut pass = self.pass(effect, entry, constants, None, false)?;
             pass.textures = BTreeMap::from([(0, first), (1, second)]);
             pass.target = target.map(str::to_owned);
             out.passes.push(pass);
@@ -412,12 +425,13 @@ impl Compiler<'_> {
         &mut self,
         effect: &'static Effect,
         entry: &'static str,
+        moves: bool,
     ) -> Result<ProgramId, String> {
-        let key = (effect.name.as_str(), entry);
+        let key = (effect.name.as_str(), entry, moves);
         if let Some(id) = self.effect_programs.get(&key) {
             return Ok(*id);
         }
-        let module = effect.module().ok_or("no shader")?;
+        let module = effect.module(moves).ok_or("no shader")?;
         let mut p = program(
             &format!("{} {entry}", effect.name),
             VERTEX,
@@ -443,7 +457,7 @@ mod tests {
         assert!(parsed.is_ok(), "{parsed:?}");
         assert!(effects().len() >= 15);
         for e in effects() {
-            assert!(e.module().is_some(), "{} has no shader", e.name);
+            assert!(e.module(true).is_some(), "{} has no shader", e.name);
             assert_eq!(
                 effects().iter().filter(|o| o.name == e.name).count(),
                 1,

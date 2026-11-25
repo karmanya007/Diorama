@@ -159,7 +159,7 @@ on Windows (DX12) and Linux (lavapipe, no DXC); an example is
 
 Open: video layers convert frames to RGBA on the CPU (fine for a layer, dear
 at 4K); text without a font asset uses the system's, so the editor should add
-one; a wallpaper that does not move is still drawn at the frame rate cap.
+one.
 
 ## Milestone 2 (2026-11-25)
 
@@ -170,6 +170,11 @@ pick up what is transparent; opacity and blending happen when the finished
 layer is drawn. Blur and glow add room around the layer. `adjustment` layers
 apply effects to everything below. Pixel tests cover every effect, on DX12
 and lavapipe.
+
+A scene without anything that moves is no longer drawn at the frame rate cap:
+only when the cursor moves something, and every two seconds in case the
+desktop lost the picture (Ridges without grain in software rendering: 283 % of
+a core before, 6 % after).
 
 ## Alternatives
 

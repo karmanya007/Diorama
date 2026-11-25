@@ -61,6 +61,39 @@ fn fold_bands(bands: &[f32; 64], n: usize) -> Vec<f32> {
         .collect()
 }
 
+/// What a scene's picture depends on besides its layers.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Reacts {
+    /// It moves on its own.
+    time: bool,
+    pointer: bool,
+    audio: bool,
+}
+
+impl Reacts {
+    fn new(scene: &ir::Scene, programs: &[Option<Program>]) -> Self {
+        let uses = |names: &[&str]| {
+            programs.iter().flatten().any(|p| {
+                let members = p.vs_uniforms.members.iter().chain(&p.fs_uniforms.members);
+                members
+                    .into_iter()
+                    .any(|m| names.iter().any(|n| m.name.starts_with(n)))
+            })
+        };
+        let layer_moves = |l: &ir::ImageLayer| l.particles.is_some() || l.puppet.is_some();
+        let sprite = |t: &ir::Texture| !t.frames.is_empty() || t.video.is_some();
+        Self {
+            time: uses(&["g_Time", "g_Daytime", "g_Frametime"])
+                || scene.shake.is_some()
+                || !scene.camera_paths.is_empty()
+                || scene.layers.iter().any(layer_moves)
+                || scene.textures.iter().any(sprite),
+            pointer: scene.parallax.is_some() || uses(&["g_Pointer", "g_ParallaxPosition"]),
+            audio: uses(&["g_AudioSpectrum"]),
+        }
+    }
+}
+
 /// Runtime changes to one layer (from scripts). `None` / empty = unchanged.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct LayerUpdate {
@@ -245,6 +278,10 @@ pub struct SceneRenderer {
     /// scripts change intensities ([`SceneRenderer::set_light_intensity`]).
     point_light_colors: Vec<f32>,
     last_time: Option<f32>,
+    /// What changes the picture, and the inputs it was last drawn with
+    /// (`None`: it must be drawn again whatever they are).
+    reacts: Reacts,
+    drawn: Option<FrameInputs>,
     /// Scene pixels (world units in perspective scenes) → clip space.
     camera: Rows,
     /// Perspective scenes on a camera path: the camera, its path, the output
@@ -644,6 +681,8 @@ impl SceneRenderer {
             parallax_pointer: [0.5, 0.5],
             point_light_colors: point_light_colors(&scene.point_lights),
             last_time: None,
+            reacts: Reacts::new(scene, &programs),
+            drawn: None,
             camera: camera_rows(scene, output),
             scene_camera: scene.camera.filter(|c| c.node.is_none()),
             camera_paths: scene.camera_paths.clone(),
@@ -685,6 +724,7 @@ impl SceneRenderer {
             free_targets: Vec::new(),
         };
 
+        tracing::debug!(reacts = ?renderer.reacts, "what the picture depends on");
         let top = Frame {
             target: SCENE,
             camera: renderer.camera,
@@ -720,6 +760,7 @@ impl SceneRenderer {
     /// visibility and constants update in place; text and effect visibility
     /// rebuild the layer.
     pub fn update_layer(&mut self, gpu: &Gpu, index: usize, update: &LayerUpdate) {
+        self.drawn = None;
         let Some(state) = self.state.get_mut(index) else {
             return;
         };
@@ -823,6 +864,13 @@ impl SceneRenderer {
         fonts: Vec<ir::FontData>,
         below: Option<usize>,
     ) -> usize {
+        self.drawn = None;
+        // Its own programs and particles are not looked at.
+        self.reacts = Reacts {
+            time: true,
+            pointer: true,
+            audio: true,
+        };
         let index = self.ir.layers.len();
         let system: Vec<String> = system_names(std::iter::once(&layer))
             .into_iter()
@@ -895,6 +943,7 @@ impl SceneRenderer {
     /// Reserves the next layer index for a created layer that could not be
     /// imported: never drawn, but later indices stay in step with scripts.
     pub fn add_placeholder_layer(&mut self) -> usize {
+        self.drawn = None;
         let index = self.ir.layers.len();
         let layer = ir::ImageLayer {
             name: String::new(),
@@ -941,6 +990,7 @@ impl SceneRenderer {
 
     /// Draws IR layer `layer` just below IR layer `below` (or on top).
     pub fn sort_layer(&mut self, layer: usize, below: Option<usize>) {
+        self.drawn = None;
         let Some(from) = self.layers.iter().position(|l| l.index == layer) else {
             return;
         };
@@ -956,6 +1006,7 @@ impl SceneRenderer {
     /// are ignored.
     /// Sets point light `light`'s intensity (a scripted value).
     pub fn set_light_intensity(&mut self, light: usize, intensity: f32) {
+        self.drawn = None;
         let Some(l) = self.ir.point_lights.get(light) else {
             return;
         };
@@ -2081,6 +2132,38 @@ impl SceneRenderer {
     /// Renders one frame into [`SceneRenderer::output`] and submits.
     pub fn render(&mut self, gpu: &Gpu, inputs: &FrameInputs) {
         self.render_impl(gpu, inputs);
+        self.drawn = Some(*inputs);
+    }
+
+    /// Whether rendering with `inputs` would draw the same picture again
+    /// (static scenes cost no GPU time, P2). Call it once a frame instead of
+    /// [`Self::render`]. Changes made to textures ([`Self::write_texture`],
+    /// system textures) are the caller's to know about.
+    pub fn idle(&mut self, inputs: &FrameInputs) -> bool {
+        let Some(drawn) = self.drawn else {
+            return false;
+        };
+        let near = |a: [f32; 2], b: [f32; 2]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-4);
+        let pointer_rests = near(drawn.pointer, inputs.pointer)
+            && (self.parallax.is_none() || near(self.parallax_pointer, inputs.pointer));
+        let idle = !self.reacts.time
+            && (!self.reacts.pointer || pointer_rests)
+            && (!self.reacts.audio || drawn.audio == inputs.audio);
+        if idle {
+            // The cursor's smoothing starts from here when it moves again.
+            self.last_time = Some(inputs.time);
+        }
+        idle
+    }
+
+    /// Whether what the system plays can change the picture (scripts aside).
+    pub fn uses_audio(&self) -> bool {
+        self.reacts.audio || self.ir.layers.iter().any(|l| l.particles.is_some())
+    }
+
+    /// Draws the next frame even if nothing changed.
+    pub fn invalidate(&mut self) {
+        self.drawn = None;
     }
 }
 

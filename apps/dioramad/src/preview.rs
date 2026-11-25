@@ -150,6 +150,9 @@ fn draw(
             daytime: day_fraction_at(clock_ms),
             audio: [[0.0; 64]; 2],
         };
+        if scripts.is_none() && videos.is_none() && stage.renderer.idle(&inputs) {
+            continue;
+        }
         stage.frame(&gpu, &inputs);
         // Waiting for the GPU shows the frame soonest; nothing else is to do.
         let rgba = read_rgba8(&gpu, &stage.target);

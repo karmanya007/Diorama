@@ -937,6 +937,9 @@ impl Slot {
                 Content::Scene(_) => {
                     // Resuming makes the next frame due immediately.
                     self.scene_clock.set_paused(all_paused);
+                    if resumed {
+                        session.refresh();
+                    }
                     if let Some(sounds) = session.scene_sounds() {
                         sounds.set_paused(all_paused);
                     }

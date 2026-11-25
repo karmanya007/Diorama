@@ -97,7 +97,7 @@ pub fn draw_at(background: &str, layers: Value, pointer: [f32; 2], time: f32) ->
     Some(render(&gpu, background, &layers, pointer, time))
 }
 
-fn render(gpu: &Gpu, background: &str, layers: &Value, pointer: [f32; 2], time: f32) -> Picture {
+fn renderer(gpu: &Gpu, background: &str, layers: &Value) -> SceneRenderer {
     let document = json!({
         "version": 1, "size": SIZE, "background": background, "layers": layers,
         "parallax": {"amount": 0.25, "smoothing": 0},
@@ -111,7 +111,11 @@ fn render(gpu: &Gpu, background: &str, layers: &Value, pointer: [f32; 2], time: 
     let scene = compile(&files, &Values::new(), &System, &Limits::default()).unwrap();
     assert!(scene.skipped.is_empty(), "{:?}", scene.skipped);
     let compiler = ShaderCompiler::without_dxc();
-    let mut renderer = SceneRenderer::new(gpu, &scene, &compiler, None).unwrap();
+    SceneRenderer::new(gpu, &scene, &compiler, None).unwrap()
+}
+
+fn render(gpu: &Gpu, background: &str, layers: &Value, pointer: [f32; 2], time: f32) -> Picture {
+    let mut renderer = renderer(gpu, background, layers);
     let inputs = FrameInputs {
         pointer,
         time,
@@ -119,4 +123,20 @@ fn render(gpu: &Gpu, background: &str, layers: &Value, pointer: [f32; 2], time: 
     };
     renderer.render(gpu, &inputs);
     Picture(renderer.read_output(gpu).unwrap())
+}
+
+/// Whether `layers` drawn at `first` need no drawing at `second` (time and
+/// cursor); `None` without a GPU.
+pub fn idle(layers: &Value, first: (f32, [f32; 2]), second: (f32, [f32; 2])) -> Option<bool> {
+    let gpu = GPU.as_ref()?;
+    let gpu = gpu.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut renderer = renderer(&gpu, "#000", layers);
+    let inputs = |(time, pointer)| FrameInputs {
+        time,
+        pointer,
+        ..FrameInputs::default()
+    };
+    assert!(!renderer.idle(&inputs(first)), "nothing drawn yet");
+    renderer.render(&gpu, &inputs(first));
+    Some(renderer.idle(&inputs(second)))
 }
