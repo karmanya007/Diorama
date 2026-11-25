@@ -101,8 +101,7 @@ None is copied from WE; names and settings are our own.
   replaces it only when complete.
 
 Risk: 960×540 at 30 fps is about 62 MB/s of raw frames through the webview
-bridge. Milestone 0 measures this first. If it is too slow, frames are
-compressed or the preview runs at a lower rate while nothing is dragged.
+bridge. Milestone 0 measured it (see below): raw frames are fast enough.
 
 ### 4. Wallpaper Engine scenes are not converted
 
@@ -124,6 +123,31 @@ Each is usable and tested alone; the first release can stop after 3.
 | 4 | Motion: keyframe timeline, audio-driven values, user properties made in the editor | the example wallpapers use each |
 | 5 | Particles: emitter presets and their settings | golden images; cost shown while editing |
 | 6 | Scripts on values (the SceneScript engine, our own API names) and custom WGSL effects | limits and watchdog tested with hostile input |
+
+## Milestone 0 (2026-11-25)
+
+Raw RGBA frames from a child process's standard output, fetched by the page
+over a custom protocol one at a time and drawn with `putImageData` (release
+build; WebView2 on Windows 11, WebKitGTK in headless Sway under WSL):
+
+| Frame | WebView2 | WebKitGTK |
+|---|---|---|
+| 960×540 | 58 fps | 76 fps |
+| 1280×720 | 34 fps | 44 fps |
+| 1920×1080 | 15 fps | 20 fps |
+
+Almost all of it is the fetch; drawing takes under 1 ms (WebView2) to 2 ms,
+and WebGL is no faster. The pipe carries far more than the webview takes.
+
+`dioramad --preview <folder>` (`diorama_ipc::preview`) holds 30 fps at each of
+these sizes with two Workshop scenes on Windows and reaches 180–240 when not
+held back, waiting for every frame's readback. The first message comes after
+about half a second.
+
+WGSL programs draw the same pixels as their HLSL twins
+(`crates/diorama-render/tests/scene_render.rs`), without DXC.
+
+So: previews up to 1280×720 as raw frames, larger areas scaled up by the page.
 
 ## Alternatives
 

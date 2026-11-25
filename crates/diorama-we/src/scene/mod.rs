@@ -1741,8 +1741,9 @@ impl Importer<'_> {
         let id = ProgramId(self.scene.programs.len());
         self.scene.programs.push(ShaderProgram {
             name: name.to_owned(),
-            vertex_hlsl: hlsl.vertex,
-            fragment_hlsl: hlsl.fragment,
+            language: diorama_scene::ShaderLanguage::Hlsl,
+            vertex_source: hlsl.vertex,
+            fragment_source: hlsl.fragment,
             vertex_entry: hlsl.vertex_entry.to_owned(),
             fragment_entry: hlsl.fragment_entry.to_owned(),
             attributes,

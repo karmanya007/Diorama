@@ -16,6 +16,8 @@ use interprocess::local_socket::{
 };
 use serde::{Deserialize, Serialize};
 
+pub mod preview;
+
 pub const PROTOCOL_VERSION: u32 = 1;
 
 /// Longest accepted message line; protects the daemon from a client sending garbage forever.

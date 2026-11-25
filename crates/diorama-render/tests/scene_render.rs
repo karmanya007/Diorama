@@ -12,7 +12,7 @@ use diorama_gpu::{Gpu, GpuOptions};
 use diorama_render::scene::{FrameInputs, SceneRenderer};
 use diorama_scene::{
     Attribute, Blend, Effect, Fbo, ImageLayer, LayerKind, MeshQuad, Parallax, Pass, ProgramId,
-    Scene, ShaderProgram, Texture, TextureBinding, TextureId, affine,
+    Scene, ShaderLanguage, ShaderProgram, Texture, TextureBinding, TextureId, affine,
 };
 
 /// Textured quad through the engine MVP, tinted by g_Color4 (like genericimage).
@@ -52,8 +52,9 @@ float4 ps(VsOut i) : SV_Target0 { return g_Texture0.Sample(g_Texture0SamplerStat
 fn program(name: &str, src: &str) -> ShaderProgram {
     ShaderProgram {
         name: name.into(),
-        vertex_hlsl: src.into(),
-        fragment_hlsl: src.into(),
+        language: ShaderLanguage::Hlsl,
+        vertex_source: src.into(),
+        fragment_source: src.into(),
         vertex_entry: "vs".into(),
         fragment_entry: "ps".into(),
         attributes: vec![
@@ -211,6 +212,87 @@ fn layers_effects_and_fbos() {
     assert_eq!(px(&img, 64, 16, 16), [255, 0, 0, 255], "direct layer");
     // Green inverted is magenta; the FBO round trip keeps it.
     assert_eq!(px(&img, 64, 48, 16), [255, 0, 255, 255], "effect chain");
+}
+
+/// The shared vertex stage of WGSL programs.
+const WGSL_VERTEX: &str = "
+struct Engine { g_ModelViewProjectionMatrix: mat4x4<f32> }
+@group(0) @binding(0) var<uniform> engine: Engine;
+struct Out { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f32> }
+@vertex fn vs(@location(0) pos: vec3<f32>, @location(1) uv: vec2<f32>) -> Out {
+    return Out(vec4(pos, 1.0) * engine.g_ModelViewProjectionMatrix, uv);
+}
+";
+
+const WGSL_IMAGE: &str = "
+struct Settings { g_Color4: vec4<f32> }
+@group(0) @binding(1) var<uniform> settings: Settings;
+@group(1) @binding(0) var image: texture_2d<f32>;
+@group(1) @binding(1) var image_sampler: sampler;
+@fragment fn ps(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
+    return textureSample(image, image_sampler, uv) * settings.g_Color4;
+}
+";
+
+const WGSL_INVERT: &str = "
+@group(1) @binding(0) var image: texture_2d<f32>;
+@group(1) @binding(1) var image_sampler: sampler;
+@fragment fn ps(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
+    let c = textureSample(image, image_sampler, uv);
+    return vec4(1.0 - c.rgb, c.a);
+}
+";
+
+const WGSL_COPY: &str = "
+@group(1) @binding(0) var image: texture_2d<f32>;
+@group(1) @binding(1) var image_sampler: sampler;
+@fragment fn ps(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
+    return textureSample(image, image_sampler, uv);
+}
+";
+
+fn wgsl(name: &str, fragment: &str) -> ShaderProgram {
+    ShaderProgram {
+        language: ShaderLanguage::Wgsl,
+        vertex_source: WGSL_VERTEX.into(),
+        fragment_source: fragment.into(),
+        ..program(name, "")
+    }
+}
+
+/// WGSL programs need no DXC and draw what their HLSL twins draw.
+#[test]
+fn wgsl_programs() {
+    let Ok(gpu) = Gpu::new(GpuOptions::default()) else {
+        eprintln!("no GPU; skipping");
+        return;
+    };
+    let mut s = scene();
+    s.layers[0].color = [0.2, 1.0, 1.0, 1.0];
+    s.programs = vec![
+        wgsl("image", WGSL_IMAGE),
+        wgsl("invert", WGSL_INVERT),
+        wgsl("copy", WGSL_COPY),
+    ];
+    let img = render(&gpu, &ShaderCompiler::without_dxc(), &s, [0.5, 0.5]);
+    assert_eq!(px(&img, 64, 16, 16), [51, 0, 0, 255], "tinted layer");
+    assert_eq!(px(&img, 64, 48, 16), [255, 0, 255, 255], "effect chain");
+    if let Ok(compiler) = ShaderCompiler::locate(None) {
+        s.programs = scene().programs;
+        assert_eq!(img, render(&gpu, &compiler, &s, [0.5, 0.5]), "HLSL twins");
+    }
+
+    // A broken effect is skipped with its reason, not a crash.
+    s.programs = vec![
+        wgsl("image", WGSL_IMAGE),
+        wgsl(
+            "invert",
+            "@fragment fn ps() -> @location(0) vec4<f32> { return nothing; }",
+        ),
+        wgsl("copy", WGSL_COPY),
+    ];
+    let img = render(&gpu, &ShaderCompiler::without_dxc(), &s, [0.5, 0.5]);
+    assert_eq!(px(&img, 64, 16, 16), [51, 0, 0, 255], "other layers stay");
 }
 
 /// The loop shape of fbm noise (Neon Sunset's terrain): a running sum whose

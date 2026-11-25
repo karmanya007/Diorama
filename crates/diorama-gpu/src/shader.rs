@@ -25,6 +25,8 @@ pub enum ShaderError {
     Compile { stage: Stage, message: String },
     #[error("SPIR-V parse: {0}")]
     Parse(String),
+    #[error("WGSL: {0}")]
+    Wgsl(String),
     #[error("shader I/O: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -73,7 +75,8 @@ const SPV_OPTIONS: naga::front::spv::Options = naga::front::spv::Options {
 
 #[derive(Debug, Clone)]
 pub struct ShaderCompiler {
-    dxc: PathBuf,
+    /// `None`: only what needs no compiling (WGSL) can be used.
+    dxc: Option<PathBuf>,
     cache_dir: Option<PathBuf>,
     /// `dxc --version` output: part of every cache key so a compiler upgrade
     /// never reuses SPIR-V from another version (ADR-003).
@@ -107,9 +110,18 @@ impl ShaderCompiler {
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
             .unwrap_or_default();
         Self {
-            dxc,
+            dxc: Some(dxc),
             cache_dir,
             version,
+        }
+    }
+
+    /// Without DXC: for scenes whose programs are all WGSL.
+    pub fn without_dxc() -> Self {
+        Self {
+            dxc: None,
+            cache_dir: None,
+            version: String::new(),
         }
     }
 
@@ -174,12 +186,13 @@ impl ShaderCompiler {
             return Ok(bytes);
         }
 
+        let dxc = self.dxc.as_ref().ok_or(ShaderError::NoCompiler)?;
         let n = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
         let stem = std::env::temp_dir().join(format!("diorama-dxc-{}-{n}", std::process::id()));
         let input = stem.with_extension("hlsl");
         let output = stem.with_extension("spv");
         std::fs::write(&input, source)?;
-        let run = dxc_command(&self.dxc)
+        let run = dxc_command(dxc)
             .args(FLAGS)
             .args(["-T", stage.profile(), "-E", entry])
             .arg("-Fo")
@@ -212,6 +225,12 @@ impl ShaderCompiler {
         }
         Ok(bytes)
     }
+}
+
+/// Reads WGSL (no external compiler involved).
+pub fn parse_wgsl(source: &str) -> Result<naga::Module, ShaderError> {
+    naga::front::wgsl::parse_str(source)
+        .map_err(|e| ShaderError::Wgsl(e.emit_to_string(source).trim().to_owned()))
 }
 
 /// FNV-1a 64 over everything that affects the output.

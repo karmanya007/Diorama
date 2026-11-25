@@ -15,6 +15,7 @@ mod media;
 mod playlist;
 mod policy;
 mod presets;
+mod preview;
 mod properties;
 mod scripts;
 mod session;
@@ -133,6 +134,10 @@ struct Args {
     /// Run without a console (used by autostart); logs go to `dioramad.log` in the config folder.
     #[arg(long)]
     background: bool,
+    /// Draw this wallpaper off-screen for the editor and write the frames to
+    /// standard output (see `diorama_ipc::preview`).
+    #[arg(long, value_name = "DIR", conflicts_with = "background")]
+    preview: Option<PathBuf>,
     /// Also set each new wallpaper (a snapshot, for videos) as the Windows desktop background,
     /// so the desktop is not blank when Diorama is not running (P14). Changes your OS wallpaper setting.
     #[arg(long)]
@@ -285,7 +290,11 @@ fn main() -> Result<()> {
     let args = Args::parse();
     let config_dir = diorama_platform::config_dir();
     let adopted = adopt_legacy_config(config_dir.as_deref());
-    init_logging(args.background, config_dir.as_deref());
+    init_logging(
+        args.background,
+        args.preview.is_some(),
+        config_dir.as_deref(),
+    );
     if adopted {
         tracing::info!("moved the settings from before the rename to Diorama");
     }
@@ -320,6 +329,12 @@ fn main() -> Result<()> {
             gpu_options(&args),
             &request,
         );
+    }
+
+    if let Some(dir) = &args.preview {
+        let assets = args.we_assets.is_dir().then_some(args.we_assets.as_path());
+        let we_config = we_config_path(&args);
+        return preview::run(dir, assets, we_config.as_deref(), gpu_options(&args));
     }
 
     // Offscreen frames above need no desktop (CI, no compositor).
@@ -600,7 +615,8 @@ fn child_stderr() -> std::process::Stdio {
 
 /// Console logging normally; with `--background`, detach from the console and
 /// append to `<config dir>/dioramad.log` instead.
-fn init_logging(background: bool, config_dir: Option<&std::path::Path>) {
+/// `frames_out`: standard output carries frames, so logs go to standard error.
+fn init_logging(background: bool, frames_out: bool, config_dir: Option<&std::path::Path>) {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     let file = background.then_some(config_dir).flatten().and_then(|dir| {
@@ -623,6 +639,11 @@ fn init_logging(background: bool, config_dir: Option<&std::path::Path>) {
             .with_env_filter(filter)
             .with_ansi(false)
             .with_writer(std::sync::Mutex::new(f))
+            .init(),
+        None if frames_out => tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_ansi(false)
+            .with_writer(std::io::stderr)
             .init(),
         None => tracing_subscriber::fmt().with_env_filter(filter).init(),
     }

@@ -61,8 +61,8 @@ fn light(scene: &Scene) -> Scene {
         t.video = None;
     }
     for p in &mut light.programs {
-        p.vertex_hlsl = String::new();
-        p.fragment_hlsl = String::new();
+        p.vertex_source = String::new();
+        p.fragment_source = String::new();
     }
     light.scripts = Vec::new();
     light.animations = Vec::new();

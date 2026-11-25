@@ -3118,12 +3118,15 @@ fn build_program(
     uniforms_layout: &wgpu::BindGroupLayout,
     format: wgpu::TextureFormat,
 ) -> Result<Program, String> {
-    let vs = compiler
-        .compile(&p.vertex_hlsl, &p.vertex_entry, Stage::Vertex)
-        .map_err(|e| e.to_string())?;
-    let fs = compiler
-        .compile(&p.fragment_hlsl, &p.fragment_entry, Stage::Fragment)
-        .map_err(|e| e.to_string())?;
+    let module = |source: &str, entry: &str, stage| {
+        match p.language {
+            ir::ShaderLanguage::Hlsl => compiler.compile(source, entry, stage),
+            ir::ShaderLanguage::Wgsl => diorama_gpu::shader::parse_wgsl(source),
+        }
+        .map_err(|e| e.to_string())
+    };
+    let vs = module(&p.vertex_source, &p.vertex_entry, Stage::Vertex)?;
+    let fs = module(&p.fragment_source, &p.fragment_entry, Stage::Fragment)?;
     // Anything besides our per-stage cbuffer (e.g. DXC's implicit `$Globals`)
     // would fail validation at draw time and void the whole frame.
     for (module, stage, binding) in [(&vs, "vertex", 0), (&fs, "fragment", 1)] {

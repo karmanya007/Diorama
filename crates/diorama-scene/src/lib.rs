@@ -554,14 +554,25 @@ pub struct Pass {
     pub blend: Blend,
 }
 
-/// A translated vertex + fragment shader with the metadata the renderer
-/// needs to feed it.
+/// What a [`ShaderProgram`]'s sources are written in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ShaderLanguage {
+    /// Compiled with DXC (translated WE shaders, ADR-003).
+    #[default]
+    Hlsl,
+    /// Read by naga directly (Diorama's own effects, ADR-009). Matrices
+    /// multiply as `vector * matrix`.
+    Wgsl,
+}
+
+/// A vertex + fragment shader with the metadata the renderer needs to feed it.
 #[derive(Debug, Clone)]
 pub struct ShaderProgram {
     /// Human-readable origin (e.g. `effects/waterripple`).
     pub name: String,
-    pub vertex_hlsl: String,
-    pub fragment_hlsl: String,
+    pub language: ShaderLanguage,
+    pub vertex_source: String,
+    pub fragment_source: String,
     pub vertex_entry: String,
     pub fragment_entry: String,
     /// Vertex inputs in location order.

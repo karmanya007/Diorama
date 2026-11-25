@@ -99,7 +99,7 @@ pub fn load_scene(
 {}
 // fragment
 {}",
-                p.name, p.vertex_hlsl, p.fragment_hlsl
+                p.name, p.vertex_source, p.fragment_source
             );
         }
     }
