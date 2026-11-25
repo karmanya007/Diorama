@@ -105,6 +105,11 @@ pub fn autostart() -> Result<Option<String>> {
 
 pub fn detach_console() {}
 
+#[cfg(not(target_os = "linux"))]
+pub fn default_font() -> Option<std::path::PathBuf> {
+    None
+}
+
 /// Replaces this process with a fresh one given `args`. Only Linux's
 /// `DisplayLost` asks for it.
 #[cfg(not(target_os = "linux"))]

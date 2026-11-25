@@ -25,7 +25,7 @@ use std::time::Duration;
 
 pub use media::MediaWatcher;
 pub use metrics::{ProcessMonitor, SystemMonitor};
-pub use system::{autostart, day_fraction, restart, set_autostart, steam_dir};
+pub use system::{autostart, day_fraction, default_font, restart, set_autostart, steam_dir};
 
 use crate::{
     Coverage, DesktopEvent, DesktopPointer, Error, HotkeyModifiers, OutputInfo, Result,

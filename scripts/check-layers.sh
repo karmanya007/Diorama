@@ -13,14 +13,15 @@ rules=(
   "diorama-assets:diorama-we diorama-gpu diorama-runtime diorama-render diorama-platform"
   "diorama-ipc:diorama-we diorama-gpu diorama-runtime diorama-render diorama-platform"
   "diorama-library:diorama-we diorama-gpu diorama-runtime diorama-render diorama-platform diorama-media"
-  "diorama-we:diorama-gpu diorama-runtime diorama-render diorama-platform"
-  "diorama-gpu:diorama-we diorama-runtime diorama-render diorama-platform"
+  "diorama-we:diorama-project diorama-gpu diorama-runtime diorama-render diorama-platform"
+  "diorama-project:diorama-we diorama-gpu diorama-runtime diorama-render diorama-platform diorama-media diorama-script"
+  "diorama-gpu:diorama-we diorama-project diorama-runtime diorama-render diorama-platform"
   "diorama-runtime:diorama-we diorama-platform"
   "diorama-particles:diorama-we diorama-gpu diorama-render diorama-platform diorama-media diorama-script"
   "diorama-script:diorama-we diorama-gpu diorama-render diorama-platform diorama-media"
-  "diorama-render:diorama-we diorama-runtime diorama-platform diorama-media"
+  "diorama-render:diorama-we diorama-project diorama-runtime diorama-platform diorama-media"
   "diorama-media:diorama-we diorama-gpu diorama-runtime diorama-render diorama-platform"
-  "diorama-platform:diorama-scene diorama-we diorama-gpu diorama-runtime diorama-render"
+  "diorama-platform:diorama-scene diorama-we diorama-project diorama-gpu diorama-runtime diorama-render"
 )
 
 members=$(cargo metadata --no-deps --format-version 1 | grep -o '"name":"diorama-[a-z-]*"' | cut -d'"' -f4 | sort -u)

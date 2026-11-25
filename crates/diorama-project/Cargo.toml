@@ -1,0 +1,22 @@
+[package]
+name = "diorama-project"
+description = "Diorama's own wallpaper format: reads a document and its assets and compiles them to the scene IR (ADR-009)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+diorama-core.workspace = true
+diorama-scene.workspace = true
+diorama-text.workspace = true
+image.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+diorama-gpu.workspace = true
+diorama-render.workspace = true
+
+[lints]
+workspace = true

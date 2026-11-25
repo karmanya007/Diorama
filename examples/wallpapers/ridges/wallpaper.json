@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "size": [
+    2560,
+    1440
+  ],
+  "background": "#0e102e",
+  "parallax": {
+    "amount": {
+      "property": "depth"
+    },
+    "smoothing": 0.2
+  },
+  "layers": [
+    {"id": "sky", "name": "Sky", "type": "image", "source": "assets/sky.png", "size": [2640, 1485], "depth": 0.1},
+    {"id": "glow", "name": "Moonlight", "type": "image", "source": "assets/glow.png", "position": [620, -360], "scale": 5, "blend": "screen", "opacity": {"property": "moonlight"}, "visible": {"property": "moon"}, "depth": 0.2},
+    {"id": "moon", "name": "Moon", "type": "image", "source": "assets/moon.png", "position": [620, -360], "scale": 0.8, "visible": {"property": "moon"}, "depth": 0.2},
+    {"id": "far", "name": "Far ridge", "type": "image", "source": "assets/ridge-far.png", "position": [0, 300], "size": [2880, 680], "depth": 0.35},
+    {"id": "middle", "name": "Middle ridge", "type": "image", "source": "assets/ridge-middle.png", "position": [0, 450], "size": [2880, 720], "depth": 0.6},
+    {"id": "words", "name": "Words", "type": "text", "text": {"property": "words"}, "color": {"property": "wordscolor"}, "position": [0, -150], "opacity": 0.85, "depth": 0.5, "font-size": 120, "max-width": 2200},
+    {"id": "near", "name": "Near ridge", "type": "image", "source": "assets/ridge-near.png", "position": [0, 560], "size": [3000, 660], "depth": 1},
+    {"id": "front", "name": "Front ridge", "type": "image", "source": "assets/ridge-front.png", "position": [0, 660], "size": [3120, 520], "depth": 1.6}
+  ]
+}

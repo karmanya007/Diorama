@@ -1123,6 +1123,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "diorama-project"
+version = "1.2.0"
+dependencies = [
+ "diorama-core",
+ "diorama-gpu",
+ "diorama-render",
+ "diorama-scene",
+ "diorama-text",
+ "image",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "diorama-render"
 version = "1.2.0"
 dependencies = [
@@ -1226,6 +1240,7 @@ dependencies = [
  "diorama-library",
  "diorama-media",
  "diorama-platform",
+ "diorama-project",
  "diorama-render",
  "diorama-scene",
  "diorama-script",

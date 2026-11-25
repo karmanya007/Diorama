@@ -326,6 +326,14 @@ pub enum SoundMode {
     Random { min_gap: f32, max_gap: f32 },
 }
 
+/// Where a video texture's video is.
+#[derive(Debug, Clone, PartialEq)]
+pub enum VideoData {
+    /// A whole MP4.
+    Memory(Arc<[u8]>),
+    File(std::path::PathBuf),
+}
+
 /// A decoded texture (mip 0 only for now).
 #[derive(Debug, Clone)]
 pub struct Texture {
@@ -344,9 +352,9 @@ pub struct Texture {
     pub nearest: bool,
     /// Animation frames (sprite sheets, animated GIFs); empty = still image.
     pub frames: Vec<TextureFrame>,
-    /// A looping MP4 video shown in this texture; `rgba` is then only the
+    /// A looping video shown in this texture; `rgba` is then only the
     /// (black) content until the first decoded frame.
-    pub video: Option<Arc<[u8]>>,
+    pub video: Option<VideoData>,
 }
 
 /// One frame of an animated texture: the frame's parallelogram in UV

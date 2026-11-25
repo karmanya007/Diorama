@@ -149,6 +149,18 @@ WGSL programs draw the same pixels as their HLSL twins
 
 So: previews up to 1280×720 as raw frames, larger areas scaled up by the page.
 
+## Milestone 1 (2026-11-25)
+
+`crates/diorama-project` compiles documents (`docs/formats/diorama.md`) to the
+IR; `dioramad`, the library and `--preview` play them. Ten blend modes (two in
+fixed function, eight in the shader over the picture so far). Pixel tests pass
+on Windows (DX12) and Linux (lavapipe, no DXC); an example is
+`examples/wallpapers/ridges`.
+
+Open: video layers convert frames to RGBA on the CPU (fine for a layer, dear
+at 4K); text without a font asset uses the system's, so the editor should add
+one; a wallpaper that does not move is still drawn at the frame rate cap.
+
 ## Alternatives
 
 - **Editing WE's `scene.json` in place.** Reuses the importer fully and the

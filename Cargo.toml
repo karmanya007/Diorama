@@ -12,6 +12,7 @@ members = [
     "crates/diorama-media",
     "crates/diorama-particles",
     "crates/diorama-platform",
+    "crates/diorama-project",
     "crates/diorama-render",
     "crates/diorama-scene",
     "crates/diorama-script",
@@ -39,6 +40,7 @@ diorama-ipc = { path = "crates/diorama-ipc", version = "1.2.0" }
 diorama-media = { path = "crates/diorama-media", version = "1.2.0" }
 diorama-particles = { path = "crates/diorama-particles", version = "1.2.0" }
 diorama-platform = { path = "crates/diorama-platform", version = "1.2.0" }
+diorama-project = { path = "crates/diorama-project", version = "1.2.0" }
 diorama-render = { path = "crates/diorama-render", version = "1.2.0" }
 diorama-scene = { path = "crates/diorama-scene", version = "1.2.0" }
 diorama-script = { path = "crates/diorama-script", version = "1.2.0" }

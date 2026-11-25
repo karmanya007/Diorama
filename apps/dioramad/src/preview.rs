@@ -92,7 +92,7 @@ fn draw(
     let choices = crate::properties::choices(we_config, dir, &Default::default());
     let scene = load_scene(dir, assets, &choices)?;
     let gpu = Gpu::new(gpu_options)?;
-    let compiler = shader_compiler()?;
+    let compiler = shader_compiler(&scene)?;
     let mut view = View {
         size: SIZE,
         fps: FPS,
@@ -100,6 +100,7 @@ fn draw(
     };
     let mut stage = Stage::new(&gpu, &scene, &compiler, view.size)?;
     let mut scripts = SceneScripts::new(&scene, now_ms(), false, None, None);
+    let mut videos = crate::videos::SceneVideos::start(&scene);
     let started = Instant::now();
     let mut next = started;
     let ready = Event::Ready {
@@ -139,6 +140,9 @@ fn draw(
                 audio: [[0.0; 64]; 2],
             };
             scripts.frame(&gpu, &mut stage.renderer, None, &frame);
+        }
+        if let Some(videos) = &mut videos {
+            videos.frame(&gpu, &stage.renderer, time);
         }
         let inputs = FrameInputs {
             time,

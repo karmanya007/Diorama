@@ -192,7 +192,8 @@ pub fn project(dir: &Path, source: Source) -> Option<Item> {
     let text_of = |k: &str| p.get(k).and_then(Value::as_str).unwrap_or_default().trim();
     let id = dir.file_name()?.to_string_lossy().into_owned();
     let kind = match text_of("type").to_ascii_lowercase().as_str() {
-        "scene" => Kind::Scene,
+        // Diorama's own wallpapers are scenes too (`diorama-project`).
+        "scene" | "diorama" => Kind::Scene,
         "video" => Kind::Video,
         "web" => Kind::Web,
         "application" => Kind::Application,
@@ -355,17 +356,24 @@ mod tests {
     fn example_wallpapers_are_listed_with_previews_and_settings() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/wallpapers");
         let items = folder_items(&dir);
-        let titles: Vec<&str> = items.iter().map(|i| i.title.as_str()).collect();
-        assert_eq!(titles, ["Aurora", "Dunes", "Paper Valley"]);
+        let listed: Vec<_> = items.iter().map(|i| (i.title.as_str(), i.kind)).collect();
+        assert_eq!(
+            listed,
+            [
+                ("Aurora", Kind::Web),
+                ("Dunes", Kind::Web),
+                ("Paper Valley", Kind::Web),
+                ("Ridges", Kind::Scene),
+            ]
+        );
         for item in &items {
-            assert_eq!(item.kind, Kind::Web, "{}", item.title);
             assert!(
                 item.preview.as_ref().is_some_and(|p| p.is_file()),
                 "{}",
                 item.title
             );
             assert!(
-                item.properties.get("schemecolor").is_some(),
+                item.properties.as_object().is_some_and(|p| !p.is_empty()),
                 "{}",
                 item.title
             );

@@ -6,6 +6,16 @@ use std::path::PathBuf;
 
 use crate::{Error, Result};
 
+/// The system's sans-serif font (fontconfig's choice), for text that names none.
+pub fn default_font() -> Option<PathBuf> {
+    let found = std::process::Command::new("fc-match")
+        .args(["-f", "%{file}", "sans"])
+        .output()
+        .ok()?;
+    let path = PathBuf::from(String::from_utf8(found.stdout).ok()?);
+    path.is_file().then_some(path)
+}
+
 /// `$XDG_CONFIG_HOME/autostart/diorama.desktop`: desktops start every entry
 /// there at sign-in (and list it in their startup settings).
 fn autostart_file() -> Option<PathBuf> {

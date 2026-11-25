@@ -14,8 +14,9 @@ pub use metrics::SystemMonitor;
 pub use process::ProcessMonitor;
 
 pub use system::{
-    autostart, cache_dir, config_dir, day_fraction, detach_console, legacy_config_dir, no_console,
-    restart, set_autostart, set_os_wallpaper, steam_dir, ui_language,
+    autostart, cache_dir, config_dir, day_fraction, default_font, detach_console,
+    legacy_config_dir, no_console, restart, set_autostart, set_os_wallpaper, steam_dir,
+    ui_language,
 };
 
 use std::cell::{Cell, RefCell};

@@ -1849,7 +1849,7 @@ fn video_texture(tex: &Tex, stem: &str, max_dim: u32) -> Result<Texture> {
         clamp: h.flags.contains(TexFlags::CLAMP_UVS),
         nearest: h.flags.contains(TexFlags::NO_INTERPOLATION),
         frames: Vec::new(),
-        video: Some(mp4.into()),
+        video: Some(diorama_scene::VideoData::Memory(mp4.into())),
     })
 }
 

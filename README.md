@@ -166,6 +166,7 @@ To build the installer, run `./scripts/bundle.ps1`. The result is `target/releas
 | `crates/diorama-core` | Clock, limits, shared foundation types |
 | `crates/diorama-scene` | Engine-neutral scene format (layers, materials, effects, particles) |
 | `crates/diorama-we` | Wallpaper Engine importer: pkg, tex, mdl, scene/effect/material JSON, shader translation |
+| `crates/diorama-project` | Diorama's own wallpaper format, compiled to scenes |
 | `crates/diorama-gpu` | wgpu device, surfaces, shader compilation and cache |
 | `crates/diorama-render` | Scene, video and image rendering |
 | `crates/diorama-particles` | Particle simulation |

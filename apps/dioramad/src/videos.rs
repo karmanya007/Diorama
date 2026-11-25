@@ -1,10 +1,10 @@
-//! Video textures: decodes every scene texture that holds an MP4 and hands
+//! Video textures: decodes every scene texture that shows one and hands
 //! the frame for the current scene time to the renderer.
 
 use diorama_gpu::Gpu;
 use diorama_media::{MediaSource, Nv12Frame, VideoPlayer};
 use diorama_render::scene::SceneRenderer;
-use diorama_scene::Scene;
+use diorama_scene::{Scene, VideoData};
 use std::time::Duration;
 
 pub struct SceneVideos {
@@ -27,10 +27,12 @@ impl SceneVideos {
             .iter()
             .enumerate()
             .filter_map(|(i, t)| {
-                let mp4 = t.video.clone()?;
-                let source = MediaSource::Memory {
-                    data: mp4,
-                    name: format!("{}.mp4", t.name),
+                let source = match t.video.clone()? {
+                    VideoData::Memory(data) => MediaSource::Memory {
+                        data,
+                        name: format!("{}.mp4", t.name),
+                    },
+                    VideoData::File(path) => MediaSource::File(path),
                 };
                 match VideoPlayer::spawn_source(source) {
                     Ok(player) => Some(VideoTexture {

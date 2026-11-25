@@ -27,6 +27,15 @@ fn win32(call: &'static str, code: u32) -> Error {
     }
 }
 
+/// A font every Windows has, for text that names none.
+pub fn default_font() -> Option<PathBuf> {
+    let fonts = PathBuf::from(std::env::var_os("WINDIR")?).join("Fonts");
+    ["segoeui.ttf", "arial.ttf"]
+        .iter()
+        .map(|f| fonts.join(f))
+        .find(|p| p.is_file())
+}
+
 /// `%APPDATA%\Diorama`.
 pub fn config_dir() -> Option<PathBuf> {
     std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("Diorama"))

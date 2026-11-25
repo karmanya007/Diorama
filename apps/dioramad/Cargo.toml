@@ -17,6 +17,7 @@ diorama-ipc.workspace = true
 diorama-library.workspace = true
 diorama-media.workspace = true
 diorama-platform.workspace = true
+diorama-project.workspace = true
 diorama-render.workspace = true
 diorama-scene.workspace = true
 diorama-script.workspace = true

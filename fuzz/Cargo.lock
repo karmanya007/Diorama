@@ -86,6 +86,58 @@ dependencies = [
 ]
 
 [[package]]
+name = "diorama-core"
+version = "1.2.0"
+
+[[package]]
+name = "diorama-fuzz"
+version = "0.0.0"
+dependencies = [
+ "diorama-core",
+ "diorama-project",
+ "diorama-we",
+ "libfuzzer-sys",
+]
+
+[[package]]
+name = "diorama-project"
+version = "1.2.0"
+dependencies = [
+ "diorama-core",
+ "diorama-scene",
+ "diorama-text",
+ "image",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "diorama-scene"
+version = "1.2.0"
+
+[[package]]
+name = "diorama-text"
+version = "1.2.0"
+dependencies = [
+ "harfrust",
+ "swash",
+ "thiserror",
+]
+
+[[package]]
+name = "diorama-we"
+version = "1.2.0"
+dependencies = [
+ "diorama-core",
+ "diorama-scene",
+ "diorama-text",
+ "image",
+ "lz4_flex",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "fdeflate"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -217,45 +269,6 @@ checksum = "a9fd2f41a1cba099f79a0b6b6c35656cf7c03351a7bae8ff0f28f25270f929d2"
 dependencies = [
  "arbitrary",
  "cc",
-]
-
-[[package]]
-name = "diorama-core"
-version = "0.0.1"
-
-[[package]]
-name = "diorama-fuzz"
-version = "0.0.0"
-dependencies = [
- "libfuzzer-sys",
- "diorama-core",
- "diorama-we",
-]
-
-[[package]]
-name = "diorama-scene"
-version = "0.0.1"
-
-[[package]]
-name = "diorama-text"
-version = "0.0.1"
-dependencies = [
- "harfrust",
- "swash",
- "thiserror",
-]
-
-[[package]]
-name = "diorama-we"
-version = "0.0.1"
-dependencies = [
- "image",
- "diorama-core",
- "diorama-scene",
- "diorama-text",
- "lz4_flex",
- "serde_json",
- "thiserror",
 ]
 
 [[package]]

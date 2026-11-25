@@ -26,7 +26,15 @@ pub fn default_we_assets() -> PathBuf {
         .map_or_else(|| PathBuf::from(DEFAULT_WE_ASSETS), |d| d.join("assets"))
 }
 
-pub fn shader_compiler() -> Result<ShaderCompiler> {
+/// The compiler `scene` needs: none if all its programs are WGSL.
+pub fn shader_compiler(scene: &diorama_scene::Scene) -> Result<ShaderCompiler> {
+    if scene
+        .programs
+        .iter()
+        .all(|p| p.language == diorama_scene::ShaderLanguage::Wgsl)
+    {
+        return Ok(ShaderCompiler::without_dxc());
+    }
     let cache = diorama_platform::cache_dir().map(|d| d.join("shaders"));
     ShaderCompiler::locate(cache).context("locating the HLSL compiler")
 }
@@ -51,7 +59,28 @@ pub fn layer_factory(
         .ok()
 }
 
-/// Imports a WE scene with the user's property `choices` applied.
+/// What Diorama's own wallpapers need from the system.
+struct ProjectHost;
+
+impl diorama_project::Host for ProjectHost {
+    fn default_font(&self) -> Option<std::sync::Arc<[u8]>> {
+        Some(
+            std::fs::read(diorama_platform::default_font()?)
+                .ok()?
+                .into(),
+        )
+    }
+
+    fn video_size(&self, file: &Path) -> Option<[u32; 2]> {
+        let probe = diorama_media::probe(file)
+            .inspect_err(|e| tracing::warn!("{}: {e}", file.display()))
+            .ok()?;
+        probe.decodable.then_some([probe.width, probe.height])
+    }
+}
+
+/// Imports a WE scene, or compiles a wallpaper of Diorama's own, with the
+/// user's property `choices` applied.
 pub fn load_scene(
     dir: &Path,
     assets: Option<&Path>,
@@ -64,9 +93,14 @@ pub fn load_scene(
             "applying the wallpaper's property choices"
         );
     }
-    let mut scene =
-        diorama_we::scene::import_with_choices(dir, assets, &Limits::default(), choices)
-            .with_context(|| format!("importing {}", dir.display()))?;
+    let limits = Limits::default();
+    let mut scene = if diorama_project::is_project(dir) {
+        diorama_project::load(dir, choices, &ProjectHost, &limits)
+            .with_context(|| format!("loading {}", dir.display()))?
+    } else {
+        diorama_we::scene::import_with_choices(dir, assets, &limits, choices)
+            .with_context(|| format!("importing {}", dir.display()))?
+    };
     // Debugging aid: `DIORAMA_HIDE_LAYERS` / `DIORAMA_ONLY_LAYERS` (comma-separated
     // layer indices or name fragments) drop some layers / all others.
     let matches = |var: &str, i: usize, name: &str| {
@@ -143,7 +177,7 @@ pub fn load_scene(
         );
     }
     for s in &scene.skipped {
-        tracing::warn!("not yet supported: {s}");
+        tracing::warn!("skipped: {s}");
     }
     Ok(scene)
 }
@@ -178,7 +212,7 @@ pub fn render_to_png(
     let choices = crate::properties::choices(we_config, scene_dir, &Default::default());
     let scene = load_scene(scene_dir, assets, &choices)?;
     let gpu = Gpu::new(gpu_options)?;
-    let compiler = shader_compiler()?;
+    let compiler = shader_compiler(&scene)?;
     let started = Instant::now();
     // Like live playback: render at the size the frame needs.
     let output = present.map(|([w, h], mode)| {

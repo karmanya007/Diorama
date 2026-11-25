@@ -182,7 +182,7 @@ impl Wallpaper {
                 // colour shows: refuse instead, so the previous wallpaper
                 // stays and the reason reaches the UI.
                 anyhow::ensure!(
-                    we_assets.is_some(),
+                    we_assets.is_some() || diorama_project::is_project(path),
                     "Wallpaper Engine scenes need Wallpaper Engine's own files (its built-in \
                      shaders and effects), and Diorama did not find Wallpaper Engine in any Steam \
                      library. Install it through Steam, or start dioramad with \
@@ -452,7 +452,7 @@ impl Session {
             Content::Web(_) => unreachable!("handled above"),
             Content::Scene(source) => {
                 let scene = source.take()?;
-                let compiler = crate::headless::shader_compiler()?;
+                let compiler = crate::headless::shader_compiler(&scene)?;
                 // Composite at the size the monitors actually show (P12),
                 // like WE rendering straight into its swapchain.
                 let sizes: Vec<(u32, u32)> = match look.layout {

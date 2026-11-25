@@ -71,7 +71,7 @@ pub enum Layout {
 pub enum MediaKind {
     Image,
     Video,
-    /// A Wallpaper Engine scene project folder.
+    /// A scene project folder: Wallpaper Engine's, or one of Diorama's own.
     Scene,
     /// A web wallpaper: a Wallpaper Engine web project folder or an HTML page.
     Web,
@@ -86,7 +86,7 @@ impl MediaKind {
             match project_type(&path.join("project.json")).as_deref() {
                 Some("web") => return Some(Self::Web),
                 Some("video") => return Some(Self::Video),
-                Some("scene") => return Some(Self::Scene),
+                Some("scene" | "diorama") => return Some(Self::Scene),
                 // Some of WE's own projects have no type: go by their file.
                 _ => {
                     if let Some(kind) = project_file_kind(&path.join("project.json")) {

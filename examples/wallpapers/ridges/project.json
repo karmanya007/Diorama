@@ -1,0 +1,52 @@
+{
+  "title": "Ridges",
+  "description": "Mountain ridges at dusk. They shift with your cursor, and the words are yours to change. An example of Diorama's own wallpaper format.",
+  "type": "diorama",
+  "file": "wallpaper.json",
+  "preview": "preview.png",
+  "tags": [
+    "Landscape",
+    "Nature"
+  ],
+  "contentrating": "Everyone",
+  "general": {
+    "properties": {
+      "words": {
+        "order": 0,
+        "text": "Words",
+        "type": "textinput",
+        "value": "good evening"
+      },
+      "wordscolor": {
+        "order": 1,
+        "text": "Words colour",
+        "type": "color",
+        "value": "1 0.93 0.85"
+      },
+      "moon": {
+        "order": 2,
+        "text": "Show the moon",
+        "type": "bool",
+        "value": true
+      },
+      "moonlight": {
+        "order": 3,
+        "text": "Moonlight",
+        "type": "slider",
+        "min": 0,
+        "max": 1,
+        "step": 0.05,
+        "value": 0.8
+      },
+      "depth": {
+        "order": 4,
+        "text": "Depth",
+        "type": "slider",
+        "min": 0,
+        "max": 0.1,
+        "step": 0.01,
+        "value": 0.03
+      }
+    }
+  }
+}

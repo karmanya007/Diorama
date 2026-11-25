@@ -17,8 +17,8 @@ mod windows;
 #[cfg(windows)]
 pub use windows::{
     MediaWatcher, Platform, ProcessMonitor, SystemMonitor, Waker, WallpaperWindow, autostart,
-    cache_dir, config_dir, day_fraction, detach_console, legacy_config_dir, no_console, restart,
-    set_autostart, set_os_wallpaper, steam_dir, ui_language,
+    cache_dir, config_dir, day_fraction, default_font, detach_console, legacy_config_dir,
+    no_console, restart, set_autostart, set_os_wallpaper, steam_dir, ui_language,
 };
 
 #[cfg(target_os = "linux")]
@@ -27,7 +27,7 @@ mod linux;
 #[cfg(target_os = "linux")]
 pub use linux::{
     MediaWatcher, Platform, ProcessMonitor, SystemMonitor, Waker, WallpaperWindow, autostart,
-    day_fraction, restart, set_autostart, steam_dir,
+    day_fraction, default_font, restart, set_autostart, steam_dir,
 };
 
 #[cfg(not(windows))]
@@ -36,7 +36,7 @@ mod unsupported;
 #[cfg(not(any(windows, target_os = "linux")))]
 pub use unsupported::{
     MediaWatcher, Platform, ProcessMonitor, SystemMonitor, Waker, WallpaperWindow, autostart,
-    day_fraction, restart, set_autostart, steam_dir,
+    day_fraction, default_font, restart, set_autostart, steam_dir,
 };
 
 #[cfg(not(windows))]
