@@ -2346,7 +2346,7 @@ impl SceneRenderer {
             audio,
             audio_level,
             shift,
-            spread: self.parallax.map_or(0.0, |p| p.amount),
+            spread: self.parallax.map_or(0.0, |p| p.spread),
             centre: [self.size[0] as f32 / 2.0, self.size[1] as f32 / 2.0],
             shake,
             scene_load: &mut scene_load,

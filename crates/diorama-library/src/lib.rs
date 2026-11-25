@@ -109,6 +109,8 @@ pub struct Item {
     pub path: PathBuf,
     pub source: Source,
     pub kind: Kind,
+    /// One of Diorama's own, in a folder of the user's: the editor opens it.
+    pub editable: bool,
     pub title: String,
     pub description: String,
     pub tags: Vec<String>,
@@ -222,6 +224,7 @@ pub fn project(dir: &Path, source: Source) -> Option<Item> {
         path: dir.to_path_buf(),
         source,
         kind,
+        editable: source == Source::Folder && text_of("type").eq_ignore_ascii_case("diorama"),
         description: text_of("description").to_owned(),
         tags: p
             .get("tags")
@@ -275,6 +278,7 @@ fn media_file(path: &Path) -> Option<Item> {
         path: path.to_path_buf(),
         source: Source::Folder,
         kind,
+        editable: false,
         title,
         description: String::new(),
         tags: Vec::new(),
@@ -372,6 +376,7 @@ mod tests {
                 "{}",
                 item.title
             );
+            assert_eq!(item.editable, item.title == "Ridges");
             assert!(
                 item.properties.as_object().is_some_and(|p| !p.is_empty()),
                 "{}",

@@ -103,8 +103,10 @@ fn draw(
     let mut compile = |document: &serde_json::Value| {
         diorama_project::compile_document(document, &folder, &choices, &host, &limits, &mut cache)
     };
+    let mut ids = Vec::new();
     let mut picture = if project {
         let (document, _) = diorama_project::edit::open(dir)?;
+        ids = layer_ids(&document);
         compile(&document)?
     } else {
         Compiled {
@@ -124,7 +126,7 @@ fn draw(
     let mut videos = SceneVideos::start(&picture.scene);
     let started = Instant::now();
     let mut next = started;
-    report(out, &picture, &stage)?;
+    report(out, &picture, &ids, &stage)?;
     loop {
         // Commands until the next frame is due (or any, with none wanted).
         let due = view.interval().map(|_| next);
@@ -141,7 +143,8 @@ fn draw(
                     resized |= view.apply(&command);
                     document = command.document.or(document);
                 }
-                match document.filter(|_| project).map(|d| compile(&d)) {
+                let document = document.filter(|_| project);
+                match document.as_ref().map(&mut compile) {
                     Some(Ok(new)) => {
                         let reuse = Some((&stage, &picture.scene));
                         let made = Stage::new(&gpu, &new.scene, &compiler, view.size, reuse)?;
@@ -149,7 +152,8 @@ fn draw(
                             videos = SceneVideos::start(&new.scene);
                         }
                         (stage, picture) = (made, new);
-                        report(out, &picture, &stage)?;
+                        ids = document.as_ref().map(layer_ids).unwrap_or_default();
+                        report(out, &picture, &ids, &stage)?;
                     }
                     Some(Err(e)) => {
                         let event = Event::Document {
@@ -222,14 +226,25 @@ fn video_files(scene: &Scene) -> Vec<(usize, &VideoData)> {
         .collect()
 }
 
+/// The ids of a document's layers.
+fn layer_ids(document: &serde_json::Value) -> Vec<String> {
+    let layers = document["layers"].as_array().into_iter().flatten();
+    layers
+        .map(|l| l["id"].as_str().unwrap_or_default().to_owned())
+        .collect()
+}
+
 /// Tells the UI where the layers are and what is wrong with them.
-fn report(out: &mut impl Write, picture: &Compiled, stage: &Stage) -> Result<()> {
+fn report(out: &mut impl Write, picture: &Compiled, ids: &[String], stage: &Stage) -> Result<()> {
     let boxes = picture.layers.iter().enumerate();
     let event = Event::Document {
         width: picture.scene.width,
         height: picture.scene.height,
         layers: boxes
-            .filter_map(|(i, info)| layer_box(info, stage.renderer.text_box(i)))
+            .filter_map(|(i, info)| {
+                let id = ids.get(info.document)?;
+                layer_box(id, info, stage.renderer.text_box(i))
+            })
             .collect(),
         problems: picture.scene.skipped.clone(),
         error: None,
@@ -238,7 +253,7 @@ fn report(out: &mut impl Write, picture: &Compiled, stage: &Stage) -> Result<()>
 }
 
 /// Where a layer is around its position; `text`: as it was laid out.
-fn layer_box(info: &LayerInfo, text: Option<([u32; 2], [f32; 2])>) -> Option<LayerBox> {
+fn layer_box(id: &str, info: &LayerInfo, text: Option<([u32; 2], [f32; 2])>) -> Option<LayerBox> {
     let (size, [x, y]) = match (info.size, text) {
         (Some(size), _) => (size, [0.0, 0.0]),
         (None, Some((size, [x, y]))) => {
@@ -249,7 +264,7 @@ fn layer_box(info: &LayerInfo, text: Option<([u32; 2], [f32; 2])>) -> Option<Lay
         (None, None) => return None,
     };
     Some(LayerBox {
-        layer: info.document,
+        id: id.to_owned(),
         x,
         y,
         width: size[0],
@@ -362,9 +377,9 @@ mod tests {
             size: None,
             padding: [8.0, 10.0],
         };
-        let b = layer_box(&info, Some(([116, 60], [5.0, 7.0]))).unwrap();
-        assert_eq!((b.layer, b.width, b.height), (3, 100.0, 40.0));
+        let b = layer_box("words", &info, Some(([116, 60], [5.0, 7.0]))).unwrap();
+        assert_eq!((b.id.as_str(), b.width, b.height), ("words", 100.0, 40.0));
         assert_eq!((b.x, b.y), (5.0, -7.0));
-        assert_eq!(layer_box(&info, None), None);
+        assert_eq!(layer_box("words", &info, None), None);
     }
 }

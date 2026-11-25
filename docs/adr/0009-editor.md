@@ -176,6 +176,29 @@ only when the cursor moves something, and every two seconds in case the
 desktop lost the picture (Ridges without grain in software rendering: 283 % of
 a core before, 6 % after).
 
+## Milestone 3 (2026-11-25)
+
+The editor is a view of `diorama-ui` (*New wallpaper*, or *Edit* on a
+wallpaper of one's own): layer list, picture with handles for moving, scaling
+and turning (pulled to the middle and edges), settings made from the effects'
+manifests, undo, saving by itself, *Show on desktop*, *Share…* to a
+`.diorama` file and *Open file…* for one.
+
+- The whole document goes to the preview at each change rather than a patch;
+  while one is on its way only the newest follows. The preview compiles it
+  with what it decoded before and keeps textures and programs on the GPU:
+  60 documents a second while dragging.
+- The page pulls frames from a `preview` protocol that answers when there is
+  a newer one, so a still wallpaper costs nothing.
+- A preview that crashes is started again, up to twice within ten seconds.
+- `.diorama` files hold only what the document uses. Unpacking takes only
+  file types a wallpaper has, with names that stay in the folder, and limits.
+- New and opened wallpapers go to `Documents/Diorama`, which becomes a
+  library folder.
+
+Checked in the real app on Linux (Xvfb, WebKitGTK), driven by mouse and
+keyboard. Not yet on Windows.
+
 ## Alternatives
 
 - **Editing WE's `scene.json` in place.** Reuses the importer fully and the

@@ -4,6 +4,7 @@ All notable changes to Diorama are listed here. Versions follow [Semantic Versio
 
 ## Unreleased
 
+- The editor: make wallpapers of your own from pictures, videos, text and colours, with fifteen effects, blending and parallax (*New wallpaper* in the library, or *Edit* on one you made). Share one as a `.diorama` file and open those of others with *Open file…*. They need neither Wallpaper Engine nor its files. The format is described in `docs/formats/diorama.md`; *Ridges* in the examples is one.
 - Scenes in which nothing moves are not drawn again and again, and the system's sound is not captured for scenes that do not react to it.
 
 ## 1.2.0 (2026-11-25)

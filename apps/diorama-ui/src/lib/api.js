@@ -4,7 +4,10 @@ import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { getVersion } from '@tauri-apps/api/app';
 import { check } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
-import { open } from '@tauri-apps/plugin-dialog';
+import { listen } from '@tauri-apps/api/event';
+import { getCurrentWebview } from '@tauri-apps/api/webview';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { open, save } from '@tauri-apps/plugin-dialog';
 
 /** One dioramad request, e.g. `{ cmd: 'status' }`. Throws on daemon errors. */
 export async function call(request) {
@@ -106,6 +109,11 @@ export const setHotkeys = (change) => call({ cmd: 'set-hotkeys', ...change });
 
 export const setPolicy = (policy) => call({ cmd: 'set-policy', policy });
 export const setFolders = (folders) => call({ cmd: 'set-folders', folders });
+/** Lists `folder` in the library too. */
+export async function addLibraryFolder(folder) {
+  const { folders } = await status();
+  if (!folders.includes(folder)) await setFolders([...folders, folder]);
+}
 export const setVolume = (percent) => call({ cmd: 'volume', percent });
 /** Convert a video for hardware decoding (progress in status.conversions). */
 export const convert = (path) => call({ cmd: 'convert', path });
@@ -128,4 +136,69 @@ export async function installUpdate(update, progress) {
     if (total) progress(Math.min(done / total, 1));
   });
   await relaunch();
+}
+
+// ---- the editor (src-tauri/src/editor.rs) ----
+
+/** File types a wallpaper can hold. */
+export const FILES = {
+  image: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'tga', 'gif'],
+  video: ['mp4', 'm4v', 'mov', 'webm', 'mkv', 'avi', 'wmv'],
+  font: ['ttf', 'otf', 'ttc'],
+};
+
+/** The system's open dialog for files of `kind`; their paths. */
+export async function pickFiles(kind, multiple = true) {
+  const picked = await open({ multiple, filters: [{ name: kind, extensions: FILES[kind] }] });
+  return picked === null ? [] : [picked].flat();
+}
+
+/** A `.diorama` file to open; null if cancelled. */
+export async function pickPackage() {
+  const picked = await open({ multiple: false, filters: [{ name: 'Diorama wallpaper', extensions: ['diorama'] }] });
+  return typeof picked === 'string' ? picked : null;
+}
+
+/** Where to save a `.diorama` file; null if cancelled. */
+export async function pickSave(name) {
+  const file = await save({
+    defaultPath: name.replace(/[\\/:*?"<>|]/g, '-'),
+    filters: [{ name: 'Diorama wallpaper', extensions: ['diorama'] }],
+  });
+  return file && !file.toLowerCase().endsWith('.diorama') ? `${file}.diorama` : file;
+}
+
+/** Waits for `fn` before the window closes. */
+export const onClose = (fn) => getCurrentWindow().onCloseRequested(fn);
+
+/** Calls `fn` with the paths of files dropped on the window. */
+export const onDrop = (fn) =>
+  getCurrentWebview().onDragDropEvent((e) => {
+    if (e.payload.type === 'drop') fn(e.payload.paths);
+  });
+
+export const editorCreate = (title, size) => invoke('editor_create', { title, size });
+export const editorImport = (file) => invoke('editor_import', { file });
+export const editorExport = (dir, file) => invoke('editor_export', { dir, file });
+export const editorOpen = (dir) => invoke('editor_open', { dir });
+export const editorSave = (dir, document) => invoke('editor_save', { dir, document });
+export const editorSaveProject = (dir, project) => invoke('editor_save_project', { dir, project });
+export const editorAddAsset = (dir, source) => invoke('editor_add_asset', { dir, source });
+export const editorEffects = () => invoke('editor_effects');
+export const editorPicture = (dir) => invoke('editor_picture', { dir });
+
+export const previewStart = (dir) => invoke('preview_start', { dir });
+export const previewCommand = (command) => invoke('preview_command', { command });
+export const previewStop = () => invoke('preview_stop');
+export const onPreview = (fn) => listen('preview', (e) => fn(e.payload));
+
+/** The preview's next frame after `serial`: its pixels; null if there is
+ * none yet, `{ ended: true }` if there will be none. */
+export async function previewFrame(serial) {
+  const response = await fetch(`${convertFileSrc('frame', 'preview')}?after=${serial}`);
+  if (response.status === 204) return null;
+  if (!response.ok) return { ended: true };
+  const data = await response.arrayBuffer();
+  const [n, width, height] = new Uint32Array(data, 0, 3);
+  return { serial: n, width, height, pixels: new Uint8ClampedArray(data, 12, width * height * 4) };
 }

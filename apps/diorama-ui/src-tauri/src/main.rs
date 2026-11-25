@@ -4,6 +4,8 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod editor;
+
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -166,6 +168,10 @@ fn main() {
             Ok(())
         })
         .plugin(tauri_plugin_dialog::init())
+        .manage(editor::Previews::default())
+        .register_asynchronous_uri_scheme_protocol("preview", |context, request, responder| {
+            editor::serve(context.app_handle(), &request, responder);
+        })
         // Settings → "Check for updates": signed installers from GitHub Releases.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
@@ -174,7 +180,19 @@ fn main() {
             library,
             presets,
             autostart,
-            set_autostart
+            set_autostart,
+            editor::preview_start,
+            editor::preview_command,
+            editor::preview_stop,
+            editor::editor_create,
+            editor::editor_import,
+            editor::editor_export,
+            editor::editor_open,
+            editor::editor_save,
+            editor::editor_save_project,
+            editor::editor_add_asset,
+            editor::editor_effects,
+            editor::editor_picture
         ])
         .run(context);
     if let Err(e) = result {

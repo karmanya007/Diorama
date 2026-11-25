@@ -472,8 +472,10 @@ impl Importer<'_> {
                     .and_then(|v| v.first().copied())
                     .unwrap_or(d)
             };
+            let amount = num("cameraparallaxamount", 0.5);
             self.scene.parallax = Some(diorama_scene::Parallax {
-                amount: num("cameraparallaxamount", 0.5),
+                amount,
+                spread: amount,
                 mouse_influence: num("cameraparallaxmouseinfluence", 0.5),
                 delay: num("cameraparallaxdelay", 0.1).max(0.0),
             });

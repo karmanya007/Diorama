@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The main window: Diorama's own commands, the open dialog for file and folder properties, and installing updates (check, download, restart).",
+  "description": "The main window: Diorama's own commands, the open and save dialogs (file and folder properties, the editor's files), closing the window once the editor has saved, and installing updates (check, download, restart).",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:allow-open", "updater:default", "process:allow-restart"]
+  "permissions": ["core:default", "dialog:allow-open", "dialog:allow-save", "core:window:allow-destroy", "updater:default", "process:allow-restart"]
 }

@@ -353,6 +353,7 @@ fn parallax_moves_layers_away_from_the_cursor() {
     s.parallax = Some(Parallax {
         amount: 0.25,
         mouse_influence: 1.0,
+        spread: 0.25,
         delay: 0.0,
     });
     // Cursor at the left edge: shift = 0.25 · 64 · (0.5 − 0) = +8 px, plus

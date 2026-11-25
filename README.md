@@ -17,7 +17,7 @@ Diorama is an independent project. It is not affiliated with or endorsed by Wall
 ## Features
 
 - **Plays Wallpaper Engine content you own**: scenes (layers, effects, particles, 3D models, text, SceneScript, audio-reactive and cursor-reactive layers), videos and web wallpapers, read straight from your local Workshop folder.
-- **Your own wallpapers**: images, videos and web pages from any folder. Three [example wallpapers](examples/wallpapers) are included to start from.
+- **Your own wallpapers**: images, videos and web pages from any folder, and wallpapers made in Diorama's own editor. [Example wallpapers](examples/wallpapers) are included to start from.
 - **Per-monitor or spanning**: a different wallpaper per monitor, or one stretched across all of them, with fill / fit / stretch.
 - **Wallpaper settings**: each wallpaper's own options (colours, sliders, text, files…), starting from the choices you made in Wallpaper Engine.
 - **Playlists**: rotate wallpapers on a timer or by time of day, per monitor.
@@ -75,6 +75,7 @@ gnome-extensions enable diorama@karmanya007.github.io
 - **Library**: lists your Workshop items, Wallpaper Engine's projects and any folders you add (Settings → Library folders). Select a wallpaper to see its details, preview and settings, then choose the monitors and press **Show**.
 - **Monitors**: what each monitor shows, and whether it is paused and why.
 - **Playlists**: build a list, pick the order and when it changes (every N minutes, or at set times of day), and the monitors it runs on.
+- **Editor**: *New wallpaper* in the library makes one of your own from pictures, videos, text and colours, with effects and parallax. *Share…* writes it to a `.diorama` file for others; *Open file…* opens one.
 - **Presets** (under *Monitors*): save what the monitors show under a number from 1 to 9. Hotkeys (Ctrl+Alt and the number, or other keys you choose) are off until you turn them on; Wayland desktops have none, so bind keys to `diorama preset 1` there.
 - **Settings**: pause rules and presets, volume, library folders, start Diorama when you sign in, updates.
 
@@ -197,9 +198,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) before sending changes.
 ## Roadmap
 
 - **Windows**: a code-signed installer, the winget listing, remaining scene differences.
-- **Linux**: testing on real desktops; Diorama's wallpaper in GNOME's overview; Flatpak and distribution packages.
+- **Linux**: testing on real desktops; Flatpak and distribution packages.
 - **macOS.**
-- **An editor** for Diorama's own wallpaper format.
+- **More for the editor**: motion and keyframes, particles, scripts.
 
 ## Content and legal
 

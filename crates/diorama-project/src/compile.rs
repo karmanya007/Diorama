@@ -193,6 +193,7 @@ fn parallax(fields: &Fields<'_>) -> Option<Parallax> {
         amount,
         mouse_influence: 1.0,
         delay: f.number("smoothing", 0.15, [0.0, 5.0]),
+        spread: 0.0,
     })
 }
 

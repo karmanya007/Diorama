@@ -1,5 +1,7 @@
 <script>
-  import { app, scan, costOf, weight } from './state.svelte.js';
+  import { app, attempt, refreshStatus, scan, costOf, toast, weight } from './state.svelte.js';
+  import * as api from './api.js';
+  import NewWallpaper from './editor/NewWallpaper.svelte';
   import Preview from './Preview.svelte';
 
   const KINDS = [
@@ -18,6 +20,20 @@
   let sort = $state('name');
   let mature = $state(false);
   let hovered = $state(null);
+  let making = $state(false);
+
+  async function openFile() {
+    await attempt(async () => {
+      const file = await api.pickPackage();
+      if (!file) return;
+      const made = await api.editorImport(file);
+      await api.addLibraryFolder(made.folder);
+      await refreshStatus();
+      await scan();
+      app.selected = app.items.find((i) => i.path === made.dir) ?? null;
+      toast(`Added ${app.selected?.title ?? 'the wallpaper'}`);
+    });
+  }
 
   const playable = $derived(
     app.items.filter((i) => ['scene', 'video', 'web', 'image'].includes(i.kind)),
@@ -79,6 +95,8 @@
     <span class="muted">{shown.length} of {playable.length}</span>
     <div class="spacer"></div>
     <input type="search" placeholder="Search titles, tags, Workshop ids" bind:value={query} aria-label="Search" />
+    <button onclick={() => (making = true)} title="Make a wallpaper of your own">New wallpaper</button>
+    <button onclick={openFile} title="Open a .diorama file someone shared">Open file…</button>
     <button onclick={scan} disabled={app.scanning} title="Look for new wallpapers">
       {app.scanning ? 'Scanning…' : 'Rescan'}
     </button>
@@ -114,6 +132,8 @@
     </label>
   </div>
 </header>
+
+{#if making}<NewWallpaper onclose={() => (making = false)} />{/if}
 
 <section class="grid scroll">
   {#if app.scanning && !app.items.length}

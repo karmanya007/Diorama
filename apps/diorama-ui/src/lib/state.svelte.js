@@ -14,6 +14,8 @@ export const app = $state({
   selected: null,
   /** Output ids the next "Show" targets (empty: every monitor). */
   target: [],
+  /** Folder of the wallpaper being edited, if one is. */
+  editing: null,
   toast: '',
 });
 

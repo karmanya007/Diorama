@@ -55,10 +55,10 @@ pub enum Event {
 }
 
 /// Where a layer is around its position, before scaling and turning it.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LayerBox {
-    /// Which of the document's layers.
-    pub layer: usize,
+    /// The layer's `id` in the document.
+    pub id: String,
     /// Its middle from its position; y down.
     pub x: f32,
     pub y: f32,
@@ -165,7 +165,7 @@ mod tests {
             width: 1920,
             height: 1080,
             layers: vec![LayerBox {
-                layer: 0,
+                id: "sky".into(),
                 x: 0.5,
                 y: -2.0,
                 width: 10.0,

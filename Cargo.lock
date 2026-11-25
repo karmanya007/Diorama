@@ -1185,6 +1185,7 @@ dependencies = [
  "diorama-ipc",
  "diorama-library",
  "diorama-platform",
+ "diorama-project",
  "serde",
  "serde_json",
  "tauri",

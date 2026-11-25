@@ -264,6 +264,9 @@ pub struct Parallax {
     pub mouse_influence: f32,
     /// Smoothing time constant in seconds.
     pub delay: f32,
+    /// How far layers also move away from the scene's middle: depth · spread ·
+    /// their distance from it (WE: the same as `amount`).
+    pub spread: f32,
 }
 
 /// Smooth random camera drift. Multi-frame captures show a slow,

@@ -7,6 +7,7 @@
   import Playlists from './lib/Playlists.svelte';
   import Settings from './lib/Settings.svelte';
   import Details from './lib/Details.svelte';
+  import Editor from './lib/editor/Editor.svelte';
 
   const views = [
     { id: 'library', label: 'Library', icon: 'M4 5h16v2H4zm0 6h16v2H4zm0 6h10v2H4z' },
@@ -32,6 +33,9 @@
   const paused = $derived(app.status?.user_paused ?? false);
 </script>
 
+{#if app.editing}
+  {#key app.editing}<Editor dir={app.editing} />{/key}
+{:else}
 <div class="shell">
   <nav>
     <div class="brand">
@@ -92,6 +96,7 @@
     <Details />
   {/if}
 </div>
+{/if}
 
 {#if app.toast}
   <div class="toast" role="status">{app.toast}</div>

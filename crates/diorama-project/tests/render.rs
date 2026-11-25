@@ -136,7 +136,9 @@ fn depth_moves_layers_with_the_cursor() {
     let layers = json!([
         {"type": "color", "color": "#f00", "size": [8, 8], "position": [0, -8], "depth": 1},
         {"type": "color", "color": "#0f0", "size": [8, 8], "position": [0, 8]},
+        {"type": "color", "color": "#00f", "size": [4, 4], "position": [26, 0], "depth": 1},
     ]);
+    let rest = draw("#000", layers.clone(), MIDDLE);
     let Some(p) = draw("#000", layers, [1.0, 0.5]) else {
         return;
     };
@@ -144,6 +146,10 @@ fn depth_moves_layers_with_the_cursor() {
     p.assert(24, 8, [255, 0, 0], "moved left");
     p.assert(32, 8, [0, 0, 0], "where it was");
     p.assert(32, 24, [0, 255, 0], "no depth");
+    // With the cursor in the middle everything is where the document says.
+    let rest = rest.unwrap();
+    rest.assert(57, 15, [0, 0, 255], "right of the middle");
+    rest.assert(60, 15, [0, 0, 0], "and no further");
 }
 
 #[test]

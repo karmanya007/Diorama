@@ -1,6 +1,6 @@
 # Diorama wallpapers (format 1)
 
-Diorama's own wallpapers ([ADR-009](../adr/0009-editor.md)). They need neither Wallpaper Engine nor a shader compiler. Read by `crates/diorama-project`; [examples/wallpapers/ridges](../../examples/wallpapers/ridges) is one. The format is new and not final until the editor is released.
+Diorama's own wallpapers ([ADR-009](../adr/0009-editor.md)). They need neither Wallpaper Engine nor a shader compiler. Read by `crates/diorama-project`; [examples/wallpapers/ridges](../../examples/wallpapers/ridges) is one. The format is new and not final until the editor is released. The editor (*New wallpaper* in the library) writes it.
 
 ## Folder
 
@@ -124,6 +124,10 @@ Any value except `id`, `type` and `version` can come from a user property:
 ```
 
 Numbers outside a key's range are moved into it. A value of the wrong type counts as missing. A layer that cannot be used (a missing image, an unknown type) is left out; the log names it, and the rest of the wallpaper shows. Unknown keys are ignored.
+
+### Sharing
+
+A `.diorama` file is the folder as a zip: `project.json`, `wallpaper.json`, the preview and the assets the document uses. Opening one takes only those kinds of files (JSON, images, videos, fonts), at most 2000 of them and 4 GB, and refuses names that leave the folder.
 
 ### Limits
 

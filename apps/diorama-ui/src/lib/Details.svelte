@@ -152,6 +152,13 @@
       </p>
     {/if}
 
+    {#if item.editable}
+      <div class="row">
+        <button onclick={() => (app.editing = item.path)}>Edit</button>
+        <span class="muted small">Made with Diorama: yours to change.</span>
+      </div>
+    {/if}
+
     <h3>Show on</h3>
     <div class="row wrap">
       <button class="pill" class:on={app.target.length === 0} onclick={() => (app.target = [])}>All monitors</button>
