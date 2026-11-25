@@ -234,6 +234,7 @@
     flex-direction: column;
     gap: 4px;
     text-align: left;
+    white-space: normal;
     padding: 10px 12px;
   }
 

@@ -370,6 +370,13 @@ pub enum Request {
         path: PathBuf,
         properties: serde_json::Map<String, serde_json::Value>,
     },
+    /// The files of a wallpaper have changed: load it again where it shows.
+    /// The user's values of the properties in `reset` are forgotten.
+    Reload {
+        path: PathBuf,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        reset: Vec<String>,
+    },
     /// A wallpaper's property values as Diorama applies them: the project's
     /// defaults, then WE's choices, then those set in Diorama.
     Properties {

@@ -1524,23 +1524,64 @@ impl Daemon<'_> {
                 Content::Image(_) | Content::Video(_) => {}
             }
         }
-        for &i in &reload {
+        self.load_again(&reload)
+    }
+
+    /// Loads the wallpapers of `slots` again; the old ones stay up until the
+    /// new ones have drawn, or where they cannot be loaded.
+    fn load_again(&mut self, slots: &[usize]) -> Result<()> {
+        if slots.is_empty() {
+            return Ok(());
+        }
+        let mut result = Ok(());
+        for &i in slots {
             let (path, kind, look) = {
                 let w = &self.slots[i].wallpaper;
                 (w.path.clone(), w.kind, w.look)
             };
-            let wallpaper = self.load(&path, Some(kind), look)?;
+            let wallpaper = match self.load(&path, Some(kind), look) {
+                Ok(wallpaper) => wallpaper,
+                Err(e) => {
+                    result = Err(e);
+                    continue;
+                }
+            };
             let slot = &mut self.slots[i];
             slot.wallpaper = wallpaper;
-            if let Some(old) = slot.session.take() {
+            if let Some(mut old) = slot.session.take() {
+                slot.wallpaper.continue_videos(&mut old);
                 retire(&mut self.retiring, old);
             }
             slot.shown_on.clear();
+            slot.failures = 0;
         }
-        if !reload.is_empty() {
-            self.rebuild(false);
+        self.rebuild(false);
+        result
+    }
+
+    /// The files of the wallpaper at `path` have changed.
+    fn reload(&mut self, path: &Path, reset: &[String]) -> Result<()> {
+        let key = session::wallpaper_path(path, None)
+            .with_context(|| format!("unknown media type for {}", path.display()))?;
+        let mut values = self.overrides_of(&key);
+        let before = values.len();
+        values.retain(|name, _| !reset.contains(name));
+        if values.len() != before {
+            self.overrides.retain(|(p, _)| !same_path(p, &key));
+            if !values.is_empty() {
+                self.overrides.push((key.clone(), values));
+            }
+            self.persist();
         }
-        Ok(())
+        let shown: Vec<usize> = (0..self.slots.len())
+            .filter(|&i| same_path(&self.slots[i].wallpaper.path, &key))
+            .collect();
+        let fallback = self.os_fallback;
+        for &i in &shown {
+            // The OS's picture of it is an old one.
+            self.slots[i].fallback_pending = fallback;
+        }
+        self.load_again(&shown)
     }
 
     /// A wallpaper's property values as it sees them.
@@ -1927,6 +1968,7 @@ impl Daemon<'_> {
             Request::SetProperties { path, properties } => {
                 ok_or_error(self.set_properties(&path, &properties))
             }
+            Request::Reload { path, reset } => ok_or_error(self.reload(&path, &reset)),
             Request::Properties { path } => match self.properties(&path) {
                 Ok(values) => Response::Properties {
                     values: values.into_iter().collect(),

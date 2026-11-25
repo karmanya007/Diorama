@@ -53,6 +53,8 @@ pub struct SceneSource {
     /// Property values: WE's choices and the user's overrides.
     choices: crate::properties::Values,
     imported: std::cell::RefCell<Option<Box<diorama_scene::Scene>>>,
+    /// Those the scene played before it was loaded again: they go on.
+    videos: std::cell::RefCell<Option<crate::videos::SceneVideos>>,
 }
 
 impl SceneSource {
@@ -65,6 +67,18 @@ impl SceneSource {
                 self.we_assets.as_deref(),
                 &self.choices,
             )?)),
+        }
+    }
+}
+
+impl Wallpaper {
+    /// Its videos that `before` (the same wallpaper, as it was) also plays go
+    /// on from where they are; `before` stands still from now on.
+    pub fn continue_videos(&self, before: &mut Session) {
+        if let Content::Scene(source) = &self.content
+            && let Renderer::Scene { videos, .. } = &mut before.renderer
+        {
+            *source.videos.borrow_mut() = videos.take();
         }
     }
 }
@@ -200,6 +214,7 @@ impl Wallpaper {
                     we_assets: we_assets.map(Path::to_path_buf),
                     choices,
                     imported: std::cell::RefCell::new(Some(Box::new(scene))),
+                    videos: Default::default(),
                 })
             }
         };
@@ -491,7 +506,7 @@ impl Session {
                 let audio = (scripts.is_some() || renderer.uses_audio())
                     .then(SceneAudio::start)
                     .flatten();
-                let videos = crate::videos::SceneVideos::start(&scene);
+                let videos = crate::videos::SceneVideos::follow(source.videos.take(), &scene);
                 let sounds = crate::sounds::SceneSounds::new(&scene);
                 let [r, g, b] = scene.scheme_color;
                 let scene_clear = [r, g, b, 1.0];

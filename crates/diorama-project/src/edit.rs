@@ -1,13 +1,15 @@
 //! Making and changing wallpaper folders (the editor's file work).
 
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
 use crate::{Assets, DOCUMENT, Error, Folder, Result, VERSION};
 
+/// What is changed and not saved yet.
+const DRAFT: &str = "draft.json";
 /// Largest video asset copied in.
 const MAX_VIDEO: u64 = 4 << 30;
 /// Longest folder or file name made here, in characters.
@@ -116,6 +118,32 @@ pub fn save_project(dir: &Path, project: &Value) -> Result<()> {
     write_json(&dir.join("project.json"), project)
 }
 
+/// What was changed and not saved yet, if anything: the document and
+/// project.json, as [`open`] gives them.
+pub fn draft(dir: &Path) -> Option<(Value, Value)> {
+    let data = Folder::new(dir).read(DRAFT, 2 * crate::MAX_JSON).ok()?;
+    let mut draft = crate::parse(&data).ok()?;
+    let (document, project) = (draft["document"].take(), draft["project"].take());
+    let known = document["version"].as_u64().is_some_and(|v| v <= VERSION);
+    (known && project.is_object()).then_some((document, project))
+}
+
+/// Keeps what is not saved yet (`None`: nothing).
+pub fn save_draft(dir: &Path, draft: Option<(&Value, &Value)>) -> Result<()> {
+    let path = dir.join(DRAFT);
+    match draft {
+        Some((document, project)) => {
+            let value = json!({ "document": document, "project": project });
+            let data = serde_json::to_vec(&value).map_err(|e| failed(&path, &e))?;
+            replace(&path, &data).map_err(|e| failed(&path, &e))
+        }
+        None => match fs::remove_file(&path) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => Err(failed(&path, &e)),
+            _ => Ok(()),
+        },
+    }
+}
+
 fn write_json(path: &Path, value: &Value) -> Result<()> {
     let mut data = serde_json::to_vec_pretty(value).map_err(|e| failed(path, &e))?;
     data.push(b'\n');
@@ -156,6 +184,10 @@ pub fn add_asset(dir: &Path, source: &Path) -> Result<String> {
     {
         return Ok(format!("assets/{name}"));
     }
+    let same = |path: &Path| {
+        fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() == meta.len())
+            && same_content(path, source).unwrap_or(false)
+    };
     let stem = source.file_stem().unwrap_or_default().to_string_lossy();
     let ext = source.extension().unwrap_or_default().to_string_lossy();
     let (stem, ext) = (tidy(&stem, "asset"), ext.to_ascii_lowercase());
@@ -166,6 +198,10 @@ pub fn add_asset(dir: &Path, source: &Path) -> Result<String> {
         };
         let target = assets.join(&name);
         if target.exists() {
+            // Added before.
+            if same(&target) {
+                return Ok(format!("assets/{name}"));
+            }
             continue;
         }
         fs::copy(source, &target).map_err(|e| failed(&target, &e))?;
@@ -195,6 +231,26 @@ pub fn save_preview(dir: &Path, rgba: &[u8], width: u32, height: u32) -> Result<
         save_project(dir, &project)?;
     }
     Ok(())
+}
+
+fn same_content(a: &Path, b: &Path) -> io::Result<bool> {
+    let mut files = [a, b].map(fs::File::open).into_iter();
+    let (Some(a), Some(b)) = (files.next(), files.next()) else {
+        return Ok(false);
+    };
+    let (mut a, mut b) = (a?, b?);
+    let mut blocks = [vec![0; 1 << 20], vec![0; 1 << 20]];
+    let [x, y] = &mut blocks;
+    loop {
+        let n = a.read(x)?;
+        if n == 0 {
+            return Ok(b.read(y)? == 0);
+        }
+        b.read_exact(&mut y[..n])?;
+        if x[..n] != y[..n] {
+            return Ok(false);
+        }
+    }
 }
 
 /// A new folder under `parent` named after `title`.
@@ -298,6 +354,27 @@ mod tests {
     }
 
     #[test]
+    fn drafts_are_kept_until_saved() {
+        let root = temp("draft");
+        let dir = create(&root, "w", [10, 10]).unwrap();
+        assert!(draft(&dir).is_none());
+        let (mut document, project) = open(&dir).unwrap();
+        document["mine"] = json!(1);
+        save_draft(&dir, Some((&document, &project))).unwrap();
+        assert_eq!(draft(&dir), Some((document, project.clone())));
+        // The wallpaper itself is as it was.
+        assert!(open(&dir).unwrap().0.get("mine").is_none());
+        save_draft(&dir, Some((&json!({"version": VERSION + 1}), &project))).unwrap();
+        assert!(draft(&dir).is_none(), "of a newer version");
+        fs::write(dir.join(DRAFT), "{").unwrap();
+        assert!(draft(&dir).is_none(), "broken");
+        save_draft(&dir, None).unwrap();
+        save_draft(&dir, None).unwrap();
+        assert!(!dir.join(DRAFT).exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn assets_are_copied_under_names_of_their_own() {
         let root = temp("assets");
         let dir = create(&root, "w", [10, 10]).unwrap();
@@ -307,6 +384,10 @@ mod tests {
         fs::write(&source, "two").unwrap();
         assert_eq!(add_asset(&dir, &source).unwrap(), "assets/Photo no 1-2.png");
         assert_eq!(fs::read(dir.join("assets/Photo no 1.png")).unwrap(), b"one");
+        // The same file again is not copied again.
+        assert_eq!(add_asset(&dir, &source).unwrap(), "assets/Photo no 1-2.png");
+        fs::write(&source, "owt").unwrap();
+        assert_eq!(add_asset(&dir, &source).unwrap(), "assets/Photo no 1-3.png");
         let inside = dir.join("assets/Photo no 1.png");
         assert_eq!(add_asset(&dir, &inside).unwrap(), "assets/Photo no 1.png");
         let program = root.join("run.exe");

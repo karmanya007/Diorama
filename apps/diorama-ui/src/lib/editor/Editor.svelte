@@ -6,6 +6,7 @@
   import { Editor } from './state.svelte.js';
   import Inspector from './Inspector.svelte';
   import Layers from './Layers.svelte';
+  import Leave from './Leave.svelte';
   import Stage from './Stage.svelte';
 
   let { dir } = $props();
@@ -14,6 +15,7 @@
   let ready = $state(false);
   let failed = $state('');
   let busy = $state(false);
+  let asking = $state(false);
 
   onMount(() => {
     const undrop = api.onDrop((paths) =>
@@ -25,15 +27,28 @@
       () => (ready = true),
       (e) => (failed = String(e?.message ?? e)),
     );
-    // What is not written yet is, before the window goes.
-    const unclose = api.onClose(() => editor.save());
+    // What is not saved is there the next time.
+    const unclose = api.onClose(() => editor.keep());
     return () => {
       for (const registered of [undrop, unclose]) registered.then((stop) => stop());
     };
   });
 
-  async function leave() {
+  async function save() {
+    if (!ready || busy || editor.saving) return;
+    await attempt(() => editor.save());
+  }
+
+  /** `how`: 'save', 'discard' or 'stay'; nothing: asks if it matters. */
+  async function leave(how) {
+    asking = !how && editor.dirty;
+    if (asking || how === 'stay') return;
     busy = true;
+    if (how === 'save') {
+      const saved = await attempt(() => editor.save().then(() => true));
+      if (!saved) return (busy = false);
+    }
+    if (how === 'discard') editor.discard();
     if (ready) await attempt(() => editor.close());
     // `dir` goes with this component.
     const path = editor.dir || dir;
@@ -45,7 +60,7 @@
   async function show() {
     busy = true;
     await attempt(async () => {
-      await editor.finish();
+      await editor.save();
       await api.setWallpaper(dir, [], undefined, 'per-output');
       await refreshStatus();
       toast('Showing on every monitor');
@@ -56,7 +71,7 @@
   async function share() {
     busy = true;
     await attempt(async () => {
-      await editor.finish();
+      await editor.save();
       const file = await api.pickSave(`${editor.project.title || 'wallpaper'}.diorama`);
       if (!file) return;
       await api.editorExport(dir, file);
@@ -66,8 +81,15 @@
   }
 
   function key(e) {
+    if (ready && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+      // Also while typing: what is typed counts first.
+      document.activeElement?.blur?.();
+      save();
+      e.preventDefault();
+      return;
+    }
     const typing = e.target.closest?.('input:not([type=range]):not([type=checkbox]):not([type=color]), textarea, select');
-    if (!ready || typing) return;
+    if (!ready || typing || asking) return;
     const ctrl = e.ctrlKey || e.metaKey;
     const step = e.shiftKey ? 10 : 1;
     const arrows = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };
@@ -75,7 +97,6 @@
     if (ctrl && e.key.toLowerCase() === 'z') e.shiftKey ? editor.redo() : editor.undo();
     else if (ctrl && e.key.toLowerCase() === 'y') editor.redo();
     else if (ctrl && e.key.toLowerCase() === 'd' && layer) editor.duplicate(layer.id);
-    else if (ctrl && e.key.toLowerCase() === 's') editor.save();
     else if ((e.key === 'Delete' || e.key === 'Backspace') && layer) editor.remove(layer.id);
     else if (e.key === 'Escape') editor.selected = null;
     else if (arrows[e.key] && !e.altKey && layer && layer.type !== 'adjustment' && !editor.bound(layer.position) && e.target.type !== 'range') {
@@ -91,7 +112,7 @@
 
 <div class="editor">
   <header class="row">
-    <button class="ghost" onclick={leave} disabled={busy}>← Library</button>
+    <button class="ghost" onclick={() => leave()} disabled={busy}>← Library</button>
     {#if ready}
       <input
         class="title"
@@ -101,14 +122,18 @@
         value={editor.project.title ?? ''}
         onchange={(e) => editor.changeProject((p) => (p.title = e.currentTarget.value.trim() || 'Wallpaper'))}
       />
-      <span class="muted status" class:bad={editor.status === 'failed'}>
-        {editor.status === 'saved' ? 'Saved' : editor.status === 'saving' ? 'Saving…' : 'Not saved'}
+      <span class="muted status" role="status">
+        {editor.saving ? 'Saving…' : !editor.dirty ? 'Saved' : editor.restored ? 'Unsaved changes from last time' : 'Unsaved changes'}
       </span>
+      {#if editor.restored && !editor.saving}
+        <button class="ghost" onclick={() => editor.discard()} title="Back to the wallpaper as it is saved">Discard</button>
+      {/if}
       <div class="spacer"></div>
       <button class="ghost" onclick={() => editor.undo()} disabled={!editor.past.length} title="Undo (Ctrl+Z)">Undo</button>
       <button class="ghost" onclick={() => editor.redo()} disabled={!editor.future.length} title="Redo (Ctrl+Y)">Redo</button>
-      <button onclick={show} disabled={busy}>Show on desktop</button>
-      <button class="primary" onclick={share} disabled={busy} title="One file to give to others">Share…</button>
+      <button class="primary" onclick={save} disabled={busy || editor.saving || !editor.dirty} title="Saves the wallpaper and its settings; where it shows, it changes (Ctrl+S)">Save</button>
+      <button onclick={show} disabled={busy || editor.saving} title="Saves it and shows it on every monitor">Show on desktop</button>
+      <button onclick={share} disabled={busy || editor.saving} title="One file to give to others">Share…</button>
     {/if}
   </header>
   {#if failed}
@@ -126,6 +151,10 @@
     </div>
   {/if}
 </div>
+
+{#if asking}
+  <Leave title={editor.project.title} onanswer={leave} />
+{/if}
 
 <style>
   .editor {
@@ -148,10 +177,6 @@
 
   .status {
     font-size: 12px;
-  }
-
-  .status.bad {
-    color: var(--danger);
   }
 
   .panes {

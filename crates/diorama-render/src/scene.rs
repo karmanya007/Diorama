@@ -21,6 +21,7 @@ use diorama_gpu::{Gpu, wgpu};
 use diorama_scene::{self as ir, Blend, LayerKind, TextureBinding};
 use wgpu::util::DeviceExt as _;
 
+use crate::VideoBlit;
 use crate::text::TextState;
 
 /// Scene targets use WE's gamma-space RGBA8 (no sRGB conversion)...
@@ -1101,31 +1102,37 @@ impl SceneRenderer {
         self.shared.system.contains_key(name)
     }
 
-    /// Replaces the pixels of scene texture `texture` (a video frame), tightly
-    /// packed RGBA8 of `width × height`, clipped to the texture's size.
-    pub fn write_texture(&self, gpu: &Gpu, texture: usize, width: u32, height: u32, rgba: &[u8]) {
+    /// Shows the frame last uploaded to `video` in scene texture `texture`,
+    /// pixel by pixel from its corner.
+    pub fn show_video(&self, gpu: &Gpu, texture: usize, video: &VideoBlit) {
         let Some(asset) = self.shared.assets.get(texture) else {
             return;
         };
-        let size = asset.texture.size();
-        let (w, h) = (width.min(size.width), height.min(size.height));
-        if w == 0 || h == 0 || rgba.len() < (width as usize) * (height as usize) * 4 {
+        if !asset
+            .texture
+            .usage()
+            .contains(wgpu::TextureUsages::RENDER_ATTACHMENT)
+        {
             return;
         }
-        gpu.queue.write_texture(
-            asset.texture.as_image_copy(),
-            rgba,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(width * 4),
-                rows_per_image: Some(height),
-            },
-            wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-        );
+        let size = asset.texture.size();
+        video.draw_unscaled(gpu, &asset.view, (size.width, size.height));
+    }
+
+    /// Whether a visible layer shows scene texture `texture`.
+    pub fn shows_texture(&self, texture: usize) -> bool {
+        let shown = |p: &ir::Pass| {
+            p.textures
+                .values()
+                .any(|t| matches!(t, TextureBinding::Asset(id) if id.0 == texture))
+        };
+        self.ir.layers.iter().zip(&self.state).any(|(l, state)| {
+            state.visible
+                && std::iter::once(&l.albedo)
+                    .chain(l.composite.as_ref())
+                    .chain(l.effects.iter().flat_map(|e| &e.passes))
+                    .any(shown)
+        })
     }
 
     /// Offset from a text layer's anchor to the centre of its text box.
@@ -3236,6 +3243,11 @@ fn upload(gpu: &Gpu, t: &ir::Texture) -> AssetTexture {
         data.extend_from_slice(mip);
         levels += 1;
     }
+    let mut usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST;
+    if t.video.is_some() {
+        // Frames are drawn into it.
+        usage |= wgpu::TextureUsages::RENDER_ATTACHMENT;
+    }
     let texture = gpu.device.create_texture_with_data(
         &gpu.queue,
         &wgpu::TextureDescriptor {
@@ -3245,7 +3257,7 @@ fn upload(gpu: &Gpu, t: &ir::Texture) -> AssetTexture {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            usage,
             view_formats: &[],
         },
         wgpu::util::TextureDataOrder::LayerMajor,

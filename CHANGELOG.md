@@ -4,8 +4,10 @@ All notable changes to Diorama are listed here. Versions follow [Semantic Versio
 
 ## Unreleased
 
-- The editor: make wallpapers of your own from pictures, videos, text and colours, with fifteen effects, blending and parallax (*New wallpaper* in the library, or *Edit* on one you made). Share one as a `.diorama` file and open those of others with *Open file…*. They need neither Wallpaper Engine nor its files. The format is described in `docs/formats/diorama.md`; *Ridges* in the examples is one.
+- The editor: make wallpapers of your own from pictures, videos, text and colours, with fifteen effects, blending and parallax (*New wallpaper* in the library, or *Edit* on one you made). Share one as a `.diorama` file and open those of others with *Open file…*. They need neither Wallpaper Engine nor its files. The format is described in `docs/formats/diorama.md`; *Ridges* in the examples is one. *Save* (Ctrl+S) writes a wallpaper and its settings, and monitors that show it change at once; what is not saved is kept for the next time.
 - The colour picker (editor and wallpaper settings) has a dropper that takes a colour from anywhere on the screen.
+- Videos inside scenes play at an even speed: their frames are converted on the GPU (four 1080p60 videos in one scene: 60 fps instead of 12), and a video that falls behind no longer runs to catch up. Those in hidden layers are not decoded.
+- Settings: the descriptions of the pause presets no longer run out of their buttons.
 - Scenes in which nothing moves are not drawn again and again, and the system's sound is not captured for scenes that do not react to it.
 
 ## 1.2.0 (2026-11-25)

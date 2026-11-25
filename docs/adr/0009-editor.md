@@ -119,7 +119,7 @@ Each is usable and tested alone; the first release can stop after 3.
 | 0 | Spike: preview process, frames to a canvas, WGSL program in the renderer | 30 fps at 960×540 on Windows and in WebKitGTK; numbers recorded here |
 | 1 | Format and compiler: image, video, solid colour and text layers; transform, opacity, blend, parallax; `dioramad` and the library play it | golden images on Windows and Linux (lavapipe); fuzz target; an example in `examples/` |
 | 2 | Effects: engine, manifests, the first set | a golden image per effect; none needs DXC |
-| 3 | Editor: layer list, adding and ordering, handles, settings from manifests, undo, autosave, preview, export to `.diorama`, opening one | a wallpaper made, shared as a file and shown on another machine without touching JSON |
+| 3 | Editor: layer list, adding and ordering, handles, settings from manifests, undo, saving (unsaved changes kept as a draft), preview, export to `.diorama`, opening one | a wallpaper made, shared as a file and shown on another machine without touching JSON |
 | 4 | Motion: keyframe timeline, audio-driven values, user properties made in the editor | the example wallpapers use each |
 | 5 | Particles: emitter presets and their settings | golden images; cost shown while editing |
 | 6 | Scripts on values (the SceneScript engine, our own API names) and custom WGSL effects | limits and watchdog tested with hostile input |

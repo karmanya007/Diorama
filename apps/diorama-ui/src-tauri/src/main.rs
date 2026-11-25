@@ -210,6 +210,7 @@ fn main() {
             editor::editor_export,
             editor::editor_open,
             editor::editor_save,
+            editor::editor_draft,
             editor::editor_save_project,
             editor::editor_add_asset,
             editor::editor_effects,

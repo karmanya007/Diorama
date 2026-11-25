@@ -74,6 +74,10 @@ export async function properties(path) {
 export const setProperties = (path, properties) =>
   call({ cmd: 'set-properties', path, properties });
 
+/** The files of the wallpaper `path` have changed: it shows as it is now where
+ * it shows, without the user's values of the properties in `reset`. */
+export const reload = (path, reset) => call({ cmd: 'reload', path, reset });
+
 export async function playlists() {
   return (await call({ cmd: 'playlists' })).playlists;
 }
@@ -186,6 +190,8 @@ export const editorExport = (dir, file) => invoke('editor_export', { dir, file }
 export const editorOpen = (dir) => invoke('editor_open', { dir });
 export const editorSave = (dir, document) => invoke('editor_save', { dir, document });
 export const editorSaveProject = (dir, project) => invoke('editor_save_project', { dir, project });
+/** Keeps changes that are not saved yet (null: forgets them). */
+export const editorDraft = (dir, draft) => invoke('editor_draft', { dir, draft });
 export const editorAddAsset = (dir, source) => invoke('editor_add_asset', { dir, source });
 export const editorFonts = () => invoke('editor_fonts');
 export const editorAddFont = (dir, family, bold, italic) => invoke('editor_add_font', { dir, family, bold, italic });

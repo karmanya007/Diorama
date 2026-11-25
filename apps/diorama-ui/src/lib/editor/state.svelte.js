@@ -1,11 +1,11 @@
-// The wallpaper being edited: its document with undo, saving by itself, and
-// its preview (a process that draws it, see src-tauri/src/editor.rs).
+// The wallpaper being edited: its document with undo, saving (what is not
+// saved is kept as a draft), and its preview (a process that draws it, see src-tauri/src/editor.rs).
 import * as api from '../api.js';
 import { toast } from '../state.svelte.js';
 import { fromHex } from '../props.js';
 import { pair } from './geometry.js';
 
-const SAVE_AFTER = 800;
+const DRAFT_AFTER = 800;
 /** Changes of one kind within this time are undone together. */
 const MERGE_WITHIN = 1000;
 const MAX_UNDO = 200;
@@ -24,8 +24,11 @@ export class Editor {
   fonts = $state.raw([]);
   /** Id of the selected layer. */
   selected = $state(null);
-  /** 'saved', 'saving' or 'failed'. */
-  status = $state('saved');
+  /** Whether there are changes that are not saved. */
+  dirty = $state(false);
+  saving = $state(false);
+  /** The changes are from an earlier time. */
+  restored = $state(false);
   /** Where layers are (preview.rs, `LayerBox`), by id. */
   boxes = $state.raw({});
   problems = $state.raw([]);
@@ -36,10 +39,11 @@ export class Editor {
 
   #lastKind = null;
   #lastAt = 0;
-  #saveTimer;
-  #saving = Promise.resolve();
-  #projectDirty = false;
-  #documentDirty = false;
+  /** The document and project.json as they are saved (JSON). */
+  #saved = '';
+  #draftTimer;
+  /** Writes of files, one after the other. */
+  #writes = Promise.resolve();
   #sending = false;
   #unsent = false;
   #size = null;
@@ -57,14 +61,22 @@ export class Editor {
     this.effects = await api.editorEffects();
     // Looking through the fonts takes a moment the first time.
     api.editorFonts().then((fonts) => (this.fonts = fonts), () => {});
-    this.project = opened.project;
-    const doc = opened.document;
-    if (!Array.isArray(doc.layers)) doc.layers = [];
-    doc.layers = doc.layers.filter((l) => l && typeof l === 'object');
-    for (const layer of doc.layers) if (typeof layer.id !== 'string') layer.id = this.#newId(doc);
-    this.doc = doc;
+    this.#take(opened);
+    this.#saved = this.#whole();
+    if (opened.draft) {
+      this.#take(opened.draft);
+      this.restored = this.dirty = this.#whole() !== this.#saved;
+    }
     this.#unlisten = await api.onPreview((event) => this.#heard(event));
     await this.#start();
+  }
+
+  #take({ document, project }) {
+    if (!Array.isArray(document.layers)) document.layers = [];
+    document.layers = document.layers.filter((l) => l && typeof l === 'object');
+    for (const layer of document.layers) if (typeof layer.id !== 'string') layer.id = this.#newId(document);
+    this.doc = document;
+    this.project = project;
   }
 
   get layers() {
@@ -233,62 +245,89 @@ export class Editor {
 
   changeProject(fn) {
     fn(this.project);
-    this.#projectDirty = true;
-    this.#schedule();
+    this.#touched();
   }
 
   // ---- saving ---------------------------------------------------------------
 
+  #whole() {
+    return JSON.stringify([this.doc, this.project]);
+  }
+
   #changed() {
-    this.#documentDirty = true;
-    this.#projectDirty = true;
-    this.#schedule();
+    this.#touched();
     this.#send();
   }
 
-  #schedule() {
-    this.status = 'saving';
-    clearTimeout(this.#saveTimer);
-    this.#saveTimer = setTimeout(() => this.save(), SAVE_AFTER);
+  #touched() {
+    this.dirty = this.#whole() !== this.#saved;
+    if (!this.dirty) this.restored = false;
+    clearTimeout(this.#draftTimer);
+    this.#draftTimer = setTimeout(() => this.keep(), DRAFT_AFTER);
   }
 
-  /** Writes what is not written yet. */
-  save() {
-    clearTimeout(this.#saveTimer);
-    this.#saving = this.#saving.then(async () => {
-      const [document, project] = [this.#documentDirty, this.#projectDirty];
-      if (!document && !project) return;
-      [this.#documentDirty, this.#projectDirty] = [false, false];
-      try {
-        if (document) await api.editorSave(this.dir, $state.snapshot(this.doc));
-        if (project) await api.editorSaveProject(this.dir, $state.snapshot(this.project));
-        if (!this.#documentDirty && !this.#projectDirty) this.status = 'saved';
-      } catch (e) {
-        this.#documentDirty ||= document;
-        this.#projectDirty ||= project;
-        this.status = 'failed';
-        toast(`Not saved: ${e?.message ?? e}`);
-      }
-    });
-    return this.#saving;
+  #write(fn) {
+    const done = this.#writes.then(fn);
+    this.#writes = done.catch(() => {});
+    return done;
   }
 
-  /** Saves everything, with a preview picture for the library. */
-  async finish() {
-    await this.save();
-    if (this.failure) return;
+  /** Keeps what is not saved for the next time. */
+  keep() {
+    clearTimeout(this.#draftTimer);
+    return this.#write(async () => {
+      const draft = this.dirty ? { document: $state.snapshot(this.doc), project: $state.snapshot(this.project) } : null;
+      await api.editorDraft(this.dir, draft);
+    }).catch((e) => toast(`Changes could not be kept: ${e?.message ?? e}`));
+  }
+
+  /** Writes the wallpaper, with a preview picture for the library; where it
+   * shows, it changes. */
+  async save() {
+    clearTimeout(this.#draftTimer);
+    this.saving = true;
     try {
-      await api.editorPicture(this.dir);
-      // It may have named the picture in project.json.
-      this.project = { ...this.project, preview: 'preview.png' };
-    } catch {
-      // Nothing drawn: the library shows a placeholder.
+      await this.#write(() => this.#store());
+    } finally {
+      this.saving = false;
     }
+  }
+
+  async #store() {
+    const before = JSON.parse(this.#saved);
+    if (!this.failure) {
+      // Without anything drawn the library shows a placeholder.
+      await api.editorPicture(this.dir).then(() => (this.project.preview = 'preview.png'), () => {});
+    }
+    const whole = this.#whole();
+    const [document, project] = JSON.parse(whole);
+    await api.editorSaveProject(this.dir, project);
+    await api.editorSave(this.dir, document);
+    this.#saved = whole;
+    this.dirty = this.#whole() !== whole;
+    this.restored = false;
+    if (!this.dirty) await api.editorDraft(this.dir, null).catch(() => {});
+    // What is chosen here counts, also where the viewer chose something.
+    const was = before[1]?.general?.properties ?? {};
+    const reset = Object.entries(project.general?.properties ?? {})
+      .filter(([name, p]) => name in was && JSON.stringify(p?.value) !== JSON.stringify(was[name]?.value))
+      .map(([name]) => name);
+    await api.reload(this.dir, reset);
+  }
+
+  /** Goes back to what is saved. */
+  discard() {
+    const [document, project] = JSON.parse(this.#saved);
+    this.#take({ document, project });
+    [this.past, this.future] = [[], []];
+    this.settle();
+    if (!this.layer) this.selected = null;
+    this.#changed();
   }
 
   async close() {
     this.#closed = true;
-    await this.finish();
+    await this.keep();
     this.#unlisten?.();
     await api.previewStop();
   }

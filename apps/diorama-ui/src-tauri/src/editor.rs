@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use diorama_ipc::preview::{self, Event, Message};
 use diorama_project::{Effect, edit, package};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::http::{Request, Response, StatusCode};
 use tauri::{AppHandle, Emitter, Manager, State, UriSchemeResponder};
@@ -258,6 +258,14 @@ pub async fn editor_export(dir: PathBuf, file: PathBuf) -> Result<(), String> {
 pub struct Opened {
     document: Value,
     project: Value,
+    /// Changes that were not saved.
+    draft: Option<Draft>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Draft {
+    document: Value,
+    project: Value,
 }
 
 /// The wallpaper in `dir`, whose images the page may show from now on.
@@ -268,7 +276,12 @@ pub async fn editor_open(app: AppHandle, dir: PathBuf) -> Result<Opened, String>
         app.asset_protocol_scope()
             .allow_directory(&dir, true)
             .map_err(|e| e.to_string())?;
-        Ok(Opened { document, project })
+        let draft = edit::draft(&dir).map(|(document, project)| Draft { document, project });
+        Ok(Opened {
+            document,
+            project,
+            draft,
+        })
     })
     .await
 }
@@ -281,6 +294,16 @@ pub async fn editor_save(dir: PathBuf, document: Value) -> Result<(), String> {
 #[tauri::command]
 pub async fn editor_save_project(dir: PathBuf, project: Value) -> Result<(), String> {
     blocking(move || edit::save_project(&dir, &project).map_err(|e| e.to_string())).await
+}
+
+/// Keeps changes that are not saved (none: forgets them).
+#[tauri::command]
+pub async fn editor_draft(dir: PathBuf, draft: Option<Draft>) -> Result<(), String> {
+    blocking(move || {
+        let draft = draft.as_ref().map(|d| (&d.document, &d.project));
+        edit::save_draft(&dir, draft).map_err(|e| e.to_string())
+    })
+    .await
 }
 
 /// Copies a file into the wallpaper; its path there.

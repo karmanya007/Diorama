@@ -219,6 +219,7 @@ mod tests {
         let photo = root.join("photo.png");
         fs::write(&photo, "pixels").unwrap();
         let used = edit::add_asset(&dir, &photo).unwrap();
+        fs::write(&photo, "others").unwrap();
         let unused = edit::add_asset(&dir, &photo).unwrap();
         fs::write(dir.join("notes.txt"), "mine").unwrap();
         let mut document = edit::open(&dir).unwrap().0;
@@ -227,6 +228,7 @@ mod tests {
         ]);
         edit::save(&dir, &document).unwrap();
         edit::save_preview(&dir, &[9; 400], 10, 10).unwrap();
+        edit::save_draft(&dir, Some((&document, &json!({})))).unwrap();
 
         let file = root.join("travel.diorama");
         export(&dir, &file).unwrap();
@@ -238,6 +240,7 @@ mod tests {
         assert!(got.join("preview.png").is_file());
         assert!(!got.join(&unused).exists(), "unused assets stay behind");
         assert!(!got.join("notes.txt").exists());
+        assert!(edit::draft(&got).is_none());
         // Again: beside the first.
         assert_eq!(
             import(&file, &there).unwrap().file_name().unwrap(),

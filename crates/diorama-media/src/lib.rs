@@ -343,24 +343,41 @@ pub struct VideoPlayer {
 
 /// Decoded frames buffered ahead of presentation. Small: each 4K frame is ~12 MB.
 const QUEUE_DEPTH: usize = 3;
+/// Most memory for frames buffered for a scene (beyond `QUEUE_DEPTH` frames).
+const AHEAD_BYTES: u64 = 32 << 20;
+
+/// Frames to buffer for a video in a scene, which may be drawn at a lower rate
+/// than the video has: those of 150 ms.
+fn frames_ahead(info: &VideoInfo) -> usize {
+    let bytes = u64::from(info.width) * u64::from(info.height) * 3 / 2;
+    let most = usize::try_from(AHEAD_BYTES / bytes.max(1)).unwrap_or(usize::MAX);
+    let wanted = (info.frame_rate.unwrap_or(30.0) * 0.15).ceil() as usize;
+    wanted.min(most).clamp(QUEUE_DEPTH, 16)
+}
 
 impl VideoPlayer {
     pub fn spawn(path: &Path) -> Result<Self> {
-        Self::spawn_source(MediaSource::File(path.to_path_buf()))
+        Self::start(MediaSource::File(path.to_path_buf()), |_| QUEUE_DEPTH)
     }
 
+    /// A video in a scene.
     pub fn spawn_source(source: MediaSource) -> Result<Self> {
-        let (tx, rx) = sync_channel(QUEUE_DEPTH);
+        Self::start(source, frames_ahead)
+    }
+
+    fn start(source: MediaSource, depth: fn(&VideoInfo) -> usize) -> Result<Self> {
         // The decoder is opened on its own thread (COM/MF state is per thread);
         // the open result comes back here so errors are still reported synchronously.
-        let (opened_tx, opened_rx) = sync_channel::<Result<VideoInfo>>(1);
+        let (opened_tx, opened_rx) = sync_channel(1);
         let stop = Arc::new(AtomicBool::new(false));
         let thread_stop = Arc::clone(&stop);
         let thread = std::thread::Builder::new()
             .name("video-decode".into())
             .spawn(move || match open_source(&source) {
                 Ok(decoder) => {
-                    let _ = opened_tx.send(Ok(decoder.info()));
+                    let info = decoder.info();
+                    let (tx, rx) = sync_channel(depth(&info));
+                    let _ = opened_tx.send(Ok((info, rx)));
                     decode_loop(decoder, &tx, &thread_stop);
                 }
                 Err(e) => {
@@ -371,13 +388,13 @@ impl VideoPlayer {
                 call: "spawn decode thread",
                 message: e.to_string(),
             })?;
-        let info = opened_rx.recv().map_err(|_| Error::Os {
+        let (info, frames) = opened_rx.recv().map_err(|_| Error::Os {
             call: "video decode thread",
             message: "exited before opening the file".into(),
         })??;
         Ok(Self {
             info,
-            frames: rx,
+            frames,
             stop,
             thread: Some(thread),
         })
@@ -493,6 +510,21 @@ mod tests {
         }
         assert_eq!(random.next_track(0, 1, 0.7, 0.0), Some((0, 1.0)));
         assert_eq!(PlaybackMode::Loop.next_track(0, 0, 0.0, 0.0), None);
+    }
+
+    #[test]
+    fn frames_ahead_cover_low_frame_rates_within_memory() {
+        let ahead = |width, height, rate: f64| {
+            frames_ahead(&VideoInfo {
+                width,
+                height,
+                frame_rate: Some(rate),
+            })
+        };
+        assert_eq!(ahead(1920, 1080, 60.0), 9);
+        assert_eq!(ahead(1920, 1080, 24.0), 4);
+        assert_eq!(ahead(3840, 2160, 60.0), QUEUE_DEPTH);
+        assert_eq!(ahead(320, 180, 1000.0), 16);
     }
 
     #[test]

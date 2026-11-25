@@ -13,6 +13,8 @@ my-wallpaper/
 
 `project.json` has the shape web wallpapers use, with `"type": "diorama"` and `"file": "wallpaper.json"`. `general.properties` declares what the user may change.
 
+The editor keeps changes that are not saved in `draft.json` (the document and project as edited); nothing else reads it and packages leave it out.
+
 Paths in the document are relative to the folder and use `/`. Anything that leads out of the folder is refused, links included.
 
 ## Document

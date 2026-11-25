@@ -196,11 +196,30 @@ impl VideoBlit {
         clear: [f32; 4],
     ) {
         let (scale, offset) = uv_transform(mode, self.size, canvas, target_rect);
+        self.draw_params(
+            gpu,
+            target,
+            Params {
+                scale,
+                offset,
+                clear,
+            },
+        );
+    }
+
+    /// Draws it one to one from the corner of a target of `size` pixels.
+    pub fn draw_unscaled(&self, gpu: &Gpu, target: &wgpu::TextureView, size: (u32, u32)) {
+        let (w, h) = (self.size.0.max(1) as f32, self.size.1.max(1) as f32);
         let params = Params {
-            scale,
-            offset,
-            clear,
+            scale: [size.0 as f32 / w, size.1 as f32 / h],
+            offset: [0.0; 2],
+            clear: [0.0, 0.0, 0.0, 1.0],
         };
+        self.draw_params(gpu, target, params);
+    }
+
+    fn draw_params(&self, gpu: &Gpu, target: &wgpu::TextureView, params: Params) {
+        let clear = params.clear;
         gpu.queue
             .write_buffer(&self.params, 0, bytemuck::bytes_of(&params));
         draw_fullscreen(gpu, &self.pipeline, &self.bind_group, target, clear);
