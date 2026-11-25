@@ -8,6 +8,7 @@
 //! Single-threaded like the Windows backend: create, use and drop the
 //! [`Platform`] on the thread that calls [`Platform::poll_events`].
 
+mod dropper;
 mod media;
 mod metrics;
 mod session;
@@ -23,6 +24,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+pub use dropper::pick_color;
 pub use media::MediaWatcher;
 pub use metrics::{ProcessMonitor, SystemMonitor};
 pub use system::{autostart, day_fraction, default_font, restart, set_autostart, steam_dir};

@@ -25,6 +25,9 @@ export const presets = () => invoke('presets');
 export const autostart = () => invoke('autostart');
 export const setAutostart = (on) => invoke('set_autostart', { on });
 
+/** A colour the user picks from the screen; null if they do not. */
+export const pickColor = () => invoke('pick_color');
+
 const KINDS = {
   image: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'avif'],
   video: ['mp4', 'webm', 'ogv', 'mov', 'm4v'],

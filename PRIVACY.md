@@ -1,6 +1,6 @@
 # Privacy
 
-_Last updated: 2026-10-29_
+_Last updated: 2026-11-25_
 
 Diorama does not collect, send or sell any information about you. It has no accounts, no telemetry, no analytics and no crash reporting, and its developers run no servers.
 
@@ -21,6 +21,10 @@ To work like Wallpaper Engine wallpapers, scenes and web wallpapers may receive,
 - for some web widgets, CPU, memory and disk usage.
 
 This stays on your computer unless you allow a web wallpaper to use the internet.
+
+## Picking a colour from the screen
+
+The dropper in the colour picker looks at the screen only when you press it. On Windows it keeps a still of the desktop in memory until you click or cancel, and stores nothing but the colour you pick. On Linux the desktop's own picker is asked and only the colour comes back.
 
 ## What is stored on your computer
 

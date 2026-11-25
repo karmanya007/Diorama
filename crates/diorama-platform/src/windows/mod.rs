@@ -1,6 +1,7 @@
 //! Windows backend.
 
 mod desktop;
+mod dropper;
 mod media;
 mod metrics;
 mod outputs;
@@ -9,6 +10,7 @@ mod system;
 mod tray;
 mod windows_list;
 
+pub use dropper::pick_color;
 pub use media::MediaWatcher;
 pub use metrics::SystemMonitor;
 pub use process::ProcessMonitor;

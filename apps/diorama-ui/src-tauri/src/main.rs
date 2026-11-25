@@ -82,6 +82,17 @@ fn set_autostart(on: bool) -> Result<(), String> {
     diorama_platform::set_autostart(command.as_deref()).map_err(|e| e.to_string())
 }
 
+/// Lets the user pick a colour from the screen (`#rrggbb`; none if they
+/// changed their mind).
+#[tauri::command]
+async fn pick_color() -> Result<Option<String>, String> {
+    blocking(|| {
+        let picked = diorama_platform::pick_color().map_err(|e| e.to_string())?;
+        Ok(picked.map(|[r, g, b]| format!("#{r:02x}{g:02x}{b:02x}")))
+    })
+    .await
+}
+
 /// Folders whose files the page may show (previews, images).
 fn readable_dirs(roots: &Roots) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
@@ -190,6 +201,7 @@ fn main() {
             presets,
             autostart,
             set_autostart,
+            pick_color,
             editor::preview_start,
             editor::preview_command,
             editor::preview_stop,

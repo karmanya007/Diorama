@@ -1,8 +1,10 @@
 <script>
   // A colour (`#rrggbb`): a swatch that opens a picker of our own (the
   // webviews' differ, and some have none).
+  import * as api from './api.js';
   import { fromHsv, normal, toHsv } from './color.js';
   import Popover from './Popover.svelte';
+  import { attempt } from './state.svelte.js';
 
   let { value, label = 'Colour', onchange, ondone = () => {} } = $props();
 
@@ -30,6 +32,11 @@
     hsv = toHsv(color);
     onchange(color);
     ondone();
+  }
+
+  async function drop() {
+    const color = await attempt(() => api.pickColor());
+    if (color && open) typed(color);
   }
 
   function place(e) {
@@ -77,6 +84,9 @@
     </div>
     <input class="hue" type="range" min="0" max="359" step="1" value={hsv.h} aria-label="Hue" oninput={(e) => pick({ h: Number(e.currentTarget.value) })} onchange={ondone} />
     <div class="row">
+      <button type="button" class="dropper" title="Pick a colour from the screen" aria-label="Pick a colour from the screen" onclick={drop}>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.7 3.3a2.4 2.4 0 0 0-3.4 0l-3 3-1.4-1.4-1.4 1.4 1.4 1.4-8.2 8.2a2 2 0 0 0-.5.9L3 20.1a.8.8 0 0 0 .9.9l3.3-1.2c.3-.1.6-.3.9-.5l8.2-8.2 1.4 1.4 1.4-1.4-1.4-1.4 3-3a2.4 2.4 0 0 0 0-3.4zM7 17.9l-1.6.6.6-1.6 7.8-7.8 1 1z" /></svg>
+      </button>
       <span class="now" style:background={hex}></span>
       <input class="grow" type="text" value={hex} maxlength="9" spellcheck="false" aria-label="Colour code" onchange={(e) => typed(e.currentTarget.value)} onkeydown={(e) => e.key === 'Enter' && typed(e.currentTarget.value)} />
     </div>
@@ -131,6 +141,21 @@
     border-radius: 5px;
     background: transparent;
     box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
+  }
+
+  .dropper {
+    width: 34px;
+    height: 30px;
+    padding: 0;
+    flex: none;
+    display: grid;
+    place-items: center;
+  }
+
+  .dropper svg {
+    width: 18px;
+    height: 18px;
+    fill: currentColor;
   }
 
   .now {

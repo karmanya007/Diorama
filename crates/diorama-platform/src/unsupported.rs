@@ -106,6 +106,11 @@ pub fn autostart() -> Result<Option<String>> {
 pub fn detach_console() {}
 
 #[cfg(not(target_os = "linux"))]
+pub fn pick_color() -> Result<Option<[u8; 3]>> {
+    Err(Error::Unsupported)
+}
+
+#[cfg(not(target_os = "linux"))]
 pub fn default_font() -> Option<std::path::PathBuf> {
     None
 }
