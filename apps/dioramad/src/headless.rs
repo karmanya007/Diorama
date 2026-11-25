@@ -77,6 +77,16 @@ impl diorama_project::Host for ProjectHost {
         )
     }
 
+    fn system_font(
+        &self,
+        family: &str,
+        bold: bool,
+        italic: bool,
+    ) -> Option<(std::sync::Arc<[u8]>, u32)> {
+        let face = diorama_platform::font_face(family, bold, italic)?;
+        Some((std::fs::read(&face.path).ok()?.into(), face.index))
+    }
+
     fn video_size(&self, file: &Path) -> Option<[u32; 2]> {
         let changed = std::fs::metadata(file).ok()?.modified().ok()?;
         if let Some((at, size)) = self.videos.borrow().get(file)

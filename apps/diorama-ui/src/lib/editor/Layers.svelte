@@ -16,8 +16,13 @@
   // Front first, as in other editors; the document counts from the back.
   const list = $derived([...editor.layers].reverse());
   let renaming = $state(null);
+  // Dragging a layer: which, and the gap (counted from the front) it would
+  // go to. By pointer: the window takes files dropped on it, and some
+  // webviews then have no dragging of elements.
   let dragging = $state(null);
-  let over = $state(null);
+  let gap = $state(null);
+  let pressed = null;
+  let rows;
 
   const name = (l) => l.name || { image: 'Image', video: 'Video', text: 'Text', color: 'Colour', adjustment: 'Adjustment' }[l.type] || 'Layer';
 
@@ -33,14 +38,39 @@
     adjustment: () => editor.add({ name: 'Adjustment', type: 'adjustment', effects: [{ type: 'vignette' }] }),
   };
 
-  function drop(target) {
-    if (dragging && target && dragging !== target) {
-      editor.reorder(
-        dragging,
-        editor.layers.findIndex((l) => l.id === target),
-      );
+  function press(e, id) {
+    if (e.button !== 0 || e.target.closest('button, input')) return;
+    pressed = { id, y: e.clientY, row: e.currentTarget, pointer: e.pointerId };
+  }
+
+  function drag(e) {
+    if (!pressed) return;
+    if (!dragging) {
+      if (Math.abs(e.clientY - pressed.y) < 5) return;
+      pressed.row.setPointerCapture(pressed.pointer);
+      dragging = pressed.id;
+      editor.selected = pressed.id;
     }
-    dragging = over = null;
+    const boxes = [...rows.querySelectorAll('.layer')].map((r) => r.getBoundingClientRect());
+    gap = boxes.filter((b) => e.clientY > b.top + b.height / 2).length;
+    // Near the ends of a long list it scrolls.
+    const view = rows.getBoundingClientRect();
+    if (e.clientY < view.top + 24) rows.scrollBy(0, -10);
+    if (e.clientY > view.bottom - 24) rows.scrollBy(0, 10);
+  }
+
+  function release() {
+    if (dragging && gap !== null) {
+      const from = list.findIndex((l) => l.id === dragging);
+      const to = gap > from ? gap - 1 : gap;
+      // The document counts from the back.
+      if (to !== from) editor.reorder(dragging, list.length - 1 - to);
+    }
+    cancel();
+  }
+
+  function cancel() {
+    pressed = dragging = gap = null;
   }
 
   function rename(layer, text) {
@@ -58,8 +88,8 @@
     <button onclick={add.adjustment} title="Effects over everything below">Adjustment</button>
   </div>
 
-  <div class="list scroll" role="listbox" aria-label="Layers">
-    {#each list as layer (layer.id)}
+  <div class="list scroll" role="listbox" aria-label="Layers" bind:this={rows}>
+    {#each list as layer, i (layer.id)}
       <div
         class="layer"
         role="option"
@@ -67,21 +97,23 @@
         aria-selected={editor.selected === layer.id}
         class:on={editor.selected === layer.id}
         class:hidden={editor.value(layer.visible, true) === false}
-        class:over={over === layer.id}
-        draggable={renaming !== layer.id}
-        ondragstart={(e) => { dragging = layer.id; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', layer.id); }}
-        ondragover={(e) => { e.preventDefault(); over = layer.id; }}
-        ondragend={() => (dragging = over = null)}
-        ondrop={(e) => { e.preventDefault(); drop(layer.id); }}
+        class:dragging={dragging === layer.id}
+        class:before={dragging && gap === i}
+        class:after={dragging && gap === i + 1 && i === list.length - 1}
+        onpointerdown={(e) => press(e, layer.id)}
+        onpointermove={drag}
+        onpointerup={release}
+        onpointercancel={cancel}
+        onlostpointercapture={cancel}
         onclick={() => (editor.selected = layer.id)}
         ondblclick={() => (renaming = layer.id)}
         onkeydown={(e) => {
           if (e.target !== e.currentTarget) return;
-          const i = editor.layers.findIndex((l) => l.id === layer.id);
+          const at = editor.layers.findIndex((l) => l.id === layer.id);
           if (e.key === 'Enter') editor.selected = layer.id;
           else if (e.key === 'F2') renaming = layer.id;
-          else if (e.altKey && e.key === 'ArrowUp') editor.reorder(layer.id, i + 1);
-          else if (e.altKey && e.key === 'ArrowDown') editor.reorder(layer.id, i - 1);
+          else if (e.altKey && e.key === 'ArrowUp') editor.reorder(layer.id, at + 1);
+          else if (e.altKey && e.key === 'ArrowDown') editor.reorder(layer.id, at - 1);
           else return;
           e.preventDefault();
           e.stopPropagation();
@@ -172,7 +204,9 @@
     padding: 6px 8px;
     border-radius: 8px;
     border-top: 2px solid transparent;
+    border-bottom: 2px solid transparent;
     cursor: default;
+    touch-action: none;
   }
 
   .layer:hover {
@@ -183,8 +217,16 @@
     background: var(--accent-soft);
   }
 
-  .layer.over {
+  .layer.before {
     border-top-color: var(--accent);
+  }
+
+  .layer.after {
+    border-bottom-color: var(--accent);
+  }
+
+  .layer.dragging {
+    opacity: 0.6;
   }
 
   .layer.hidden .name,

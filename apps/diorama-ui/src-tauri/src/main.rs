@@ -152,7 +152,16 @@ fn main() {
         // with `--quit` (the tray's "Quit") it closes it.
         .plugin(tauri_plugin_single_instance::init(|app, args, _| {
             if quit_asked(&args) {
-                return app.exit(0);
+                // Closing lets the editor save first; it has a moment to.
+                for window in app.webview_windows().values() {
+                    let _ = window.close();
+                }
+                let app = app.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_secs(2));
+                    app.exit(0);
+                });
+                return;
             }
             if let Some(window) = app.webview_windows().values().next() {
                 let _ = window.unminimize();
@@ -192,6 +201,8 @@ fn main() {
             editor::editor_save_project,
             editor::editor_add_asset,
             editor::editor_effects,
+            editor::editor_fonts,
+            editor::editor_add_font,
             editor::editor_picture
         ])
         .run(context);

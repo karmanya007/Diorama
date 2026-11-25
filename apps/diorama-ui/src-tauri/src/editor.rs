@@ -289,6 +289,31 @@ pub async fn editor_add_asset(dir: PathBuf, source: PathBuf) -> Result<String, S
     blocking(move || edit::add_asset(&dir, &source).map_err(|e| e.to_string())).await
 }
 
+/// Families of the fonts installed here.
+#[tauri::command]
+pub async fn editor_fonts() -> Result<Vec<String>, String> {
+    blocking(|| Ok(diorama_platform::font_families())).await
+}
+
+/// Copies an installed font into the wallpaper; its path there.
+#[tauri::command]
+pub async fn editor_add_font(
+    dir: PathBuf,
+    family: String,
+    bold: bool,
+    italic: bool,
+) -> Result<String, String> {
+    blocking(move || {
+        let face = diorama_platform::font_face(&family, bold, italic)
+            .ok_or_else(|| format!("{family} is not installed"))?;
+        if face.index != 0 {
+            return Err("this font shares its file with others and cannot be copied alone".into());
+        }
+        edit::add_asset(&dir, &face.path).map_err(|e| e.to_string())
+    })
+    .await
+}
+
 #[tauri::command]
 pub fn editor_effects() -> &'static [Effect] {
     diorama_project::effects()

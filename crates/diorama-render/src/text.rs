@@ -48,7 +48,7 @@ fn valign(a: ir::TextAlign) -> VAlign {
 impl TextState {
     pub fn new(font: &ir::FontData) -> Option<Self> {
         Some(Self {
-            font: Font::new(font.data.clone(), 0).ok()?,
+            font: Font::new(font.data.clone(), font.index).ok()?,
             engine: TextEngine::new(),
             atlas: None,
             centre: [0.0, 0.0],

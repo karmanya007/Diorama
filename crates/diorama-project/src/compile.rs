@@ -22,6 +22,8 @@ pub const VERSION: u64 = 1;
 const MAX_LAYERS: usize = 1000;
 pub(crate) const MAX_IMAGE: u64 = 256 << 20;
 pub(crate) const MAX_FONT: u64 = 64 << 20;
+/// Before the family name of an installed font.
+const SYSTEM: &str = "system:";
 /// Longest text of a layer, in characters.
 const MAX_TEXT: usize = 10_000;
 /// Positions and sizes stay sane for 32-bit floats.
@@ -161,7 +163,7 @@ pub struct LayerInfo {
 pub struct Cache {
     /// Images and videos by path and whether they are smooth.
     textures: HashMap<(String, bool), (u64, Arc<Texture>)>,
-    fonts: HashMap<String, (u64, Arc<[u8]>)>,
+    fonts: HashMap<FontKey, (u64, Arc<[u8]>, u32)>,
     white: Option<Arc<Texture>>,
 }
 
@@ -170,7 +172,7 @@ impl Cache {
         self.textures
             .retain(|_, (_, t)| scene.textures.iter().any(|s| Arc::ptr_eq(s, t)));
         self.fonts
-            .retain(|_, (_, f)| scene.fonts.iter().any(|s| Arc::ptr_eq(&s.data, f)));
+            .retain(|_, (_, f, _)| scene.fonts.iter().any(|s| Arc::ptr_eq(&s.data, f)));
     }
 
     fn texture(&self, key: &(String, bool), stamp: Option<u64>) -> Option<Arc<Texture>> {
@@ -197,6 +199,15 @@ fn parallax(fields: &Fields<'_>) -> Option<Parallax> {
     })
 }
 
+/// Which font a text wants: an asset, `system:` and a family, or (empty) the
+/// host's.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+struct FontKey {
+    name: String,
+    bold: bool,
+    italic: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Source {
     Image,
@@ -214,8 +225,7 @@ pub(crate) struct Compiler<'a> {
     pub(crate) scene: Scene,
     /// By path and whether it is smooth; the empty path is plain white.
     textures: HashMap<(String, bool), TextureId>,
-    /// By path; the empty path is the host's font.
-    fonts: HashMap<String, usize>,
+    fonts: HashMap<FontKey, usize>,
     programs: HashMap<(Source, bool), ProgramId>,
     /// By effect, entry point and whether it moves.
     pub(crate) effect_programs: HashMap<(&'static str, &'static str, bool), ProgramId>,
@@ -307,7 +317,7 @@ impl<'a> Compiler<'a> {
                 }
                 let pixel_size = f.number("font-size", 64.0, [1.0, 2000.0]);
                 text = Some(TextSpec {
-                    font: self.font(f.text("font"))?,
+                    font: self.font(f)?,
                     text: content,
                     pixel_size,
                     halign: f.choice("align", &HALIGN, TextAlign::Center),
@@ -575,46 +585,69 @@ impl<'a> Compiler<'a> {
         Ok(self.keep(key, stamp, Arc::new(texture)))
     }
 
-    /// The font at `path`, or the host's.
-    fn font(&mut self, path: Option<String>) -> Result<usize, String> {
-        let key = path.unwrap_or_default();
-        if let Some(index) = self.fonts.get(&key) {
+    /// The font of the text layer `f`; one that cannot be had is named, and
+    /// the host's stands in.
+    fn font(&mut self, f: &Fields<'_>) -> Result<usize, String> {
+        let name = f.text("font").unwrap_or_default();
+        let key = FontKey {
+            bold: f.flag("bold", false) && name.starts_with(SYSTEM),
+            italic: f.flag("italic", false) && name.starts_with(SYSTEM),
+            name,
+        };
+        match self.font_by(&key) {
+            Err(message) if !key.name.is_empty() => {
+                f.problem(&format!("{message}; another font stands in"));
+                self.font_by(&FontKey::default())
+            }
+            font => font,
+        }
+    }
+
+    fn font_by(&mut self, key: &FontKey) -> Result<usize, String> {
+        if let Some(index) = self.fonts.get(key) {
             return Ok(*index);
         }
-        // The host's does not change while this runs.
-        let stamp = if key.is_empty() {
+        let system = key.name.strip_prefix(SYSTEM);
+        // What is installed does not change while this runs.
+        let stamp = if key.name.is_empty() || system.is_some() {
             Some(0)
         } else {
-            self.assets.stamp(&key)
+            self.assets.stamp(&key.name)
         };
-        let known = self.cache.fonts.get(&key);
-        let data = match known.filter(|(at, _)| stamp == Some(*at)) {
-            Some((_, data)) => Arc::clone(data),
+        let known = self.cache.fonts.get(key);
+        let (data, face) = match known.filter(|(at, _, _)| stamp == Some(*at)) {
+            Some((_, data, face)) => (Arc::clone(data), *face),
             None => {
-                let data: Arc<[u8]> = if key.is_empty() {
-                    self.host.default_font().ok_or("no font")?
-                } else {
-                    let data = self
-                        .assets
-                        .read(&key, MAX_FONT)
-                        .map_err(|e| e.to_string())?;
-                    data.into()
+                let (data, face): (Arc<[u8]>, u32) = match system {
+                    _ if key.name.is_empty() => (self.host.default_font().ok_or("no font")?, 0),
+                    Some(family) => self
+                        .host
+                        .system_font(family, key.bold, key.italic)
+                        .ok_or_else(|| format!("the font {family} is not installed here"))?,
+                    None => {
+                        let data = self
+                            .assets
+                            .read(&key.name, MAX_FONT)
+                            .map_err(|e| e.to_string())?;
+                        (data.into(), 0)
+                    }
                 };
-                diorama_text::Font::new(Arc::clone(&data), 0).map_err(|e| format!("{key}: {e}"))?;
+                diorama_text::Font::new(Arc::clone(&data), face)
+                    .map_err(|e| format!("{}: {e}", key.name))?;
                 if let Some(stamp) = stamp {
-                    self.cache
-                        .fonts
-                        .insert(key.clone(), (stamp, Arc::clone(&data)));
+                    let kept = (stamp, Arc::clone(&data), face);
+                    self.cache.fonts.insert(key.clone(), kept);
                 }
-                data
+                (data, face)
             }
         };
         let index = self.scene.fonts.len();
         self.scene.fonts.push(FontData {
-            name: key.clone(),
+            name: key.name.clone(),
             data,
+            index: face,
         });
-        self.fonts.insert(key, index);
+        self.fonts.insert(key.clone(), index);
         Ok(index)
     }
 }

@@ -152,6 +152,7 @@ impl Importer<'_> {
                 self.scene.fonts.push(FontData {
                     name: name.to_owned(),
                     data,
+                    index: 0,
                 });
                 self.scene.fonts.len() - 1
             });

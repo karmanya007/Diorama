@@ -26,6 +26,10 @@ impl Host for System {
         Some(font.into())
     }
 
+    fn system_font(&self, family: &str, _bold: bool, _italic: bool) -> Option<(Arc<[u8]>, u32)> {
+        (family == "Known").then(|| Some((self.default_font()?, 0)))?
+    }
+
     fn video_size(&self, _file: &Path) -> Option<[u32; 2]> {
         None
     }

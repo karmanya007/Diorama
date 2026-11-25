@@ -163,6 +163,8 @@ pub const ORTHO_DEPTH: f32 = 1000.0;
 pub struct FontData {
     pub name: String,
     pub data: Arc<[u8]>,
+    /// Which face of a collection.
+    pub index: u32,
 }
 
 /// A scripted value: an ES module whose `update(value)` result becomes the

@@ -14,31 +14,51 @@ pub struct SceneVideos {
 struct VideoTexture {
     /// Index of the texture in the scene.
     texture: usize,
+    data: VideoData,
     player: VideoPlayer,
     /// Decoded but not yet due.
     pending: Option<Nv12Frame>,
+    /// Scene time its playing started at: that of the first frame asked for.
+    /// A video that comes later starts from its beginning then, and does not
+    /// race to where it would be.
+    started: Option<f32>,
 }
 
 impl SceneVideos {
     /// `None` when the scene has no video textures (or none could be opened).
     pub fn start(scene: &Scene) -> Option<Self> {
+        Self::follow(None, scene)
+    }
+
+    /// The videos of `scene`, where those `before` also played go on.
+    pub fn follow(before: Option<Self>, scene: &Scene) -> Option<Self> {
+        let mut old = before.map(|b| b.videos).unwrap_or_default();
         let videos: Vec<VideoTexture> = scene
             .textures
             .iter()
             .enumerate()
-            .filter_map(|(i, t)| {
-                let source = match t.video.clone()? {
+            .filter_map(|(texture, t)| {
+                let data = t.video.clone()?;
+                if let Some(i) = old.iter().position(|v| v.data == data) {
+                    return Some(VideoTexture {
+                        texture,
+                        ..old.swap_remove(i)
+                    });
+                }
+                let source = match &data {
                     VideoData::Memory(data) => MediaSource::Memory {
-                        data,
+                        data: data.clone(),
                         name: format!("{}.mp4", t.name),
                     },
-                    VideoData::File(path) => MediaSource::File(path),
+                    VideoData::File(path) => MediaSource::File(path.clone()),
                 };
                 match VideoPlayer::spawn_source(source) {
                     Ok(player) => Some(VideoTexture {
-                        texture: i,
+                        texture,
+                        data,
                         player,
                         pending: None,
+                        started: None,
                     }),
                     Err(e) => {
                         tracing::warn!(texture = %t.name, "video texture unavailable: {e}");
@@ -55,7 +75,9 @@ impl SceneVideos {
         for v in &mut self.videos {
             let mut due = None;
             while let Some(f) = v.pending.take().or_else(|| v.player.try_next()) {
-                if f.pts.as_secs_f32() <= time {
+                // Counted from its first frame: opening it took a while.
+                let played = time - *v.started.get_or_insert(time);
+                if f.pts.as_secs_f32() <= played {
                     due = Some(f);
                 } else {
                     v.pending = Some(f);

@@ -4,6 +4,7 @@
   // change is sent at once, so a showing wallpaper updates live.
   import { attempt } from './state.svelte.js';
   import * as api from './api.js';
+  import ColorPicker from './ColorPicker.svelte';
   import { fields, labelOf, toHex, fromHex, holds } from './props.js';
 
   let { item } = $props();
@@ -79,11 +80,11 @@
             />
           </label>
         {:else if f.type === 'color'}
-          <label class="field row">
+          <div class="field row">
             <span>{labelOf(f.name, f.def)}</span>
             <span class="spacer"></span>
-            <input type="color" value={toHex(values[f.name])} oninput={(e) => change(f.name, fromHex(e.currentTarget.value), 150)} />
-          </label>
+            <ColorPicker value={toHex(values[f.name])} label={labelOf(f.name, f.def)} onchange={(hex) => change(f.name, fromHex(hex), 150)} />
+          </div>
         {:else if f.type === 'combo'}
           <label class="field">
             <span>{labelOf(f.name, f.def)}</span>

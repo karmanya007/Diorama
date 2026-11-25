@@ -3,6 +3,7 @@
   import { attempt } from '../state.svelte.js';
   import * as api from '../api.js';
   import Field from './Field.svelte';
+  import FontPicker from './FontPicker.svelte';
 
   let { editor } = $props();
 
@@ -114,10 +115,7 @@
         {/if}
         <Field label="Size" value={get('font-size', 64)} bound={editor.bound(layer['font-size'])} min={1} max={1000} step={1} unit="px" onchange={set('font-size', 64)} ondone={done} onunbind={unbind('font-size', 64)} />
         <Field label="Colour" kind="color" value={get('color', '#ffffff')} bound={editor.bound(layer.color)} onchange={set('color', '#ffffff')} ondone={done} onunbind={unbind('color', '#ffffff')} />
-        <Field label="Font" kind="file" value={get('font', '') || 'System font'} onpick={() => pickAsset('font', set('font'))} />
-        {#if !layer.font}
-          <p class="note">The system's font differs between computers. Choose a font file to keep it.</p>
-        {/if}
+        <FontPicker {editor} {layer} />
         <Field label="Align" kind="choice" choices={ALIGN} value={get('align', 'center')} onchange={set('align', 'center')} />
         <Field label="Vertical" kind="choice" choices={VALIGN} value={get('vertical-align', 'middle')} onchange={set('vertical-align', 'middle')} />
         <Field label="Max width" value={get('max-width', 0)} min={0} max={editor.size[0] * 2} step={10} unit="px" onchange={(v) => set('max-width', 0)(v)} ondone={done} />
@@ -211,6 +209,7 @@
     <section>
       <Field label="Size" kind="choice" value={sizeId} choices={SIZES.some(([id]) => id === sizeId) ? SIZES : [[sizeId, editor.size.join(' × ')], ...SIZES]} onchange={(v) => wall('size', v.split('x').map(Number))} />
       <Field label="Background" kind="color" value={editor.value(editor.doc.background, '#000000')} bound={editor.bound(editor.doc.background)} onchange={(v) => wall('background', v)} ondone={done} onunbind={() => wall('background', editor.value(editor.doc.background, '#000000'))} />
+      <p class="note">The background shows where no layer covers it.</p>
     </section>
     <section>
       <h3>Parallax</h3>

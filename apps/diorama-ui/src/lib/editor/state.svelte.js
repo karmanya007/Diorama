@@ -19,6 +19,8 @@ export class Editor {
   project = $state(null);
   /** Effects there are, by name. */
   effects = [];
+  /** Installed font families. */
+  fonts = $state.raw([]);
   /** Id of the selected layer. */
   selected = $state(null);
   /** 'saved', 'saving' or 'failed'. */
@@ -52,6 +54,8 @@ export class Editor {
     this.dir = dir;
     const opened = await api.editorOpen(dir);
     this.effects = await api.editorEffects();
+    // Looking through the fonts takes a moment the first time.
+    api.editorFonts().then((fonts) => (this.fonts = fonts), () => {});
     this.project = opened.project;
     const doc = opened.document;
     if (!Array.isArray(doc.layers)) doc.layers = [];

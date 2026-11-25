@@ -219,6 +219,10 @@ impl Host for Videos {
         None
     }
 
+    fn system_font(&self, family: &str, _bold: bool, _italic: bool) -> Option<(Arc<[u8]>, u32)> {
+        (family == "Known").then(|| Some((self.default_font()?, 0)))?
+    }
+
     fn video_size(&self, file: &Path) -> Option<[u32; 2]> {
         file.ends_with("assets/film.mp4").then_some([64, 32])
     }

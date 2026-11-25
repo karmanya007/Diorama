@@ -53,7 +53,8 @@ By type:
 | `color` | `color` | | white |
 | | `size` | | the whole wallpaper |
 | `text` | `text` | At most 10 000 characters; `\n` breaks lines. | |
-| | `font` | A TrueType or OpenType file. | the system's |
+| | `font` | A TrueType or OpenType asset, or `system:` and the name of an installed family (`system:Georgia`). One that cannot be had is stood in for. | the system's |
+| | `bold`, `italic` | Faces of an installed family. | `false` |
 | | `font-size` | Pixels. | `64` |
 | | `color` | | white |
 | | `align` | `left`, `center`, `right` of `position`. | `center` |

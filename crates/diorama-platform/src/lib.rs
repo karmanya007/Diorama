@@ -8,8 +8,10 @@
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 
 mod coverage;
+mod fonts;
 
 pub use coverage::{Coverage, WindowRect, classify};
+pub use fonts::{FontFace, font_face, font_families};
 
 #[cfg(windows)]
 mod windows;

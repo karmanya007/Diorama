@@ -16,7 +16,7 @@ use diorama_ipc::preview::{Command, Event, LayerBox, MAX_SIDE, write_event, writ
 use diorama_project::{Compiled, Folder, LayerInfo};
 use diorama_render::scene::{FrameInputs, SceneRenderer};
 use diorama_render::{FitMode, ImageBlit, Rect, read_rgba8, render_size};
-use diorama_scene::{Scene, VideoData};
+use diorama_scene::Scene;
 
 use crate::headless::{ProjectHost, load_scene, shader_compiler};
 use crate::scripts::{SceneScripts, ScriptFrame, day_fraction_at, now_ms};
@@ -148,9 +148,7 @@ fn draw(
                     Some(Ok(new)) => {
                         let reuse = Some((&stage, &picture.scene));
                         let made = Stage::new(&gpu, &new.scene, &compiler, view.size, reuse)?;
-                        if video_files(&new.scene) != video_files(&picture.scene) {
-                            videos = SceneVideos::start(&new.scene);
-                        }
+                        videos = SceneVideos::follow(videos.take(), &new.scene);
                         (stage, picture) = (made, new);
                         ids = document.as_ref().map(layer_ids).unwrap_or_default();
                         report(out, &picture, &ids, &stage)?;
@@ -216,14 +214,6 @@ fn draw(
         let [w, h] = view.size;
         write_frame(out, w, h, &rgba).context("writing to the UI")?;
     }
-}
-
-/// The videos of `scene`'s textures, which go on playing while they stay.
-fn video_files(scene: &Scene) -> Vec<(usize, &VideoData)> {
-    let textures = scene.textures.iter().enumerate();
-    textures
-        .filter_map(|(i, t)| Some((i, t.video.as_ref()?)))
-        .collect()
 }
 
 /// The ids of a document's layers.

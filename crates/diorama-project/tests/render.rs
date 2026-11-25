@@ -188,3 +188,27 @@ fn the_example_uses_all_its_layers() {
     assert!(scene.skipped.is_empty(), "{:?}", scene.skipped);
     assert_eq!(scene.layers.len(), 9);
 }
+
+#[test]
+fn installed_fonts_are_used_or_stood_in_for() {
+    if System.default_font().is_none() {
+        eprintln!("no font; skipping");
+        return;
+    }
+    let skipped = |font: &str| {
+        let mut files = diorama_project::Memory::default();
+        let document = json!({"version": 1, "size": [64, 32], "layers": [
+            {"type": "text", "text": "a", "font": font, "bold": true}]});
+        files.0.insert(
+            "wallpaper.json".into(),
+            serde_json::to_vec(&document).unwrap(),
+        );
+        let scene =
+            diorama_project::compile(&files, &Values::new(), &System, &Limits::default()).unwrap();
+        assert_eq!(scene.layers.len(), 1, "{font}");
+        scene.skipped
+    };
+    assert!(skipped("system:Known").is_empty());
+    assert!(skipped("system:Gone")[0].contains("Gone is not installed"));
+    assert!(skipped("assets/gone.ttf")[0].contains("stands in"));
+}

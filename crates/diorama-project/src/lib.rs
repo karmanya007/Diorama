@@ -51,6 +51,8 @@ pub type Values = BTreeMap<String, Value>;
 pub trait Host {
     /// The font for text that names none.
     fn default_font(&self) -> Option<Arc<[u8]>>;
+    /// An installed font: its file and which face in it.
+    fn system_font(&self, family: &str, bold: bool, italic: bool) -> Option<(Arc<[u8]>, u32)>;
     /// A video's size in pixels.
     fn video_size(&self, file: &Path) -> Option<[u32; 2]>;
 }
@@ -61,6 +63,10 @@ pub struct NoHost;
 
 impl Host for NoHost {
     fn default_font(&self) -> Option<Arc<[u8]>> {
+        None
+    }
+
+    fn system_font(&self, _family: &str, _bold: bool, _italic: bool) -> Option<(Arc<[u8]>, u32)> {
         None
     }
 

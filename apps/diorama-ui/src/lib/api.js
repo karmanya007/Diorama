@@ -184,6 +184,8 @@ export const editorOpen = (dir) => invoke('editor_open', { dir });
 export const editorSave = (dir, document) => invoke('editor_save', { dir, document });
 export const editorSaveProject = (dir, project) => invoke('editor_save_project', { dir, project });
 export const editorAddAsset = (dir, source) => invoke('editor_add_asset', { dir, source });
+export const editorFonts = () => invoke('editor_fonts');
+export const editorAddFont = (dir, family, bold, italic) => invoke('editor_add_font', { dir, family, bold, italic });
 export const editorEffects = () => invoke('editor_effects');
 export const editorPicture = (dir) => invoke('editor_picture', { dir });
 

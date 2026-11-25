@@ -2,6 +2,7 @@
   // One value of the document: a number (slider and box), a colour, a
   // choice, a switch or an image. A value that comes from a user setting
   // says so, and can be set here instead.
+  import ColorPicker from '../ColorPicker.svelte';
   import { toHex } from '../props.js';
 
   let { label, value, bound = null, kind = 'number', min = 0, max = 1, step = 0.01, unit = '', choices = [], onchange, ondone = () => {}, onunbind = () => {}, onpick = () => {}, slider = true } = $props();
@@ -34,7 +35,7 @@
     <input class="number" class:wide={!slider} type="number" {min} {max} {step} value={shown} aria-label={label} onchange={(e) => typed(e.currentTarget.value)} />
     {#if unit}<span class="unit">{unit}</span>{/if}
   {:else if kind === 'color'}
-    <input type="color" value={hex} aria-label={label} oninput={(e) => onchange(e.currentTarget.value)} onchange={ondone} />
+    <ColorPicker value={hex} {label} {onchange} {ondone} />
     <code class="muted">{hex}</code>
   {:else if kind === 'choice'}
     <select class="grow" {value} aria-label={label} onchange={(e) => { onchange(e.currentTarget.value); ondone(); }}>
@@ -95,14 +96,5 @@
 
   .small {
     padding: 2px 6px;
-  }
-
-  input[type='color'] {
-    width: 40px;
-    height: 28px;
-    padding: 2px;
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    background: var(--panel);
   }
 </style>
