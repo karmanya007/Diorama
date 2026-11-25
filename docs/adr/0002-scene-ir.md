@@ -6,7 +6,7 @@ Date: 2026-10-14 · Status: accepted
 Renderer could consume Wallpaper Engine JSON directly. That couples rendering, the future editor, and our own format to WE's quirks.
 
 ## Decision
-`diorama-scene` defines an engine-neutral IR (layers, materials, passes, effect graph, particles, properties, script refs). `diorama-we` is an importer (anti-corruption layer) converting WE content into the IR. Renderer, runtime, and editor depend only on the IR. Our `.lwp` format is the serialized IR.
+`diorama-scene` defines an engine-neutral IR (layers, materials, passes, effect graph, particles, properties, script refs). `diorama-we` is an importer (anti-corruption layer) converting WE content into the IR. Renderer, runtime, and editor depend only on the IR. ~~Our `.lwp` format is the serialized IR.~~ (Replaced by ADR-009: our format is a document compiled to the IR.)
 
 ## Consequences
 - Extra translation step, cached after first import.
